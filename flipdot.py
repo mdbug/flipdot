@@ -7,11 +7,12 @@ from panel import Panel
 from weather import get_weather_forecast
 import human_pose
 from transition import disolve, resolve
-from image import load_image
+import image
 from mode_manager import ModeManager
 from clock import Clock
 from dotenv import load_dotenv
 import os
+import text
 
 PRINT_INTERVAL = 1.0
 POSE_TIMEOUT = 3.0
@@ -21,6 +22,7 @@ CLOCK_DISOLVE_TIME = 2.0
 load_dotenv()
 CAMERA_INDEX = int(os.getenv('CAMERA_INDEX', 0))
 PREVIEW = os.getenv('PREVIEW', 'false').lower() == 'true'
+DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'
 
 cam = Camera(CAMERA_INDEX)
 panel = Panel(preview=PREVIEW)
@@ -30,11 +32,13 @@ clock = Clock(panel.WIDTH, panel.HEIGHT)
 last_print_time = time.time()
 last_update_time = time.time()
 mode_manager = ModeManager()
-img_sleep = load_image('sleep.png')
+img_sleep = image.load('sleep.png')
 
 while True:
     t_start = time.time()
     frame = cam.read_frame()
+    frame = image.crop(frame)
+
     capture_time = time.time() - t_start
 
     dots = np.zeros((panel.HEIGHT,panel.WIDTH), dtype=np.uint8)
@@ -44,17 +48,18 @@ while True:
     pose_results = None
     eyes_visible = False
     now = datetime.now()
+    estimated_distance = None
+    angle = None
     if now.hour < 7 or now.hour >= 24:
         mode_manager.set_mode('sleep')
     else:
         pose_results = human_pose.get_human_pose(frame)
-        # eyes_visible = human_pose.eyes_visible(pose_results)
-        eyes_visible, reason = human_pose.check_eyes_visible_and_facing_camera(pose_results)
-        print(reason)
+        eyes_visible, reason, angle = human_pose.eyes_visible_and_facing_camera(pose_results)
+        estimated_distance, _ = human_pose.estimate_distance(pose_results)
         if pose_results.pose_landmarks:
             if mode_manager.mode == mode_manager.MODE_POSE:
                 mode_manager.set_mode('pose')
-            elif eyes_visible:
+            elif eyes_visible and estimated_distance < 1.3:
                 mode_manager.set_mode('pose')
         else:
             if mode_manager.get_time_since_last_mode_update() > POSE_TIMEOUT:
@@ -79,11 +84,19 @@ while True:
     if (time.time() - last_update_time) < (1.0/fps_limit):
         time.sleep(1.0/fps_limit - (time.time() - last_update_time))
 
+    if DEBUG:
+        dots[22:, :] = 0  # Clear bottom part of the panel
+        dots[-1,-1] = fps_tracker.total_frames % 2
+        estimated_distance_str = f"{estimated_distance:.1f}" if estimated_distance is not None else " "
+        angle_str = f"{angle:02.0f}°" if angle is not None else " "
+        text.write(dots, f"{estimated_distance_str}, {angle_str}", y=23, size=5)
+
     panel.update(dots)
     last_update_time = time.time()
     fps_tracker.add_frame(capture_time, process_time)
     current_time = time.time()
     if current_time - last_print_time >= PRINT_INTERVAL:
         stats = fps_tracker.get_stats()
-        print(f"Mode: {mode_manager.mode} | Eyes visible: {eyes_visible} | FPS: {stats['fps']:.1f} | Avg: {stats['avg_fps']:.1f} | ")
+        estimated_distance_str = f"{estimated_distance:.1f}" if estimated_distance is not None else "None"
+        print(f"\rMode: {mode_manager.mode} | Eyes visible: {eyes_visible} {reason} | Dist: {estimated_distance_str} | FPS: {stats['fps']:.1f} | Avg: {stats['avg_fps']:.1f} | ", end='', flush=True)
         last_print_time = current_time
