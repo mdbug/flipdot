@@ -1,0 +1,3 @@
+[submodule "flipPyDot"]
+	path = flipPyDot
+	url = git@github.com:mdbug/flipPyDot.git
