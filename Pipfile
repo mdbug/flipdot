@@ -6,8 +6,13 @@ name = "pypi"
 [packages]
 opencv-python = "*"
 requests = "*"
+mediapipe = "==0.10.18"
+pyserial = "*"
+pillow = "*"
+python-dotenv = "*"
+flippydot = {editable = true, path = "./flipPyDot"}
 
 [dev-packages]
 
 [requires]
-python_version = "3.11"
+python_version = "3.10"

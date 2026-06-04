@@ -1,11 +1,14 @@
 import requests
 from datetime import datetime
+import os
+from dotenv import load_dotenv
 
-API_KEY='***REMOVED***'
 CITY='Aachen'
 COUNTRY_CODE='DE'
 
-def get_weather_forecast(city=CITY, country_code=COUNTRY_CODE, api_key=API_KEY):
+load_dotenv()
+
+def get_weather_forecast(city=CITY, country_code=COUNTRY_CODE, api_key=None):
     """
     Get weather forecast including current temperature, max temperature, and hourly rain probability
     
@@ -18,6 +21,12 @@ def get_weather_forecast(city=CITY, country_code=COUNTRY_CODE, api_key=API_KEY):
         dict: Weather forecast data
     """
     
+    if api_key is None:
+        api_key = os.getenv('OPENWEATHER_API_KEY')
+
+    if not api_key:
+        return {'error': 'Missing OPENWEATHER_API_KEY environment variable'}
+
     # Base URLs for OpenWeatherMap API
     current_weather_url = "http://api.openweathermap.org/data/2.5/weather"
     forecast_url = "http://api.openweathermap.org/data/2.5/forecast"

@@ -3,8 +3,14 @@ import cv2
 import numpy as np
 import os
 
-mp_drawing = mp.solutions.drawing_utils
-mp_pose = mp.solutions.pose
+try:
+    mp_drawing = mp.solutions.drawing_utils
+    mp_pose = mp.solutions.pose
+except AttributeError:
+    from mediapipe.python import solutions as mp_solutions
+
+    mp_drawing = mp_solutions.drawing_utils
+    mp_pose = mp_solutions.pose
 
 pose = mp_pose.Pose(
         model_complexity=1,
@@ -136,3 +142,46 @@ def estimate_distance(pose_results):
         return None, []
 
     return sum(value for value, _, _ in distance_estimates) / len(distance_estimates), distance_estimates
+
+def get_right_index_finger_position(pose_results):
+    if pose_results.pose_landmarks is None:
+        return None, None
+
+    landmarks = pose_results.pose_landmarks.landmark
+    # Get right index finger if it is clearly visible otherwise use right thumb if it is more visible otherwise estimate from both
+    right_index = landmarks[mp_pose.PoseLandmark.RIGHT_INDEX]
+    right_thumb = landmarks[mp_pose.PoseLandmark.RIGHT_THUMB]
+    if right_index.visibility > 0.7:
+        return right_index.x, right_index.y
+    elif right_thumb.visibility > 0.7:
+        return right_thumb.x, right_thumb.y
+    elif right_index.visibility > 0.3 and right_thumb.visibility > 0.3:
+        # Estimate position as average of both
+        x = (right_index.x + right_thumb.x) / 2
+        y = (right_index.y + right_thumb.y) / 2
+        return x, y
+    else:
+        return None, None
+
+
+def is_right_index_in_top_right_corner(pose_results):
+    x, y = get_right_index_finger_position(pose_results)
+
+    # Check if the index finger is in the top right corner (e.g., top 20% and right 20%)
+    if x is not None and y is not None and x < 0.2 and y < 0.2:
+        return True, x, y
+
+    return False, x, y
+
+def draw_right_index_pointer(frame, pose_results, size=1):
+    finger_x, finger_y = get_right_index_finger_position(pose_results)
+    height, width = frame.shape
+
+    if finger_x is not None and finger_y is not None:
+        x = int(width - (finger_x * width))
+        y = int(finger_y * height)
+        if 0 <= x < width and 0 <= y < height:
+            cv2.circle(frame, (x, y), size//2, 0, -1)
+            cv2.circle(frame, (x, y), size//2, 1, 1)
+
+    return frame

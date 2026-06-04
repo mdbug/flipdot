@@ -4,11 +4,15 @@ class ModeManager:
     MODE_SLEEP = 'sleep'
     MODE_CLOCK = 'clock'
     MODE_POSE = 'pose'
+    MODE_MENU = 'menu'
+    MODE_PAINT = 'paint'
     MODE_DEFAULT = MODE_CLOCK
     MAX_FPS = {
         MODE_SLEEP: 1,
         MODE_CLOCK: 4,
         MODE_POSE: 30,
+        MODE_MENU: 30,
+        MODE_PAINT: 30
     }
 
     def __init__(self, mode=MODE_DEFAULT):
@@ -16,16 +20,29 @@ class ModeManager:
         self.mode = mode
         self.mode_start_time = time.time()
         self.mode_update_time = time.time()
+        self.menu_click_start = None
+        self.pose_enabled = True
 
     def set_mode(self, mode):
+        if mode == self.MODE_POSE and not self.pose_enabled:
+            mode = self.MODE_CLOCK
+
         if mode != self.mode:
             self.last_mode = self.mode
             self.mode_start_time = time.time()
-        if mode in (self.MODE_SLEEP, self.MODE_CLOCK, self.MODE_POSE):
-            self.mode = mode
-            self.mode_update_time = time.time()
-        else:
-            raise ValueError("Invalid display mode")
+
+        self.mode = mode
+        self.mode_update_time = time.time()
+
+    def click_menu(self):
+        if self.menu_click_start is None:
+            self.menu_click_start = time.time()
+        elif time.time() - self.menu_click_start > 2:
+            if self.mode != self.MODE_MENU:
+                self.set_mode(self.MODE_MENU)
+            else:
+                self.set_mode(self.MODE_POSE)
+            self.menu_click_start = None
 
     def get_mode_time(self):
         return time.time() - self.mode_start_time
@@ -38,3 +55,6 @@ class ModeManager:
             return self.MAX_FPS.get(self.mode, 1)
         else:
             return 30 
+    
+    def toggle_pose_enabled(self):
+        self.pose_enabled = not self.pose_enabled
