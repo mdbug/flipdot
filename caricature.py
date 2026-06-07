@@ -1,5 +1,4 @@
 import base64
-import json
 import threading
 import time
 
@@ -47,8 +46,8 @@ class Caricature:
         try:
             client = anthropic.Anthropic()
             response = client.messages.create(
-                model="claude-opus-4-5",
-                max_tokens=2048,
+                model="claude-sonnet-4-6",
+                max_tokens=8192,
                 messages=[{
                     "role": "user",
                     "content": [
@@ -63,37 +62,37 @@ class Caricature:
                         {
                             "type": "text",
                             "text": (
-                                "You are a pixel artist. Analyze the face in this image and create a 28x28 monochrome caricature."
-                                "Return ONLY a JSON array of 28 arrays, each containing exactly 28 integers "
-                                "(0=white/background, 1=black/drawn). "
-                                "The caricature should fill most of the 28x28 grid. "
-                                "No explanations, no markdown, just the raw JSON array."
+                                "Create a monochrome caricature of this person's face as PIXEL ART "
+                                "on a 28x28 grid. Exaggerate their most distinctive features so they "
+                                "stay recognisable on a tiny 28x28 1-bit display.\n\n"
+                                "Output the grid as ASCII art: exactly 28 lines, each exactly 28 "
+                                "characters. Use '#' for a black (lit) pixel and '.' for a white "
+                                "(background) pixel. Build it row by row, looking at the rows you have "
+                                "already drawn to keep the face aligned and proportioned. Keep "
+                                "features bold and well separated; thin single-pixel details tend to "
+                                "disappear.\n\n"
+                                "Return ONLY the 28 lines of '#' and '.' characters. No numbering, no "
+                                "explanations, no markdown, no code fences."
                             ),
                         },
                     ],
                 }],
             )
 
-            raw = response.content[0].text.strip()
+            raw = "".join(
+                block.text for block in response.content
+                if getattr(block, "type", None) == "text"
+            ).strip()
 
-            # Strip markdown code fences if present
-            if '```' in raw:
-                for part in raw.split('```'):
-                    part = part.strip()
-                    if part.startswith('json'):
-                        part = part[4:].strip()
-                    if part.startswith('['):
-                        raw = part
-                        break
+            with open('caricature_debug_response.txt', 'w') as f:
+                f.write(raw)
+            print("Caricature: saved raw response to caricature_debug_response.txt")
 
-            grid = json.loads(raw)
-            dots = np.array(grid, dtype=np.uint8)
-            if dots.shape != (self.height, self.width):
-                raise ValueError(f"Grid shape {dots.shape} != ({self.height}, {self.width})")
+            dots = self._grid_to_dots(raw)
 
             with self._lock:
                 if self._generation == generation:
-                    self.caricature_dots = np.clip(dots, 0, 1)
+                    self.caricature_dots = dots
                     self.state = self.STATE_DISPLAYING
                     self.display_start_time = time.time()
                     cv2.imwrite('caricature_result.png', self.caricature_dots * 255)
@@ -105,6 +104,32 @@ class Caricature:
                 if self._generation == generation:
                     self.state = self.STATE_ERROR
                     self.error_msg = str(e)[:24]
+
+    # Characters the model may use for a lit (black) pixel.
+    _LIT_CHARS = frozenset('#1xX*@█▓▒░')
+
+    def _grid_to_dots(self, raw):
+        """Parse a 28-line ASCII grid from the model response into a 1-bit
+        28x28 dots array (1 = black/drawn). Tolerant of extra prose, code
+        fences and rows that are too short or too long."""
+        grid_chars = self._LIT_CHARS | set('. ')
+        rows = []
+        for line in raw.splitlines():
+            stripped = line.strip()
+            # A grid row is non-empty and made only of pixel characters.
+            if stripped and all(c in grid_chars for c in stripped):
+                rows.append(stripped)
+
+        if not rows:
+            snippet = raw[:80].replace('\n', ' ') or '(empty)'
+            raise ValueError(f"No grid in response: {snippet}")
+
+        dots = np.zeros((self.height, self.width), dtype=np.uint8)
+        for y, row in enumerate(rows[:self.height]):
+            for x, char in enumerate(row[:self.width]):
+                if char in self._LIT_CHARS:
+                    dots[y, x] = 1
+        return dots
 
     def _start_capture(self, camera_frame):
         if camera_frame is None:
