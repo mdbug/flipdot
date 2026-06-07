@@ -61,7 +61,8 @@ class Button(MenuItem):
 
     def draw(self, frame):
         write(frame, self.label, x=1, y=self.row*8+1, size=5)
-        frame[self.row*8+7, 0:self.width] = 1
+        sep = min(self.row*8+7, frame.shape[0]-1)
+        frame[sep, 0:self.width] = 1
         self.draw_hover(frame)
 
 class Checkbox(MenuItem):
@@ -71,7 +72,8 @@ class Checkbox(MenuItem):
 
     def draw(self, frame):
         write(frame, self.label, x=7, y=self.row*8+1, size=5)
-        frame[self.row*8+7, 0:self.width] = 1
+        sep = min(self.row*8+7, frame.shape[0]-1)
+        frame[sep, 0:self.width] = 1
         self.draw_hover(frame)
         frame[self.row*8:self.row*8+7, 0:6] = 0
         frame[self.row*8+1:self.row*8+6, 0:5] = 1
@@ -97,9 +99,10 @@ class Menu:
         self.height = height
         self.items = []
         self.mode_manager = mode_manager
-        self.add_item(Button("BACK", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_POSE)))
+        self.add_item(Button("CLOCK", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_CLOCK)))
         self.add_item(Button("PAINT", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_PAINT)))
         self.add_item(Checkbox("POSE", 2, width, checked=mode_manager.pose_enabled, on_click=mode_manager.toggle_pose_enabled))
+        self.add_item(Button("CARIC", 3, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_CARICATURE)))
 
     def add_item(self, item):
         self.items.append(item)
@@ -110,7 +113,7 @@ class Menu:
         finger_x, finger_y = human_pose.get_right_index_finger_position(pose_results)
 
         for item in self.items:
-            if finger_y:
+            if finger_y is not None:
                 item.hover(item.is_hovered(finger_y * self.height))
 
             item.draw(frame)

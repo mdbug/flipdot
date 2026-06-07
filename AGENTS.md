@@ -18,7 +18,7 @@ Modes (`ModeManager.MODE_*`): `sleep`, `clock`, `pose`, `menu`, `paint`. Each ha
 - **Drawing = direct numpy indexing.** Set/XOR pixels by slicing the frame: `frame[row*8:row*8+7, 0:slice] ^= 1`. Menu rows are 8px tall (`row*8`). See `menu.py` `Checkbox.draw` and `clock.py` `update_frame`.
 - **Text** uses a hand-coded bitmap font in `text.py` (`FONTS[5]`, `FONTS[6]`). Render with `text.write(frame, str, x=, y=, size=5|6)`. Only glyphs present in `FONTS` exist — add new bitmaps there if needed.
 - **Transitions** in `transition.py` operate on frames: `blend(a, b, alpha)`, `resolve`/`disolve(dots, alpha)` use random pixel masks (no greyscale — display is 1-bit).
-- **Interaction is dwell-based**, not clicks: hover the right index finger over a `MenuItem` for `CLICK_TIME` (2s) to trigger `on_click`. `human_pose.is_right_index_in_top_right_corner` opens the menu after a 2s hold.
+- **Interaction is dwell-based**, not clicks: hover the right index finger over a `MenuItem` for `CLICK_TIME` (2s) to trigger `on_click`. `human_pose.is_arms_crossed` held for 2s opens the menu from pose, clock, and paint modes (via `mode_manager.click_menu()`/`reset_menu_click()` in the main loop).
 - Mode classes that need to switch modes take `mode_manager` in their constructor and call `mode_manager.set_mode(...)` from `on_click` lambdas (see `Menu.__init__`).
 
 ## Hardware & environment

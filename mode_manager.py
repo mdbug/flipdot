@@ -6,13 +6,15 @@ class ModeManager:
     MODE_POSE = 'pose'
     MODE_MENU = 'menu'
     MODE_PAINT = 'paint'
+    MODE_CARICATURE = 'caricature'
     MODE_DEFAULT = MODE_CLOCK
     MAX_FPS = {
         MODE_SLEEP: 1,
         MODE_CLOCK: 4,
         MODE_POSE: 30,
         MODE_MENU: 30,
-        MODE_PAINT: 30
+        MODE_PAINT: 30,
+        MODE_CARICATURE: 30,
     }
 
     def __init__(self, mode=MODE_DEFAULT):
@@ -41,8 +43,12 @@ class ModeManager:
             if self.mode != self.MODE_MENU:
                 self.set_mode(self.MODE_MENU)
             else:
-                self.set_mode(self.MODE_POSE)
+                previous_mode = self.last_mode if self.last_mode not in (None, self.MODE_MENU) else self.MODE_POSE
+                self.set_mode(previous_mode)
             self.menu_click_start = None
+
+    def reset_menu_click(self):
+        self.menu_click_start = None
 
     def get_mode_time(self):
         return time.time() - self.mode_start_time

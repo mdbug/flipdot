@@ -11,6 +11,7 @@ pyserial = "*"
 pillow = "*"
 python-dotenv = "*"
 flippydot = {editable = true, path = "./flipPyDot"}
+anthropic = "*"
 
 [dev-packages]
 
