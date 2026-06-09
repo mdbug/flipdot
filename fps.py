@@ -8,14 +8,18 @@ class FPSTracker:
         self.times = deque(maxlen=window_size)
         self.capture_times = deque(maxlen=window_size)
         self.process_times = deque(maxlen=window_size)
+        self.panel_times = deque(maxlen=window_size)
+        self.sleep_times = deque(maxlen=window_size)
         self.total_frames = 0
         self.start_time = time.time()
     
-    def add_frame(self, capture_time=0, process_time=0):
+    def add_frame(self, capture_time=0, process_time=0, panel_time=0, sleep_time=0):
         current_time = time.time()
         self.times.append(current_time)
         self.capture_times.append(capture_time)
         self.process_times.append(process_time)
+        self.panel_times.append(panel_time)
+        self.sleep_times.append(sleep_time)
         self.total_frames += 1
     
     def get_fps(self):
@@ -34,6 +38,8 @@ class FPSTracker:
         return {
             'capture_ms': np.mean(self.capture_times) * 1000,
             'process_ms': np.mean(self.process_times) * 1000,
+            'panel_ms':   np.mean(self.panel_times)   * 1000,
+            'sleep_ms':   np.mean(self.sleep_times)   * 1000,
             'total_ms': (np.mean(self.capture_times) + 
                         np.mean(self.process_times)) * 1000
         }

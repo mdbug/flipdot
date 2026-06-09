@@ -13,6 +13,8 @@ from menu import Menu
 from clock import Clock
 from paint import Paint
 from caricature import Caricature
+from percussion import Percussion
+from autodrum import AutoDrum
 from dotenv import load_dotenv
 import os
 import text
@@ -35,10 +37,14 @@ clock = Clock(panel.WIDTH, panel.HEIGHT)
 
 last_print_time = time.time()
 last_update_time = time.time()
+pose_throttle_frame = 0
+cached_drum_pose = None
 mode_manager = ModeManager()
 menu = Menu(panel.WIDTH, panel.HEIGHT, mode_manager)
 paint = Paint(panel.WIDTH, panel.HEIGHT, mode_manager)
 caricature = Caricature(panel.WIDTH, panel.HEIGHT, mode_manager)
+percussion = Percussion(panel.WIDTH, panel.HEIGHT, mode_manager)
+autodrum = AutoDrum(panel.WIDTH, panel.HEIGHT, mode_manager)
 img_sleep = image.load('sleep.png')
 
 while True:
@@ -76,6 +82,18 @@ while True:
 
         elif current_mode == ModeManager.MODE_CARICATURE:
             pass  # no pose processing needed; caricature handles its own state
+
+        elif current_mode in (ModeManager.MODE_PERCUSSION, ModeManager.MODE_AUTODRUM):
+            # Throttle pose to every 6th frame (~5 FPS): interaction latency
+            # is fine at 200 ms; sequencer timing is wall-clock independent.
+            pose_throttle_frame = (pose_throttle_frame + 1) % 6
+            if pose_throttle_frame == 0:
+                cached_drum_pose = human_pose.get_human_pose(frame)
+            pose_results = cached_drum_pose
+            if human_pose.is_arms_crossed(pose_results):
+                mode_manager.click_menu()
+            else:
+                mode_manager.reset_menu_click()
 
         elif current_mode == ModeManager.MODE_POSE:
             pose_results = human_pose.get_human_pose(frame)
@@ -133,12 +151,16 @@ while True:
         dots = paint.get_frame(pose_results)
     elif mode_manager.mode == ModeManager.MODE_CARICATURE:
         dots = caricature.get_frame(frame)
+    elif mode_manager.mode == ModeManager.MODE_PERCUSSION:
+        dots = percussion.get_frame(pose_results)
+    elif mode_manager.mode == ModeManager.MODE_AUTODRUM:
+        dots = autodrum.get_frame(pose_results)
 
     process_time = time.time() - t_process_start
-
     fps_limit = mode_manager.get_fps_limit()
-    if (time.time() - last_update_time) < (1.0/fps_limit):
-        time.sleep(1.0/fps_limit - (time.time() - last_update_time))
+
+    process_time = time.time() - t_process_start
+    fps_limit = mode_manager.get_fps_limit()
 
     if DEBUG:
         dots[22:, :] = 0  # Clear bottom part of the panel
@@ -147,12 +169,26 @@ while True:
         angle_str = f"{angle:02.0f}°" if angle is not None else " "
         text.write(dots, f"{estimated_distance_str}  {angle_str}", y=23, size=5)
 
+    t_panel_start = time.time()
     panel.update(dots)
+    panel_time = time.time() - t_panel_start
+
+    # Precision frame limiter: sleep most of the budget then spin the last
+    # ~6 ms so OS scheduling jitter doesn't overshoot the target.
+    target_time = t_start + 1.0 / fps_limit
+    remaining = target_time - time.time()
+    t_sleep_start = time.time()
+    if remaining > 0.006:
+        time.sleep(remaining - 0.006)
+    while time.time() < target_time:
+        pass
+    sleep_time = time.time() - t_sleep_start
+
     last_update_time = time.time()
-    fps_tracker.add_frame(capture_time, process_time)
+    fps_tracker.add_frame(capture_time, process_time, panel_time, sleep_time)
     current_time = time.time()
     if current_time - last_print_time >= PRINT_INTERVAL:
         stats = fps_tracker.get_stats()
         estimated_distance_str = f"{estimated_distance:.1f}" if estimated_distance is not None else "None"
-        print(f"\rMode: {mode_manager.mode} | Eyes visible: {eyes_visible} {reason} | Dist: {estimated_distance_str} | FPS: {stats['fps']:.1f} | Avg: {stats['avg_fps']:.1f} | ", end='', flush=True)
+        print(f"\rMode: {mode_manager.mode} | Eyes: {eyes_visible} {reason} | Dist: {estimated_distance_str} | FPS: {stats['fps']:.1f} (avg {stats['avg_fps']:.1f}) | Cap: {stats['capture_ms']:.0f}ms Proc: {stats['process_ms']:.0f}ms Panel: {stats['panel_ms']:.0f}ms Sleep: {stats['sleep_ms']:.0f}ms Total: {stats['total_ms']:.0f}ms | ", end='', flush=True)
         last_print_time = current_time

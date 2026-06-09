@@ -638,6 +638,19 @@ def is_arms_crossed(pose_results=None):
 
     return True
 
+def is_left_hand_raised(pose_results=None):
+    """Return True if the left wrist is raised above the nose (hand above head)."""
+    if pose_results is None or pose_results.pose_landmarks is None:
+        return False
+    landmarks = pose_results.pose_landmarks.landmark
+    left_wrist = landmarks[mp_pose.PoseLandmark.LEFT_WRIST]
+    nose = landmarks[mp_pose.PoseLandmark.NOSE]
+    if left_wrist.visibility < 0.5:
+        return False
+    # In image coords y increases downward; wrist above nose means wrist.y < nose.y
+    return left_wrist.y < nose.y - 0.05
+
+
 def draw_right_index_pointer(frame, pose_results=None, size=1):
     finger_x, finger_y = get_right_index_finger_position(pose_results)
     height, width = frame.shape

@@ -1,10 +1,13 @@
 import base64
+import io
+import os
 import threading
 import time
 
-import anthropic
 import cv2
 import numpy as np
+import PIL.Image
+import requests
 
 import text as text_module
 from mode_manager import ModeManager
@@ -42,53 +45,91 @@ class Caricature:
             self.display_start_time = None
             self.error_msg = None
 
-    def _call_claude_api(self, image_b64, generation):
+    def _call_pixellab_api(self, image_b64, generation):
         try:
-            client = anthropic.Anthropic()
-            response = client.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=8192,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": image_b64,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": (
-                                "Create a monochrome caricature of this person's face as PIXEL ART "
-                                "on a 28x28 grid. Exaggerate their most distinctive features so they "
-                                "stay recognisable on a tiny 28x28 1-bit display.\n\n"
-                                "Output the grid as ASCII art: exactly 28 lines, each exactly 28 "
-                                "characters. Use '#' for a black (lit) pixel and '.' for a white "
-                                "(background) pixel. Build it row by row, looking at the rows you have "
-                                "already drawn to keep the face aligned and proportioned. Keep "
-                                "features bold and well separated; thin single-pixel details tend to "
-                                "disappear.\n\n"
-                                "Return ONLY the 28 lines of '#' and '.' characters. No numbering, no "
-                                "explanations, no markdown, no code fences."
-                            ),
-                        },
-                    ],
-                }],
+            api_token = os.getenv('PIXELLAB_API_TOKEN') or os.getenv('PIXELLAB_API_KEY')
+            if not api_token:
+                raise ValueError("Missing PIXELLAB_API_TOKEN")
+
+            headers = {"Authorization": f"Bearer {api_token}"}
+
+            # Encode reference image (camera frame)
+            img_bytes = base64.b64decode(image_b64)
+            src_pil = PIL.Image.open(io.BytesIO(img_bytes)).convert('RGB')
+            src_w, src_h = src_pil.size
+            ref_w, ref_h = self._fit_within_limit(src_w, src_h, 1024)
+            if (ref_w, ref_h) != (src_w, src_h):
+                src_pil = src_pil.resize((ref_w, ref_h), PIL.Image.LANCZOS)
+            ref_buf = io.BytesIO()
+            src_pil.save(ref_buf, format='JPEG', quality=85)
+            ref_b64 = base64.b64encode(ref_buf.getvalue()).decode('utf-8')
+
+            payload = {
+                "description": "Create a monochromatic (1bit only black and white, no grey!) caricature of that person! The background should be black.",
+                "image_size": {"width": self.width, "height": self.height},
+                "no_background": False,
+                "reference_images": [
+                    {
+                        "image": {"type": "base64", "base64": ref_b64, "format": "jpeg"},
+                        "size": {"width": ref_w, "height": ref_h},
+                    }
+                ],
+            }
+
+            resp = requests.post(
+                "https://api.pixellab.ai/v2/generate-image-v2",
+                headers=headers,
+                json=payload,
+                timeout=30,
             )
+            if not resp.ok:
+                print(f"Caricature API error (generate-image-v2) {resp.status_code}: {resp.text[:2000]}")
+            resp.raise_for_status()
 
-            raw = "".join(
-                block.text for block in response.content
-                if getattr(block, "type", None) == "text"
-            ).strip()
+            job_id = resp.json()["background_job_id"]
+            print(f"Caricature: job {job_id} queued, polling...")
 
-            with open('caricature_debug_response.txt', 'w') as f:
-                f.write(raw)
-            print("Caricature: saved raw response to caricature_debug_response.txt")
+            # Poll until complete (max 2 minutes)
+            result_pil = None
+            deadline = time.time() + 120
+            while time.time() < deadline:
+                time.sleep(3)
+                poll = requests.get(
+                    f"https://api.pixellab.ai/v2/background-jobs/{job_id}",
+                    headers=headers,
+                    timeout=15,
+                )
+                poll.raise_for_status()
+                data = poll.json()
+                status = data.get("status")
+                if status == "completed":
+                    last = data.get("last_response") or {}
+                    print(f"Caricature: job completed, last_response keys: {list(last.keys())}")
+                    images = last.get("images", [])
+                    if not images:
+                        raise ValueError(f"No images in completed job: {last}")
+                    print(f"Caricature: saving {len(images)} image(s)")
+                    pil_images = []
+                    for i, img_entry in enumerate(images):
+                        img_b64_raw = img_entry.get("base64", "")
+                        if img_b64_raw.startswith("data:"):
+                            img_b64_raw = img_b64_raw.split(",", 1)[1]
+                        pil = PIL.Image.open(io.BytesIO(base64.b64decode(img_b64_raw)))
+                        pil.save(f'caricature_result_raw_{i}.png')
+                        pil_images.append(pil)
+                    best = self._pick_best_image(pil_images, ref_b64)
+                    result_pil = pil_images[best]
+                    break
+                elif status == "failed":
+                    raise ValueError(f"Job failed: {data.get('last_response')}")
+                print(f"Caricature: status={status}...")
 
-            dots = self._grid_to_dots(raw)
+            if result_pil is None:
+                raise TimeoutError("Caricature job timed out after 2 minutes")
+
+            print(f"Caricature: result[0] ({result_pil.size}, mode={result_pil.mode})")
+
+            dots = self._pil_image_to_dots(result_pil)
 
             with self._lock:
                 if self._generation == generation:
@@ -105,31 +146,130 @@ class Caricature:
                     self.state = self.STATE_ERROR
                     self.error_msg = str(e)[:24]
 
-    # Characters the model may use for a lit (black) pixel.
-    _LIT_CHARS = frozenset('#1xX*@█▓▒░')
+    def _fit_within_limit(self, width, height, limit):
+        max_side = max(width, height)
+        if max_side <= limit:
+            return width, height
+        scale = limit / float(max_side)
+        new_w = max(16, int(round(width * scale)))
+        new_h = max(16, int(round(height * scale)))
+        return new_w, new_h
 
-    def _grid_to_dots(self, raw):
-        """Parse a 28-line ASCII grid from the model response into a 1-bit
-        28x28 dots array (1 = black/drawn). Tolerant of extra prose, code
-        fences and rows that are too short or too long."""
-        grid_chars = self._LIT_CHARS | set('. ')
-        rows = []
-        for line in raw.splitlines():
-            stripped = line.strip()
-            # A grid row is non-empty and made only of pixel characters.
-            if stripped and all(c in grid_chars for c in stripped):
-                rows.append(stripped)
+    def _pil_image_to_dots(self, pil_image):
+        # Flatten alpha onto white background before any conversion
+        if pil_image.mode in ('RGBA', 'LA') or (pil_image.mode == 'P' and 'transparency' in pil_image.info):
+            bg = PIL.Image.new('RGB', pil_image.size, (255, 255, 255))
+            bg.paste(pil_image, mask=pil_image.split()[-1] if pil_image.mode in ('RGBA', 'LA') else None)
+            pil_image = bg
+        # Resize then dither to 1-bit (Floyd-Steinberg) — better than hard-threshold for coloured pixel art
+        resized = pil_image.convert('L').resize((self.width, self.height), PIL.Image.LANCZOS)
+        dithered = resized.convert('1')  # PIL default: Floyd-Steinberg dithering
+        # PIL '1' mode: 0=black, 255=white per pixel; map to 1=on (white), 0=off (black)
+        arr = np.array(dithered, dtype=np.uint8)
+        return (arr != 0).astype(np.uint8)
 
-        if not rows:
-            snippet = raw[:80].replace('\n', ' ') or '(empty)'
-            raise ValueError(f"No grid in response: {snippet}")
+    def _pick_best_image(self, pil_images, original_b64):
+        """Send candidate images + original photo to an AI; return the index of the best match."""
+        if len(pil_images) <= 1:
+            return 0
 
-        dots = np.zeros((self.height, self.width), dtype=np.uint8)
-        for y, row in enumerate(rows[:self.height]):
-            for x, char in enumerate(row[:self.width]):
-                if char in self._LIT_CHARS:
-                    dots[y, x] = 1
-        return dots
+        # Scale up for AI visibility (nearest-neighbour preserves pixel art edges)
+        scale = 4
+        thumbs_b64 = []
+        for img in pil_images:
+            bw = img.convert('L').point(lambda p: 255 if p >= 128 else 0)
+            scaled = bw.resize((bw.width * scale, bw.height * scale), PIL.Image.NEAREST)
+            buf = io.BytesIO()
+            scaled.save(buf, format='PNG')
+            thumbs_b64.append(base64.b64encode(buf.getvalue()).decode('utf-8'))
+
+        prompt = (
+            f"The first image is the original photograph of a person. "
+            f"The following {len(pil_images)} images are small pixel art caricature candidates "
+            f"(each {pil_images[0].width}\u00d7{pil_images[0].height}px, shown scaled up {scale}x) "
+            f"for a 28\u00d728 1-bit flip-dot display. "
+            f"Choose the candidate in which the person from the photo is most clearly recognisable. "
+            f"Reply with ONLY the 0-based index number of the best candidate (0 to {len(pil_images) - 1})."
+        )
+
+        anthropic_key = os.getenv('ANTHROPIC_API_KEY')
+        openai_key = os.getenv('OPENAI_API_KEY')
+        try:
+            if anthropic_key:
+                return self._pick_with_anthropic(thumbs_b64, original_b64, prompt, anthropic_key, len(pil_images))
+            elif openai_key:
+                return self._pick_with_openai(thumbs_b64, original_b64, prompt, openai_key, len(pil_images))
+            else:
+                print("Caricature: no AI key (ANTHROPIC_API_KEY / OPENAI_API_KEY) for image selection, using index 0")
+                return 0
+        except Exception as e:
+            print(f"Caricature: AI image selection failed ({e}), using index 0")
+            return 0
+
+    def _pick_with_anthropic(self, thumbs_b64, original_b64, prompt, api_key, n):
+        content = [
+            {"type": "text", "text": "Original photograph:"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": original_b64}},
+        ]
+        for i, b64 in enumerate(thumbs_b64):
+            content.append({"type": "text", "text": f"Candidate {i}:"})
+            content.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/png", "data": b64},
+            })
+        content.append({"type": "text", "text": prompt})
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": content}],
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        text = resp.json()["content"][0]["text"].strip()
+        idx = int(text.split()[0])
+        idx = max(0, min(idx, n - 1))
+        print(f"Caricature: Anthropic chose image {idx}")
+        return idx
+
+    def _pick_with_openai(self, thumbs_b64, original_b64, prompt, api_key, n):
+        content = [
+            {"type": "text", "text": "Original photograph:"},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{original_b64}", "detail": "low"}},
+        ]
+        for i, b64 in enumerate(thumbs_b64):
+            content.append({"type": "text", "text": f"Candidate {i}:"})
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "low"},
+            })
+        content.append({"type": "text", "text": prompt})
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "gpt-4o-mini",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": content}],
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        text = resp.json()["choices"][0]["message"]["content"].strip()
+        idx = int(text.split()[0])
+        idx = max(0, min(idx, n - 1))
+        print(f"Caricature: OpenAI chose image {idx}")
+        return idx
 
     def _start_capture(self, camera_frame):
         if camera_frame is None:
@@ -155,7 +295,7 @@ class Caricature:
             self.state = self.STATE_LOADING
 
         thread = threading.Thread(
-            target=self._call_claude_api,
+            target=self._call_pixellab_api,
             args=(image_b64, generation),
             daemon=True,
         )
