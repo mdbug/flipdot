@@ -22,33 +22,31 @@ class AutoDrum:
     Pattern encoding
     ----------------
     Each song is a list of sections: (repeats, [step0, step1, ...])
-    repeats=0 means loop the section (and therefore the song) forever.
+    repeats=0 means hold that section (and therefore the song) forever;
+    if every section has repeats>0 the song cycles through its whole
+    arc endlessly (used by ROCK's chant bar and STORM's build→drop).
     Each step is a set of instrument names to strike on that step.
+
+    Songs may also define:
+    * 'melody' – pitch-named monophonic voice stripes, see _voice_hit;
+      pitches are (name, MIDI) highest-first, 'long' lists pitches that
+      get a ringing '<name>_long' variant
+    * 'image'  – a picture XOR'd under everything (Vader for MARCH)
     """
 
     SKIP_HOLD_TIME = 1.0  # seconds to hold left hand raised to skip to next song
     DECAY_TICK = 0.05     # seconds between decay-tail flips
 
-    # MARCH pitches as (name, MIDI number), highest first.  Stripes are
-    # placed semitone-proportionally so the panel contour matches the
-    # actual melodic intervals.
-    MARCH_PITCHES = (
-        ('g5', 79), ('gb5', 78), ('f5', 77), ('e5', 76), ('eb5', 75),
-        ('d5', 74), ('db5', 73), ('c5', 72), ('b4', 71), ('bb4', 70),
-        ('a4', 69), ('ab4', 68), ('g4', 67), ('gb4', 66), ('eb4', 63),
-        ('bb3', 58),
-    )
-    # MARCH is a monophonic melody, which makes silent cleanup possible:
-    # every attack wipes the previous note's leftover dots in the SAME
-    # panel refresh that flips the new stripe on.  The panel only clicks
-    # when its state changes, so cleanup never adds its own transient —
-    # one clack per note, and the background image stays clean except
-    # for the single active stripe.  Half notes keep the shimmering
-    # ring-out tail (self-cancelling: each tick undoes the previous
-    # tick's scatter in the same frame it adds a smaller fresh one).
-    MARCH_LONG_NOTES = ('g4', 'd5')        # pitches that occur as half notes
-    MARCH_LONG_DECAY = [0.15, 0.12, 0.10, 0.09, 0.08, 0.07,
-                        0.06, 0.05, 0.05, 0.04, 0.04, 0.03]
+    # Songs may define a 'melody': pitch-named monophonic voice stripes
+    # (see _voice_hit).  Because the voice is monophonic, every attack
+    # wipes the previous note's leftover dots in the SAME panel refresh
+    # that flips the new stripe on — the panel only clicks when its
+    # state changes, so cleanup never adds its own transient.  Pitches
+    # listed under 'long' get a '<name>_long' variant with this
+    # shimmering ring-out tail (self-cancelling: each tick undoes the
+    # previous tick's scatter in the same frame it adds a smaller one).
+    MELODY_LONG_DECAY = [0.15, 0.12, 0.10, 0.09, 0.08, 0.07,
+                         0.06, 0.05, 0.05, 0.04, 0.04, 0.03]
 
     SONGS = [
         {
@@ -56,10 +54,19 @@ class AutoDrum:
             'bpm': 82,
             'subdivisions': 2,  # 8th notes; one bar = 8 steps
             'sections': [
-                (0, [                        # loop forever
+                (3, [
                     # stomp stomp CLAP rest | stomp stomp CLAP rest
-                    {'kick'}, {'kick'}, {'snare'}, set(),
-                    {'kick'}, {'kick'}, {'snare'}, set(),
+                    # ('clap' = wide scatter with a stadium-echo tail)
+                    {'kick'}, {'kick'}, {'clap'}, set(),
+                    {'kick'}, {'kick'}, {'clap'}, set(),
+                ]),
+                (1, [
+                    # Every 4th bar the chant rides on top of the stomps:
+                    # WE(1) WILL(1&) WE(2) WILL(2&) ROCK(3) YOU(4)
+                    {'kick', 'tom'}, {'kick', 'tom'},
+                    {'clap', 'tom'}, {'tom'},
+                    {'kick', 'tom'}, {'kick'},
+                    {'clap', 'tom'}, set(),
                 ]),
             ],
         },
@@ -69,26 +76,38 @@ class AutoDrum:
             'subdivisions': 2,  # 8th notes; 16 steps = full 2-bar riff
             'sections': [
                 (0, [
-                    # Seven Nation Army bass riff rhythm: E E G. E D C B
-                    # E(q)  E(q)  G(d.q)        E(q)  D(e)  C(q)   B(h)
-                    {'kick'}, set(), {'kick'}, set(),
-                    {'kick'}, set(), set(),    {'kick'},
-                    set(),    {'kick'}, {'kick'}, set(),
-                    {'kick'}, set(), set(),    set(),
+                    # Seven Nation Army riff as pitch stripes.  Rhythm:
+                    # E(dotted q) E(@2&) G E D (8ths) C(half) B(half) —
+                    # both long notes land on offbeats, hence the lurch.
+                    {'e'}, set(), set(), {'e'},
+                    {'g'}, {'e'}, {'d'}, {'c_long'},
+                    set(), set(), set(), {'b_long'},
+                    set(), set(), set(), set(),
                 ]),
             ],
+            'melody': {
+                'pitches': (('g', 67), ('e', 64), ('d', 62),
+                            ('c', 60), ('b', 59)),
+                'long': ('c', 'b'),
+            },
         },
         {
             'name': 'TIGER',
             'bpm': 108,
-            'subdivisions': 2,  # 8th notes; 16 steps = 2 bars
+            'subdivisions': 2,  # 8th notes; 32 steps = 4-bar stab figure
             'sections': [
-                (2, [
-                    # Eye of the Tiger intro: three groups of 3 toms + kick punch
-                    {'tom'}, {'tom'}, {'tom'}, set(),
-                    {'tom'}, {'tom'}, {'tom'}, set(),
-                    {'tom'}, {'tom'}, {'tom'}, set(),
-                    {'kick'}, set(),  set(),   set(),
+                (3, [
+                    # Eye of the Tiger stabs: C . . C-Bb-C | . C-Bb-C |
+                    # . C-G-Ab(rings) | (silence over the pulse).
+                    # Groups hit beat 3, 4, and land ringing on 4&.
+                    {'c5_long'}, set(), set(), set(),
+                    {'c5'}, set(), {'bb4'}, {'c5_long'},
+                    set(), set(), set(), set(),
+                    {'c5'}, set(), {'bb4'}, {'c5_long'},
+                    set(), set(), set(), set(),
+                    {'c5'}, set(), {'g4'}, {'ab4_long'},
+                    set(), set(), set(), set(),
+                    set(), set(), set(), set(),
                 ]),
                 (0, [
                     # Verse groove with ticking hats on the off-beats
@@ -98,6 +117,11 @@ class AutoDrum:
                     {'snare'}, {'hat'}, set(),    {'hat'},
                 ]),
             ],
+            'melody': {
+                'pitches': (('c5', 72), ('bb4', 70),
+                            ('ab4', 68), ('g4', 67)),
+                'long': ('c5', 'ab4'),
+            },
         },
         {
             'name': 'MARCH',
@@ -174,36 +198,67 @@ class AutoDrum:
                     set(), set(), set(), set(),
                 ]),
             ],
+            'image': 'imgs/darthvader.png',
+            'melody': {
+                'pitches': (
+                    ('g5', 79), ('gb5', 78), ('f5', 77), ('e5', 76),
+                    ('eb5', 75), ('d5', 74), ('db5', 73), ('c5', 72),
+                    ('b4', 71), ('bb4', 70), ('a4', 69), ('ab4', 68),
+                    ('g4', 67), ('gb4', 66), ('eb4', 63), ('bb3', 58),
+                ),
+                'long': ('g4', 'd5'),
+            },
         },
         {
             'name': 'STORM',
             'bpm': 136,
-            'subdivisions': 2,  # 8th notes; 8 steps = 1 bar
-            'sections': [
-                (1, [
+            'subdivisions': 4,  # 16th notes; every section all repeats>0,
+            'sections': [      # so the arc cycles: build→drop→breakdown→…
+                (2, [
                     # Stage 1: just a kick on beat 1 (sparse open)
                     {'kick'}, set(), set(), set(),
-                    set(),    set(), set(), set(),
+                    set(), set(), set(), set(),
+                    set(), set(), set(), set(),
+                    set(), set(), set(), set(),
                 ]),
                 (2, [
-                    # Stage 2: kick + snare enter on 2 & 4
-                    {'kick'}, set(), {'snare'}, set(),
-                    {'kick'}, set(), {'snare'}, set(),
-                ]),
-                (2, [
-                    # Stage 3: snare roll builds tension
-                    {'snare'}, {'snare'}, {'snare'}, {'snare'},
-                    {'snare'}, {'snare'}, {'snare'}, {'snare'},
+                    # Stage 2: backbeat enters
+                    {'kick'}, set(), set(), set(),
+                    {'snare'}, set(), set(), set(),
+                    {'kick'}, set(), set(), set(),
+                    {'snare'}, set(), set(), set(),
                 ]),
                 (1, [
-                    # DROP impact bar: crash splash on the downbeat
-                    {'crash', 'kick'}, {'hat'}, {'kick', 'snare'}, {'hat'},
-                    {'kick'}, {'hat'}, {'kick', 'snare'}, {'hat'},
+                    # Stage 3: snare roll at 8ths
+                    {'snare'}, set(), {'snare'}, set(),
+                    {'snare'}, set(), {'snare'}, set(),
+                    {'snare'}, set(), {'snare'}, set(),
+                    {'snare'}, set(), {'snare'}, set(),
                 ]),
-                (0, [
-                    # DROP groove: 4-on-the-floor + ticking hats
-                    {'kick'}, {'hat'}, {'kick', 'snare'}, {'hat'},
-                    {'kick'}, {'hat'}, {'kick', 'snare'}, {'hat'},
+                (1, [
+                    # Stage 4: roll doubles to 16ths, stacks tom for the
+                    # crescendo — then ONE FULL BEAT OF SILENCE before
+                    # the drop (the most important beat in the song)
+                    {'snare'}, {'snare'}, {'snare'}, {'snare'},
+                    {'snare'}, {'snare'}, {'snare'}, {'snare'},
+                    {'snare', 'tom'}, {'snare', 'tom'},
+                    {'snare', 'tom'}, {'snare', 'tom'},
+                    set(), set(), set(), set(),
+                ]),
+                (1, [
+                    # DROP impact bar: whole-panel crash splash on 1
+                    {'crash', 'kick'}, set(), {'hat'}, set(),
+                    {'kick', 'snare'}, set(), {'hat'}, set(),
+                    {'kick'}, set(), {'hat'}, set(),
+                    {'kick', 'snare'}, set(), {'hat'}, set(),
+                ]),
+                (7, [
+                    # DROP groove: 4-on-the-floor + ticking hats, then
+                    # the cycle wraps back to the sparse breakdown
+                    {'kick'}, set(), {'hat'}, set(),
+                    {'kick', 'snare'}, set(), {'hat'}, set(),
+                    {'kick'}, set(), {'hat'}, set(),
+                    {'kick', 'snare'}, set(), {'hat'}, set(),
                 ]),
             ],
         },
@@ -218,14 +273,19 @@ class AutoDrum:
         # Instruments: area (r0,r1,c0,c1), density (loudness/texture),
         # decay (densities of the rattle tail, one per DECAY_TICK).
         h, w = height, width
-        self._default_densities = {'snare': 0.6, 'tom': 0.9, 'hat': 0.2}
-        self._default_decays = {'snare': [0.25], 'tom': [0.35, 0.15], 'hat': []}
+        self._default_densities = {'kick': 1.0, 'snare': 0.6, 'tom': 0.9,
+                                   'hat': 0.2, 'crash': 0.8, 'clap': 0.5}
+        self._default_decays = {'kick': [], 'snare': [0.25],
+                                'tom': [0.35, 0.15], 'hat': [],
+                                'crash': [0.45, 0.3, 0.18, 0.1, 0.05],
+                                'clap': [0.3, 0.18, 0.1]}
         self._default_areas = {
             'kick':  (h // 2, h, 0, w),
             'snare': (0, h // 2, 0, w // 2),
             'tom':   (h // 4, h // 2, w // 2, w),
             'hat':   (0, h // 4, w // 2, w),
             'crash': (0, h, 0, w),
+            'clap':  (0, h // 2, 0, w),
         }
         self.instruments = {
             # solid full-width thump, no tail – the loudest single clack
@@ -243,7 +303,11 @@ class AutoDrum:
             # whole-panel splash with a long shimmering tail
             'crash': {'area': (0, h, 0, w),                'density': 0.8,
                       'decay': [0.45, 0.3, 0.18, 0.1, 0.05]},
+            # wide hand-clap with a stadium echo
+            'clap':  {'area': (0, h // 2, 0, w),           'density': 0.5,
+                      'decay': [0.3, 0.18, 0.1]},
         }
+        self._melody_names = []
         self._load_song(0)
 
     def _load_song(self, index):
@@ -259,40 +323,44 @@ class AutoDrum:
         self._voice_decay = []    # (due_time, density) melody ring-out ticks
         self._voice_shimmer = None  # previous shimmer mask, undone next tick
         self._voice_area = None   # area of the currently sounding note
-        song_name = self.SONGS[self.song_index]['name']
+        song = self.SONGS[self.song_index]
         h, w = self.height, self.width
-        if song_name == 'MARCH':
-            img = Image.open('imgs/darthvader.png').convert('L').resize(
+        # Background image, XOR'd under everything at render time
+        if 'image' in song:
+            img = Image.open(song['image']).convert('L').resize(
                 (self.width, self.height), Image.NEAREST)
             self._bg_frame = (np.asarray(img) < 128).astype(np.uint8)
-            # Full-width stripe per pitch, placed proportionally to its
-            # MIDI number (top = highest), so leaps look like leaps and
-            # the bar-6/7 chromatic flourishes wiggle in place.
-            hi = self.MARCH_PITCHES[0][1]
-            lo = self.MARCH_PITCHES[-1][1]
+        else:
+            self._bg_frame = None
+        # Drop the previous song's melody instruments, restore drum defaults
+        for name in self._melody_names:
+            self.instruments.pop(name, None)
+        self._melody_names = []
+        for name, area in self._default_areas.items():
+            self.instruments[name]['area'] = area
+        for name, d in self._default_densities.items():
+            self.instruments[name]['density'] = d
+            self.instruments[name]['decay'] = list(self._default_decays[name])
+        # Build monophonic voice stripes for songs with a melody:
+        # full-width stripe per pitch, placed proportionally to its MIDI
+        # number (top = highest), so leaps look like leaps and chromatic
+        # runs wiggle in place.
+        if 'melody' in song:
+            pitches = song['melody']['pitches']
+            hi, lo = pitches[0][1], pitches[-1][1]
             thickness = max(2, (h - 1) // (hi - lo))
-            for name, midi in self.MARCH_PITCHES:
+            for name, midi in pitches:
                 r0 = round((hi - midi) / (hi - lo) * (h - 1 - thickness))
                 self.instruments[name] = {
                     'area': (r0, r0 + thickness, 0, w), 'density': 1.0,
                     'voice': True, 'decay': []}
-            # Half notes ring out with the shimmering tail.
-            for name in self.MARCH_LONG_NOTES:
+                self._melody_names.append(name)
+            # Held notes ring out with the shimmering tail.
+            for name in song['melody'].get('long', ()):
                 self.instruments[name + '_long'] = {
                     'area': self.instruments[name]['area'], 'density': 1.0,
-                    'voice': True, 'decay': list(self.MARCH_LONG_DECAY)}
-        else:
-            self._bg_frame = None
-            # Drop MARCH-only pitch instruments and restore drum defaults.
-            for name, _ in self.MARCH_PITCHES:
-                self.instruments.pop(name, None)
-            for name in self.MARCH_LONG_NOTES:
-                self.instruments.pop(name + '_long', None)
-            for name, area in self._default_areas.items():
-                self.instruments[name]['area'] = area
-            for name, d in self._default_densities.items():
-                self.instruments[name]['density'] = d
-                self.instruments[name]['decay'] = list(self._default_decays[name])
+                    'voice': True, 'decay': list(self.MELODY_LONG_DECAY)}
+                self._melody_names.append(name + '_long')
 
     def _scatter_flip(self, name, density):
         """XOR a random subset of the instrument's area; density 1.0 = solid."""
