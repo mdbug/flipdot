@@ -38,9 +38,15 @@ class AutoDrum:
         ('a4', 69), ('ab4', 68), ('g4', 67), ('gb4', 66), ('eb4', 63),
         ('bb3', 58),
     )
-    # Pitches that occur as half notes get a '<name>_long' variant with
-    # this shimmering decay tail (~0.6 s of diminishing re-flips).
-    MARCH_LONG_NOTES = ('g4', 'd5')
+    # MARCH is a monophonic melody, which makes silent cleanup possible:
+    # every attack wipes the previous note's leftover dots in the SAME
+    # panel refresh that flips the new stripe on.  The panel only clicks
+    # when its state changes, so cleanup never adds its own transient —
+    # one clack per note, and the background image stays clean except
+    # for the single active stripe.  Half notes keep the shimmering
+    # ring-out tail (self-cancelling: each tick undoes the previous
+    # tick's scatter in the same frame it adds a smaller fresh one).
+    MARCH_LONG_NOTES = ('g4', 'd5')        # pitches that occur as half notes
     MARCH_LONG_DECAY = [0.15, 0.12, 0.10, 0.09, 0.08, 0.07,
                         0.06, 0.05, 0.05, 0.04, 0.04, 0.03]
 
@@ -249,7 +255,10 @@ class AutoDrum:
         self.song_start_time = time.time()
         self.state[:, :] = 0
         self._skip_hold_start = None
-        self._decay_events = []  # (due_time, instrument_name, density)
+        self._decay_events = []   # (due_time, instrument_name, density)
+        self._voice_decay = []    # (due_time, density) melody ring-out ticks
+        self._voice_shimmer = None  # previous shimmer mask, undone next tick
+        self._voice_area = None   # area of the currently sounding note
         song_name = self.SONGS[self.song_index]['name']
         h, w = self.height, self.width
         if song_name == 'MARCH':
@@ -264,13 +273,14 @@ class AutoDrum:
             thickness = max(2, (h - 1) // (hi - lo))
             for name, midi in self.MARCH_PITCHES:
                 r0 = round((hi - midi) / (hi - lo) * (h - 1 - thickness))
-                self.instruments[name] = {'area': (r0, r0 + thickness, 0, w),
-                                          'density': 1.0, 'decay': []}
-            # Half notes ring out instead of dying as a single click.
+                self.instruments[name] = {
+                    'area': (r0, r0 + thickness, 0, w), 'density': 1.0,
+                    'voice': True, 'decay': []}
+            # Half notes ring out with the shimmering tail.
             for name in self.MARCH_LONG_NOTES:
                 self.instruments[name + '_long'] = {
                     'area': self.instruments[name]['area'], 'density': 1.0,
-                    'decay': list(self.MARCH_LONG_DECAY)}
+                    'voice': True, 'decay': list(self.MARCH_LONG_DECAY)}
         else:
             self._bg_frame = None
             # Drop MARCH-only pitch instruments and restore drum defaults.
@@ -295,10 +305,42 @@ class AutoDrum:
 
     def _hit(self, name, now):
         inst = self.instruments[name]
+        if inst.get('voice'):
+            self._voice_hit(name, now)
+            return
         self._scatter_flip(name, inst['density'])
         for i, tail_density in enumerate(inst['decay']):
             self._decay_events.append(
                 (now + (i + 1) * self.DECAY_TICK, name, tail_density))
+
+    def _voice_hit(self, name, now):
+        """Monophonic melody attack with same-frame cleanup.
+
+        Wipes every leftover melody dot OUTSIDE this note's stripe in
+        the same panel refresh that fires the attack, so cleanup never
+        produces its own click — the wipe and the clack are one flip
+        event, and only the active stripe overlays the background.
+        The stripe itself is XOR-flipped, so a repeated pitch blinks
+        but always clacks at full loudness.
+        """
+        inst = self.instruments[name]
+        r0, r1, c0, c1 = inst['area']
+        # Choke the previous note's ring; its shimmer dots either lie
+        # outside the new stripe (wiped below) or get absorbed by it.
+        self._voice_decay = []
+        self._voice_shimmer = None
+        region = np.zeros_like(self.state, dtype=bool)
+        region[r0:r1, c0:c1] = True
+        self.state[~region] = 0          # cleanup, hidden inside the attack
+        self.state[r0:r1, c0:c1] ^= 1    # the attack clack
+        self._voice_area = (r0, r1, c0, c1)
+        if inst['decay']:
+            self._voice_decay = [
+                (now + (i + 1) * self.DECAY_TICK, d)
+                for i, d in enumerate(inst['decay'])]
+            # Final zero-density tick sweeps up the last shimmer dots.
+            self._voice_decay.append(
+                (now + (len(inst['decay']) + 1) * self.DECAY_TICK, 0.0))
 
     def _section(self):
         return self.SONGS[self.song_index]['sections'][self.section_index]
@@ -314,6 +356,21 @@ class AutoDrum:
             self._decay_events = [e for e in self._decay_events if e[0] > now]
             for _, name, density in due:
                 self._scatter_flip(name, density)
+
+        # Melody ring-out shimmer (self-cancelling: each tick undoes the
+        # previous tick's dots and scatters a smaller fresh set in the
+        # same frame — one rattle click per tick, zero residue).
+        while self._voice_decay and self._voice_decay[0][0] <= now:
+            _, density = self._voice_decay.pop(0)
+            r0, r1, c0, c1 = self._voice_area
+            if self._voice_shimmer is not None:
+                self.state[r0:r1, c0:c1] ^= self._voice_shimmer
+                self._voice_shimmer = None
+            if density > 0:
+                self._voice_shimmer = (
+                    self.rng.random((r1 - r0, c1 - c0)) < density
+                ).astype(np.uint8)
+                self.state[r0:r1, c0:c1] ^= self._voice_shimmer
 
         # Advance the sequencer, catching up if we fell behind
         while now >= self.next_step_time:
@@ -350,8 +407,9 @@ class AutoDrum:
         frame = self.state.copy()
 
         # XOR background image (e.g. Darth Vader for MARCH).
-        # Full XOR preserves correct dot-flip sound everywhere; the
-        # note stripes momentarily invert Vader's silhouette as they pass.
+        # The melody voice cleans up after itself, so at most one stripe
+        # (the sounding note) overlays Vader at any moment — it reads
+        # like a pitch indicator jumping around the silhouette.
         if self._bg_frame is not None:
             frame ^= self._bg_frame
 
