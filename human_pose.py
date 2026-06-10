@@ -2,33 +2,233 @@ import mediapipe as mp
 import cv2
 import numpy as np
 import os
+import time
+import threading
 
 CLOSE_FACE_DISTANCE = float(os.getenv('CLOSE_FACE_DISTANCE', '0.9'))
 VERY_CLOSE_FACE_DISTANCE = float(os.getenv('VERY_CLOSE_FACE_DISTANCE', '0.5'))
 
+# ---------------------------------------------------------------------------
+# MediaPipe Tasks API (>= 0.10) with GPU delegate, falling back to legacy API
+# ---------------------------------------------------------------------------
+_MODELS_DIR = os.path.join(os.path.dirname(__file__), 'models')
+_POSE_MODEL_NAME = os.getenv('POSE_MODEL', 'pose_landmarker_lite')
+_POSE_MODEL   = os.path.join(_MODELS_DIR, f'{_POSE_MODEL_NAME}.task')
+_FACE_MODEL   = os.path.join(_MODELS_DIR, 'face_landmarker.task')
+
+_USE_TASKS_API = False  # set True below if Tasks API + model files are present
+
+# Face-mesh background thread: runs inference without blocking the main loop.
+# Written from the bg thread, read from the main thread (GIL protects assignments).
+_face_bg_lock   = threading.Lock()
+_face_bg_frame  = [None]   # latest frame to process (overwritten, not queued)
+_face_bg_result = [None]   # latest completed result
+_face_bg_event  = threading.Event()
+_face_bg_ts     = [0]      # monotonic timestamp counter (bg thread only)
+
+
+# ---------------------------------------------------------------------------
+# Backward-compat wrappers so every existing caller keeps working unchanged.
+# ---------------------------------------------------------------------------
+
+class _LandmarkList:
+    """Wraps a flat list of landmarks as .landmark[idx] — mimics the legacy API."""
+    __slots__ = ('landmark',)
+    def __init__(self, landmarks):
+        self.landmark = landmarks  # list of NormalizedLandmark / Landmark objects
+
+
+class _PoseResultsWrapper:
+    """Adapts PoseLandmarkerResult to look like mp.solutions.pose.Pose.process()."""
+    __slots__ = ('pose_landmarks', 'pose_world_landmarks', 'segmentation_mask')
+
+    def __init__(self, result, seg_mask=None):
+        if result and result.pose_landmarks:
+            self.pose_landmarks = _LandmarkList(result.pose_landmarks[0])
+            self.pose_world_landmarks = (
+                _LandmarkList(result.pose_world_landmarks[0])
+                if result.pose_world_landmarks else None
+            )
+        else:
+            self.pose_landmarks = None
+            self.pose_world_landmarks = None
+        self.segmentation_mask = seg_mask
+
+
+class _FaceLandmarkList:
+    """Single face entry for multi_face_landmarks[0].landmark[idx]."""
+    __slots__ = ('landmark',)
+    def __init__(self, landmarks):
+        self.landmark = landmarks
+
+
+class _FaceMeshResultsWrapper:
+    """Adapts FaceLandmarkerResult to look like mp.solutions.face_mesh result."""
+    __slots__ = ('multi_face_landmarks',)
+
+    def __init__(self, result):
+        if result and result.face_landmarks:
+            self.multi_face_landmarks = [_FaceLandmarkList(result.face_landmarks[0])]
+        else:
+            self.multi_face_landmarks = None
+
+
+# ---------------------------------------------------------------------------
+# Initialise detectors — Tasks API preferred, legacy fallback
+# ---------------------------------------------------------------------------
+
+def _face_mesh_bg_worker():
+    """Background thread: run face landmarker inference without blocking main loop."""
+    ts = 0
+    while True:
+        _face_bg_event.wait()
+        _face_bg_event.clear()
+        with _face_bg_lock:
+            frame = _face_bg_frame[0]
+            _face_bg_frame[0] = None
+        if frame is None:
+            continue
+        h, w = frame.shape[:2]
+        target_h = int(FACE_MESH_INPUT_WIDTH * h / w)
+        small = cv2.resize(frame, (FACE_MESH_INPUT_WIDTH, target_h), interpolation=cv2.INTER_AREA)
+        inp = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=inp)
+        ts = max(ts + 1, int(time.monotonic() * 1000))
+        result = _face_landmarker.detect_for_video(mp_image, ts)
+        with _face_bg_lock:
+            _face_bg_result[0] = _FaceMeshResultsWrapper(result)
+
 try:
-    mp_drawing = mp.solutions.drawing_utils
-    mp_pose = mp.solutions.pose
-    mp_face_mesh = mp.solutions.face_mesh
-except AttributeError:
-    from mediapipe.python import solutions as mp_solutions
+    from mediapipe.tasks.python import BaseOptions
+    from mediapipe.tasks.python.vision import (
+        PoseLandmarker, PoseLandmarkerOptions,
+        FaceLandmarker, FaceLandmarkerOptions,
+        RunningMode,
+    )
 
-    mp_drawing = mp_solutions.drawing_utils
-    mp_pose = mp_solutions.pose
-    mp_face_mesh = mp_solutions.face_mesh
+    if not os.path.isfile(_POSE_MODEL):
+        raise FileNotFoundError(f"Pose model not found: {_POSE_MODEL}")
+    if not os.path.isfile(_FACE_MODEL):
+        raise FileNotFoundError(f"Face model not found: {_FACE_MODEL}")
 
-pose = mp_pose.Pose(
+    try:
+        _delegate = BaseOptions.Delegate.GPU
+        _pose_landmarker = PoseLandmarker.create_from_options(
+            PoseLandmarkerOptions(
+                base_options=BaseOptions(model_asset_path=_POSE_MODEL, delegate=_delegate),
+                running_mode=RunningMode.VIDEO,
+                num_poses=1,
+                min_pose_detection_confidence=0.6,
+                min_pose_presence_confidence=0.6,
+                min_tracking_confidence=0.6,
+                output_segmentation_masks=True,
+            )
+        )
+    except Exception:
+        # GPU delegate unavailable — fall back to CPU
+        _delegate = BaseOptions.Delegate.CPU
+        _pose_landmarker = PoseLandmarker.create_from_options(
+            PoseLandmarkerOptions(
+                base_options=BaseOptions(model_asset_path=_POSE_MODEL, delegate=_delegate),
+                running_mode=RunningMode.VIDEO,
+                num_poses=1,
+                min_pose_detection_confidence=0.6,
+                min_pose_presence_confidence=0.6,
+                min_tracking_confidence=0.6,
+                output_segmentation_masks=True,
+            )
+        )
+
+    _face_landmarker = FaceLandmarker.create_from_options(
+        FaceLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=_FACE_MODEL, delegate=_delegate),
+            running_mode=RunningMode.VIDEO,
+            num_faces=1,
+            min_face_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+            output_face_blendshapes=False,
+            output_facial_transformation_matrixes=False,
+        )
+    )
+
+    # Start face mesh background thread (pose inference stays in the main thread).
+    _face_bg_thread = threading.Thread(target=_face_mesh_bg_worker, daemon=True)
+    _face_bg_thread.start()
+
+    _USE_TASKS_API = True
+    _delegate_name = 'GPU' if _delegate == BaseOptions.Delegate.GPU else 'CPU'
+    print(f"[human_pose] Using MediaPipe Tasks API ({_delegate_name} delegate)")
+
+except Exception as _tasks_err:
+    print(f"[human_pose] Tasks API unavailable ({_tasks_err}), using legacy API")
+    try:
+        mp_drawing = mp.solutions.drawing_utils
+        mp_pose = mp.solutions.pose
+        mp_face_mesh = mp.solutions.face_mesh
+    except AttributeError:
+        from mediapipe.python import solutions as _mp_solutions
+        mp_drawing = _mp_solutions.drawing_utils
+        mp_pose = _mp_solutions.pose
+        mp_face_mesh = _mp_solutions.face_mesh
+
+    _pose_legacy = mp_pose.Pose(
         model_complexity=1,
         min_detection_confidence=0.6,
         min_tracking_confidence=0.6,
-        enable_segmentation=True)
+        enable_segmentation=True,
+    )
+    _face_legacy = mp_face_mesh.FaceMesh(
+        static_image_mode=False,
+        max_num_faces=1,
+        refine_landmarks=True,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
+    )
 
-face_mesh = mp_face_mesh.FaceMesh(
-    static_image_mode=False,
-    max_num_faces=1,
-    refine_landmarks=True,
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5)
+# Keep mp_pose available for landmark enum constants used throughout the file.
+# With Tasks API, mp_pose is not imported above, so import it separately here.
+try:
+    mp_pose  # already defined (legacy path)
+except NameError:
+    mp_pose = mp.solutions.pose
+
+
+# ---------------------------------------------------------------------------
+# Public detector functions
+# ---------------------------------------------------------------------------
+
+def get_human_pose(frame):
+    input_image = cv2.resize(frame, (60, 60))
+    input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2RGB)
+
+    if _USE_TASKS_API:
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=input_image)
+        ts_ms = int(time.monotonic() * 1000)
+        result = _pose_landmarker.detect_for_video(mp_image, ts_ms)
+        seg_mask = None
+        if result.segmentation_masks:
+            seg_mask = result.segmentation_masks[0].numpy_view().copy()
+        return _PoseResultsWrapper(result, seg_mask)
+    else:
+        return _pose_legacy.process(input_image)
+
+
+FACE_MESH_INPUT_WIDTH = int(os.getenv('FACE_MESH_INPUT_WIDTH', '256'))
+
+def get_face_mesh(frame):
+    """Submit frame to face mesh background thread; return latest available result."""
+    if _USE_TASKS_API:
+        with _face_bg_lock:
+            _face_bg_frame[0] = frame
+        _face_bg_event.set()
+        with _face_bg_lock:
+            return _face_bg_result[0]
+    else:
+        h, w = frame.shape[:2]
+        target_h = int(FACE_MESH_INPUT_WIDTH * h / w)
+        small = cv2.resize(frame, (FACE_MESH_INPUT_WIDTH, target_h), interpolation=cv2.INTER_AREA)
+        inp = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+        return _face_legacy.process(inp)
 
 LEFT_EYE_INDICES = [33, 133]
 RIGHT_EYE_INDICES = [362, 263]
@@ -55,16 +255,6 @@ ARM_SHOULDER_JOIN_CLEAR_RADIUS_PX = int(os.getenv('ARM_SHOULDER_JOIN_CLEAR_RADIU
 ARM_SHOULDER_TORSO_CLEAR_LEN_PX = int(os.getenv('ARM_SHOULDER_TORSO_CLEAR_LEN_PX', '2'))
 ARM_SHOULDER_TORSO_BRIDGE_LEN_PX = int(os.getenv('ARM_SHOULDER_TORSO_BRIDGE_LEN_PX', '4'))
 ARM_SHOULDER_TORSO_CONNECT_RADIUS_PX = int(os.getenv('ARM_SHOULDER_TORSO_CONNECT_RADIUS_PX', '2'))
-
-def get_human_pose(frame):
-    input_image = cv2.resize(frame, (60, 60))
-    input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2RGB)
-    return pose.process(input_image)
-
-
-def get_face_mesh(frame):
-    input_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    return face_mesh.process(input_image)
 
 
 def should_draw_face_features(estimated_distance):
@@ -471,54 +661,46 @@ def eyes_visible_and_facing_camera(pose_results):
     # Check if all relevant landmarks are detected with reasonable confidence
     # - Left eye: 2 (inner), 3 (outer)
     # - Right eye: 5 (inner), 4 (outer)
-    if pose_results.pose_landmarks is None or pose_results.pose_world_landmarks is None:
+    if pose_results is None or pose_results.pose_landmarks is None:
         return False, "Pose landmarks not detected", None
 
     landmarks = pose_results.pose_landmarks.landmark
-    world_landmarks = pose_results.pose_world_landmarks.landmark
     eye_landmarks = [landmarks[0], landmarks[2], landmarks[3], landmarks[4], landmarks[5]]
-    
+
     # Visibility threshold
     confidence_threshold = 0.7
-    
+
     # Check if all eye landmarks are visible with high confidence
     all_eye_landmarks_visible = all(landmark.visibility > confidence_threshold for landmark in eye_landmarks)
     if not all_eye_landmarks_visible:
         return False, "Eye landmarks not clearly visible", None
-    
-    # Calculate the midpoint between the eyes in 3D space
-    left_eye_inner_3d = np.array([
-        world_landmarks[2].x,
-        world_landmarks[2].y,
-        world_landmarks[2].z
-    ])
-    
-    right_eye_inner_3d = np.array([
-        world_landmarks[5].x,
-        world_landmarks[5].y,
-        world_landmarks[5].z
-    ])
-    
-    face_direction = right_eye_inner_3d - left_eye_inner_3d
-    # Discard the y-component to focus on the horizontal planea and rotate the vector 90 degrees
-    face_direction = np.array([face_direction[2], 0, -face_direction[0]])  # Rotate 90 degrees around y-axis
-    
-    # Calculate the camera direction vector (pointing straight into the camera)
-    # In MediaPipe's coordinate system, the z-axis points toward the camera
-    camera_direction = np.array([0, 0, 1])
-    
-    # Calculate the angle between face direction and camera direction
-    # First normalize the vectors
-    face_direction_normalized = face_direction / np.linalg.norm(face_direction)
-    
-    # Calculate the dot product and then the angle
-    dot_product = np.dot(face_direction_normalized, camera_direction)
-    angle_rad = np.arccos(np.clip(dot_product, -1.0, 1.0))
-    angle_deg = np.degrees(angle_rad)
-    
-    # If the person is facing the camera, the the z-component of the face direction should be positive
+
+    # Use the 2D normalised pose_landmarks for the angle calculation.
+    # pose_landmarks.z has the same scale as x and measures depth relative to
+    # the hip midpoint (smaller = closer to camera).  Unlike pose_world_landmarks.z
+    # it is not affected by the gravity-aligned body frame used by GHUM/Tasks API,
+    # so it correctly reads ~0 depth-difference between the eyes when the person
+    # faces the camera directly, regardless of camera tilt.
+    left_eye  = landmarks[2]   # left eye centre
+    right_eye = landmarks[5]   # right eye centre
+
+    dx = right_eye.x - left_eye.x   # lateral (negative when facing camera)
+    dz = right_eye.z - left_eye.z   # depth difference
+
+    # Rotate 90° around y-axis to get the face normal direction
+    face_direction = np.array([dz, 0.0, -dx])
+    norm = np.linalg.norm(face_direction)
+    if norm == 0:
+        return False, "Degenerate eye vector", None
+
+    face_direction_normalized = face_direction / norm
+    dot_product = np.dot(face_direction_normalized, np.array([0.0, 0.0, 1.0]))
+    angle_deg = np.degrees(np.arccos(np.clip(dot_product, -1.0, 1.0)))
+
+    # face_direction[2] = -dx; positive when right_eye.x < left_eye.x,
+    # i.e. when the person faces the camera (left eye is on the camera's right).
     facing_forward = face_direction[2] > 0
-    
+
     # Define threshold for the angle
     max_angle_threshold = 30  # degrees
     
@@ -537,7 +719,7 @@ def estimate_distance(pose_results):
     FOCAL_SCALE = float(os.getenv('FOCAL_SCALE', '1.0'))
 
     # Estimate distance based on the size of the person in the frame
-    if pose_results.pose_landmarks is None:
+    if pose_results is None or pose_results.pose_landmarks is None:
         return None, []
 
     KNOWN_DISTANCES = [

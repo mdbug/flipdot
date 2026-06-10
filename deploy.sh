@@ -1,5 +1,5 @@
 #!/bin/bash
-rsync -avz --delete --exclude='.git' --exclude='__pycache__' --exclude='.env' ./ flipdot@flipdot:/home/flipdot/flipdot
+rsync -avz --delete --exclude='.git' --exclude='__pycache__' --exclude='.env' --exclude='models/' ./ flipdot@flipdot:/home/flipdot/flipdot
 # if parameter --debug is passed, set env variable DEBUG to true
 DEBUG_VALUE=false
 if [[ "$1" == "--debug" ]]; then

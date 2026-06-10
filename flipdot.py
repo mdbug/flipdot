@@ -37,8 +37,6 @@ clock = Clock(panel.WIDTH, panel.HEIGHT)
 
 last_print_time = time.time()
 last_update_time = time.time()
-pose_throttle_frame = 0
-cached_drum_pose = None
 mode_manager = ModeManager()
 menu = Menu(panel.WIDTH, panel.HEIGHT, mode_manager)
 paint = Paint(panel.WIDTH, panel.HEIGHT, mode_manager)
@@ -58,23 +56,23 @@ while True:
 
     t_process_start = time.time()
 
-    pose_results = None
+    pose_results = human_pose.get_human_pose(frame)
     face_mesh_results = None
     eyes_visible = False
     reason = ""
     now = datetime.now()
     estimated_distance = None
     angle = None
-    if now.hour < 7 or now.hour >= 24:
+    sleep_start = int(os.getenv('SLEEP_HOUR_START', '0'))
+    sleep_end   = int(os.getenv('SLEEP_HOUR_END',   '7'))
+    in_sleep_hours = sleep_end > sleep_start and sleep_start <= now.hour < sleep_end
+    if in_sleep_hours:
         mode_manager.set_mode(ModeManager.MODE_SLEEP)
     else:
         current_mode = mode_manager.mode
 
-        if current_mode == ModeManager.MODE_MENU:
-            pose_results = human_pose.get_human_pose(frame)
-
-        elif current_mode == ModeManager.MODE_PAINT:
-            pose_results = human_pose.get_human_pose(frame)
+        if current_mode in (ModeManager.MODE_MENU, ModeManager.MODE_PAINT,
+                            ModeManager.MODE_PERCUSSION, ModeManager.MODE_AUTODRUM):
             if human_pose.is_arms_crossed(pose_results):
                 mode_manager.click_menu()
             else:
@@ -83,26 +81,13 @@ while True:
         elif current_mode == ModeManager.MODE_CARICATURE:
             pass  # no pose processing needed; caricature handles its own state
 
-        elif current_mode in (ModeManager.MODE_PERCUSSION, ModeManager.MODE_AUTODRUM):
-            # Throttle pose to every 6th frame (~5 FPS): interaction latency
-            # is fine at 200 ms; sequencer timing is wall-clock independent.
-            pose_throttle_frame = (pose_throttle_frame + 1) % 6
-            if pose_throttle_frame == 0:
-                cached_drum_pose = human_pose.get_human_pose(frame)
-            pose_results = cached_drum_pose
-            if human_pose.is_arms_crossed(pose_results):
-                mode_manager.click_menu()
-            else:
-                mode_manager.reset_menu_click()
-
         elif current_mode == ModeManager.MODE_POSE:
-            pose_results = human_pose.get_human_pose(frame)
             eyes_visible, reason, angle = human_pose.eyes_visible_and_facing_camera(pose_results)
             estimated_distance, _ = human_pose.estimate_distance(pose_results)
             if human_pose.should_draw_face_features(estimated_distance):
                 face_mesh_results = human_pose.get_face_mesh(frame)
 
-            if pose_results.pose_landmarks:
+            if pose_results and pose_results.pose_landmarks:
                 mode_manager.set_mode(ModeManager.MODE_POSE)
             elif mode_manager.get_time_since_last_mode_update() > POSE_TIMEOUT:
                 mode_manager.set_mode(ModeManager.MODE_CLOCK)
@@ -114,14 +99,13 @@ while True:
 
         else:  # Clock and fallback modes
             if mode_manager.pose_enabled:
-                pose_results = human_pose.get_human_pose(frame)
                 eyes_visible, reason, angle = human_pose.eyes_visible_and_facing_camera(pose_results)
                 estimated_distance, _ = human_pose.estimate_distance(pose_results)
-                if pose_results.pose_landmarks and eyes_visible and estimated_distance < 1.3:
+                if pose_results and pose_results.pose_landmarks and eyes_visible and estimated_distance is not None and estimated_distance < 1.3:
                     if mode_manager.mode not in (ModeManager.MODE_MENU, ModeManager.MODE_PAINT, ModeManager.MODE_CARICATURE):
                         mode_manager.set_mode(ModeManager.MODE_POSE)
 
-            if human_pose.is_arms_crossed(pose_results) and eyes_visible:
+            if human_pose.is_arms_crossed(pose_results) and (eyes_visible or not mode_manager.pose_enabled):
                 mode_manager.click_menu()
             else:
                 mode_manager.reset_menu_click()
@@ -143,8 +127,6 @@ while True:
         dots = menu.get_frame(pose_results)
     elif mode_manager.mode == ModeManager.MODE_CLOCK:
         dots = clock.get_frame()
-        if not mode_manager.pose_enabled:
-            human_pose.draw_right_index_pointer(dots, pose_results, size=2)
         if mode_manager.get_mode_time() < CLOCK_RESOLVE_TIME:
             dots = transition.resolve(dots, (mode_manager.get_mode_time())/CLOCK_RESOLVE_TIME)
     elif mode_manager.mode == ModeManager.MODE_PAINT:
@@ -158,9 +140,11 @@ while True:
 
     process_time = time.time() - t_process_start
     fps_limit = mode_manager.get_fps_limit()
-
-    process_time = time.time() - t_process_start
-    fps_limit = mode_manager.get_fps_limit()
+    # Run at full speed in clock mode when a body is in frame, so the
+    # transition to POSE mode feels immediate.
+    body_in_frame = pose_results is not None and pose_results.pose_landmarks is not None
+    if mode_manager.mode == ModeManager.MODE_CLOCK and body_in_frame:
+        fps_limit = 30
 
     if DEBUG:
         dots[22:, :] = 0  # Clear bottom part of the panel
@@ -174,12 +158,13 @@ while True:
     panel_time = time.time() - t_panel_start
 
     # Precision frame limiter: sleep most of the budget then spin the last
-    # ~6 ms so OS scheduling jitter doesn't overshoot the target.
+    # ~12 ms so OS scheduling jitter (measured ~9 ms on this system) doesn't
+    # overshoot the target before the spin can correct it.
     target_time = t_start + 1.0 / fps_limit
     remaining = target_time - time.time()
     t_sleep_start = time.time()
-    if remaining > 0.006:
-        time.sleep(remaining - 0.006)
+    if remaining > 0.012:
+        time.sleep(remaining - 0.012)
     while time.time() < target_time:
         pass
     sleep_time = time.time() - t_sleep_start

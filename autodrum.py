@@ -1,5 +1,6 @@
 import numpy as np
 import time
+from PIL import Image
 import text
 import human_pose
 
@@ -27,6 +28,21 @@ class AutoDrum:
 
     SKIP_HOLD_TIME = 1.0  # seconds to hold left hand raised to skip to next song
     DECAY_TICK = 0.05     # seconds between decay-tail flips
+
+    # MARCH pitches as (name, MIDI number), highest first.  Stripes are
+    # placed semitone-proportionally so the panel contour matches the
+    # actual melodic intervals.
+    MARCH_PITCHES = (
+        ('g5', 79), ('gb5', 78), ('f5', 77), ('e5', 76), ('eb5', 75),
+        ('d5', 74), ('db5', 73), ('c5', 72), ('b4', 71), ('bb4', 70),
+        ('a4', 69), ('ab4', 68), ('g4', 67), ('gb4', 66), ('eb4', 63),
+        ('bb3', 58),
+    )
+    # Pitches that occur as half notes get a '<name>_long' variant with
+    # this shimmering decay tail (~0.6 s of diminishing re-flips).
+    MARCH_LONG_NOTES = ('g4', 'd5')
+    MARCH_LONG_DECAY = [0.15, 0.12, 0.10, 0.09, 0.08, 0.07,
+                        0.06, 0.05, 0.05, 0.04, 0.04, 0.03]
 
     SONGS = [
         {
@@ -80,20 +96,76 @@ class AutoDrum:
         {
             'name': 'MARCH',
             'bpm': 103,
-            'subdivisions': 4,  # 16th notes; 32 steps = full 2-bar theme
+            'subdivisions': 4,  # 16th notes; 192 steps = full 12-bar theme
             'sections': [
                 (0, [
-                    # Imperial March: G G G Eb-Bb G Eb-Bb G
-                    # kick=main note, snare=Eb (first anacrusis), tom=Bb (grace note)
-                    # Bar 1: G(q) G(q) G(q) Eb(d.e) Bb(16th)
-                    {'kick'}, set(), set(), set(),
-                    {'kick'}, set(), set(), set(),
-                    {'kick'}, set(), set(), set(),
-                    {'snare'}, set(), set(), {'tom'},
-                    # Bar 2: G(half) Eb(d.e) Bb(16th) G(q)
-                    {'kick'}, set(), set(), set(), set(), set(), set(), set(),
-                    {'snare'}, set(), set(), {'tom'},
-                    {'kick'}, set(), set(), set(),
+                    # One full-width stripe per pitch, placed semitone-
+                    # proportionally, top = highest (see _load_song).
+                    # ---- Antecedent ----
+                    # Bar 1: G4(q) G4(q) G4(q) Eb4(d.e) Bb3(16th)
+                    {'g4'}, set(), set(), set(),
+                    {'g4'}, set(), set(), set(),
+                    {'g4'}, set(), set(), set(),
+                    {'eb4'}, set(), set(), {'bb3'},
+                    # Bar 2: G4(q) Eb4(d.e) Bb3(16th) G4(HALF — rings out)
+                    {'g4'}, set(), set(), set(),
+                    {'eb4'}, set(), set(), {'bb3'},
+                    {'g4_long'}, set(), set(), set(),
+                    set(), set(), set(), set(),
+                    # Bar 3: D5(q) D5(q) D5(q) Eb5(d.e) Bb4(16th) — high phrase
+                    {'d5'}, set(), set(), set(),
+                    {'d5'}, set(), set(), set(),
+                    {'d5'}, set(), set(), set(),
+                    {'eb5'}, set(), set(), {'bb4'},
+                    # Bar 4: Gb4(q) Eb5(d.e) Bb4(16th) G4(HALF)
+                    {'gb4'}, set(), set(), set(),
+                    {'eb5'}, set(), set(), {'bb4'},
+                    {'g4_long'}, set(), set(), set(),
+                    set(), set(), set(), set(),
+                    # ---- Consequent (the "answer") ----
+                    # Bar 5: G5(q) G4(d.e) G4(16) G5(q) Gb5(d.e) F5(16)
+                    {'g5'}, set(), set(), set(),
+                    {'g4'}, set(), set(), {'g4'},
+                    {'g5'}, set(), set(), set(),
+                    {'gb5'}, set(), set(), {'f5'},
+                    # Bar 6: E5(16) Eb5(16) E5(8) rest Ab4(8)
+                    #        Db5(q) C5(d.e) B4(16)   — chromatic flourish
+                    {'e5'}, {'eb5'}, {'e5'}, set(),
+                    set(), set(), {'ab4'}, set(),
+                    {'db5'}, set(), set(), set(),
+                    {'c5'}, set(), set(), {'b4'},
+                    # Bar 7: Bb4(16) A4(16) Bb4(8) rest Eb4(8)
+                    #        Gb4(q) Eb4(d.e) Gb4(16)
+                    {'bb4'}, {'a4'}, {'bb4'}, set(),
+                    set(), set(), {'eb4'}, set(),
+                    {'gb4'}, set(), set(), set(),
+                    {'eb4'}, set(), set(), {'gb4'},
+                    # Bar 8: Bb4(q) G4(d.e) Bb4(16) D5(HALF) — first ending, up
+                    {'bb4'}, set(), set(), set(),
+                    {'g4'}, set(), set(), {'bb4'},
+                    {'d5_long'}, set(), set(), set(),
+                    set(), set(), set(), set(),
+                    # ---- Consequent again, second ending ----
+                    # Bar 9 = Bar 5
+                    {'g5'}, set(), set(), set(),
+                    {'g4'}, set(), set(), {'g4'},
+                    {'g5'}, set(), set(), set(),
+                    {'gb5'}, set(), set(), {'f5'},
+                    # Bar 10 = Bar 6
+                    {'e5'}, {'eb5'}, {'e5'}, set(),
+                    set(), set(), {'ab4'}, set(),
+                    {'db5'}, set(), set(), set(),
+                    {'c5'}, set(), set(), {'b4'},
+                    # Bar 11: like Bar 7 but turns DOWN at the end (Bb3)
+                    {'bb4'}, {'a4'}, {'bb4'}, set(),
+                    set(), set(), {'eb4'}, set(),
+                    {'gb4'}, set(), set(), set(),
+                    {'eb4'}, set(), set(), {'bb3'},
+                    # Bar 12: G4(q) Eb4(d.e) Bb3(16) G4(HALF) — home, recaps bar 2
+                    {'g4'}, set(), set(), set(),
+                    {'eb4'}, set(), set(), {'bb3'},
+                    {'g4_long'}, set(), set(), set(),
+                    set(), set(), set(), set(),
                 ]),
             ],
         },
@@ -140,6 +212,15 @@ class AutoDrum:
         # Instruments: area (r0,r1,c0,c1), density (loudness/texture),
         # decay (densities of the rattle tail, one per DECAY_TICK).
         h, w = height, width
+        self._default_densities = {'snare': 0.6, 'tom': 0.9, 'hat': 0.2}
+        self._default_decays = {'snare': [0.25], 'tom': [0.35, 0.15], 'hat': []}
+        self._default_areas = {
+            'kick':  (h // 2, h, 0, w),
+            'snare': (0, h // 2, 0, w // 2),
+            'tom':   (h // 4, h // 2, w // 2, w),
+            'hat':   (0, h // 4, w // 2, w),
+            'crash': (0, h, 0, w),
+        }
         self.instruments = {
             # solid full-width thump, no tail – the loudest single clack
             'kick':  {'area': (h // 2, h, 0, w),           'density': 1.0,
@@ -169,6 +250,39 @@ class AutoDrum:
         self.state[:, :] = 0
         self._skip_hold_start = None
         self._decay_events = []  # (due_time, instrument_name, density)
+        song_name = self.SONGS[self.song_index]['name']
+        h, w = self.height, self.width
+        if song_name == 'MARCH':
+            img = Image.open('imgs/darthvader.png').convert('L').resize(
+                (self.width, self.height), Image.NEAREST)
+            self._bg_frame = (np.asarray(img) < 128).astype(np.uint8)
+            # Full-width stripe per pitch, placed proportionally to its
+            # MIDI number (top = highest), so leaps look like leaps and
+            # the bar-6/7 chromatic flourishes wiggle in place.
+            hi = self.MARCH_PITCHES[0][1]
+            lo = self.MARCH_PITCHES[-1][1]
+            thickness = max(2, (h - 1) // (hi - lo))
+            for name, midi in self.MARCH_PITCHES:
+                r0 = round((hi - midi) / (hi - lo) * (h - 1 - thickness))
+                self.instruments[name] = {'area': (r0, r0 + thickness, 0, w),
+                                          'density': 1.0, 'decay': []}
+            # Half notes ring out instead of dying as a single click.
+            for name in self.MARCH_LONG_NOTES:
+                self.instruments[name + '_long'] = {
+                    'area': self.instruments[name]['area'], 'density': 1.0,
+                    'decay': list(self.MARCH_LONG_DECAY)}
+        else:
+            self._bg_frame = None
+            # Drop MARCH-only pitch instruments and restore drum defaults.
+            for name, _ in self.MARCH_PITCHES:
+                self.instruments.pop(name, None)
+            for name in self.MARCH_LONG_NOTES:
+                self.instruments.pop(name + '_long', None)
+            for name, area in self._default_areas.items():
+                self.instruments[name]['area'] = area
+            for name, d in self._default_densities.items():
+                self.instruments[name]['density'] = d
+                self.instruments[name]['decay'] = list(self._default_decays[name])
 
     def _scatter_flip(self, name, density):
         """XOR a random subset of the instrument's area; density 1.0 = solid."""
@@ -234,6 +348,12 @@ class AutoDrum:
             self._skip_hold_start = None
 
         frame = self.state.copy()
+
+        # XOR background image (e.g. Darth Vader for MARCH).
+        # Full XOR preserves correct dot-flip sound everywhere; the
+        # note stripes momentarily invert Vader's silhouette as they pass.
+        if self._bg_frame is not None:
+            frame ^= self._bg_frame
 
         # Step cursor along the bottom row
         _, pattern = self._section()

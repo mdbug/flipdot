@@ -23,14 +23,47 @@ Modes (`ModeManager.MODE_*`): `sleep`, `clock`, `pose`, `menu`, `paint`. Each ha
 
 ## Hardware & environment
 
-- **Hardware deps:** real serial flip-dot panel at `/dev/ttyUSB0` (57600 baud) and a V4L2 webcam. Run with `PREVIEW=true` to use `flippydot`'s on-screen pygame preview instead of serial — essential for dev without hardware.
+- **Device:** NVIDIA Jetson Orin Nano (aarch64), JetPack R36.4.7, running Ubuntu with Python 3.10.
+- **Hardware deps:** real serial flip-dot panel at `/dev/ttyUSB0` (57600 baud) and a V4L2 webcam at `/dev/video0`.
+- Run with `PREVIEW=true` to use `flippydot`'s on-screen pygame preview instead of serial — essential for dev without hardware.
 - Config via `.env` (loaded by `python-dotenv`): `CAMERA_INDEX`, `PREVIEW`, `DEBUG`, `OPENWEATHER_API_KEY`. `DEBUG=true` overlays distance/angle text on the bottom rows.
 - `flippydot/` is a vendored fork of the flip-dot driver library; `Panel` (`panel.py`) wraps it.
 
+## Installed software on the Jetson
+
+- **Python 3.10** (`/usr/bin/python3`) — packages installed system-wide via `pip3`, **not pipenv**.
+- **mediapipe 0.10.18** — uses the Tasks API (`mediapipe.tasks`) with CPU/XNNPACK delegate. Model files live in `~/flipdot/models/` on the Jetson (excluded from rsync and `.gitignore`). If model files are absent (e.g. on a dev machine) the code automatically falls back to the legacy `mp.solutions.pose` API, so local development works without them. GPU delegate is not available in the pip build; TensorRT 10.3.0 is installed but not yet wired up.
+- **TensorRT 10.3.0** — pre-installed with JetPack; future path for GPU-accelerated pose inference.
+- **opencv-python, pyserial, requests, pillow, python-dotenv** — installed via pip3.
+
+## SSH access
+
+```bash
+ssh flipdot          # connects as flipdot@flipdot (host alias in ~/.ssh/config)
+```
+
+Useful commands on the device:
+```bash
+sudo systemctl status flipdot.service   # check if running
+sudo systemctl restart flipdot.service  # restart after deploy
+journalctl -u flipdot.service -f        # live logs (stdout → /var/log/flipdot/output.log, stderr → error.log)
+sudo journalctl -u flipdot.service -f   # same with sudo if needed
+sudo tail -f /var/log/flipdot/error.log    # Python tracebacks and stderr
+sudo tail -f /var/log/flipdot/output.log   # FPS stats and stdout prints
+```
+
 ## Developer workflows
 
-- **Run:** `pipenv install && pipenv run python flipdot.py` (Python 3.11; runtime deps include `opencv-python`, `mediapipe`, `requests`, `pyserial`, `pillow`, `python-dotenv`).
-- **Deploy:** `./deploy.sh [--debug]` — rsyncs to the `flipdot@flipdot` host, sets `DEBUG`, and restarts `flipdot.service` (systemd). The device runs the loop as a service.
+- **Run locally (dev machine):** `PREVIEW=true python3 flipdot.py`
+- **Run on device:** `sudo systemctl start flipdot.service`; the service auto-restarts on crash (`Restart=always`).
+- **Deploy:** `./deploy.sh [--debug]` — rsyncs to `flipdot@flipdot:/home/flipdot/flipdot` (with `--delete`, but `models/` and `.env` are excluded), sets `DEBUG` in `.env`, then `sudo systemctl restart flipdot.service`.
+  - **Important:** the `models/` directory is excluded from rsync. MediaPipe `.task` model files must be downloaded manually once:
+    ```bash
+    ssh flipdot
+    mkdir -p ~/flipdot/models && cd ~/flipdot/models
+    wget -q https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task
+    wget -q https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
+    ```
 - **No test suite** for the app; only `flipPyDot/test/test.py` covers the vendored driver.
 
 ## Gotchas

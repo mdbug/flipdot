@@ -172,3 +172,6 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# MediaPipe model files (large binaries, downloaded separately on each machine)
+models/
