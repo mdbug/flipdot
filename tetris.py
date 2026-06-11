@@ -377,7 +377,20 @@ class Tetris(AutoDrum):
                 if not board[row, col]:
                     holes += 1
         bumpiness = int(np.abs(np.diff(col_heights)).sum())
-        return complete_lines * 100 - aggregate_height * 0.51 - holes * 8 - bumpiness * 1.5
+        # Wells: columns lower than both neighbours breed unrecoverable states;
+        # penalise quadratically so deep wells are disproportionately bad.
+        wells = 0
+        for col in range(ncols):
+            left  = col_heights[col - 1] if col > 0        else nrows
+            right = col_heights[col + 1] if col < ncols - 1 else nrows
+            depth = min(left, right) - col_heights[col]
+            if depth > 0:
+                wells += depth * (depth + 1) // 2
+        return (complete_lines * 100
+                - aggregate_height * 0.51
+                - holes * 6
+                - bumpiness * 1.8
+                - wells * 1.2)
 
     def _ai_best_placement(self):
         """Return (target_col, target_rot_idx) that maximises board score."""
