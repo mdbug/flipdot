@@ -19,9 +19,10 @@ class Tetris(AutoDrum):
 
     Layout (28×28 panel)
     --------------------
-    * Melody band: columns 0–6 (7 px).  The score (top) and next-piece
-      preview (below it) are XOR'd over the band, so they invert
-      whatever lies beneath and stay readable under note stripes.
+    * Melody band: columns 0–6 (7 px), shown inverted — lit background,
+      note stripes dark.  The score (top) and next-piece preview (below
+      it) are XOR'd over the band, so they invert whatever lies beneath
+      and stay readable under note stripes.
     * Separator : column 7, always lit.
     * Game board: columns 8–27, 10 cells × 2 px wide (20 px), 14 rows tall.
 
@@ -604,10 +605,15 @@ class Tetris(AutoDrum):
         # Separator line between melody band (cols 0–6) and game board
         frame[:, 7] = 1
 
+        # Invert the melody band: lit background, note stripes dark.
+        # XOR with a constant changes polarity only — frame-to-frame
+        # flips (the sound) are completely unaffected.
+        frame[:, :7] ^= 1
+
         # Score (top) and next-piece preview live in a UI layer XOR'd
         # over the melody band: the glyphs and preview cells invert
-        # whatever lies beneath, so they stay readable when a note
-        # stripe passes under them.
+        # whatever lies beneath (dark on the lit background, lit when a
+        # note stripe passes under them), so they always stay readable.
         if not self._player['game_over']:
             ui = np.zeros((self.height, 7), dtype=np.uint8)
             score_str = str(min(self._player['lines'], 99))
