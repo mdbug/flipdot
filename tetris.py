@@ -34,7 +34,16 @@ class Tetris(AutoDrum):
     ----------------
     Flashes the panel, then shows "GAME / OVER" + lines cleared.
     Raise left hand (or wait 10 s) to restart.
+
+    AI attract mode
+    ---------------
+    When no person is detected, an AI takes over after AI_TAKEOVER_DELAY
+    seconds.  The AI evaluates every possible (rotation, column) placement
+    with a classic heuristic and steers the falling piece toward the best
+    one using the same buffered-input path as human gestures.
     """
+
+    AI_TAKEOVER_DELAY = 5.0   # seconds of absence before AI takes over
 
     def __init__(self, width, height, mode_manager):
         # super().__init__ → _load_song(0) → our override → super()._load_song(4)
@@ -47,6 +56,11 @@ class Tetris(AutoDrum):
         self._last_move_time = 0.0      # timestamp of last horizontal step
         self._pending = {'move': 0, 'rotate': False}  # buffered per-step intent
         self._jingle_events = []        # (due_time, note_name) death-jingle queue
+        # AI attract-mode state
+        self._ai_target = None          # (target_col, target_rot_idx) for current piece
+        self._ai_piece_id = None        # id() of piece when _ai_target was computed
+        self._last_person_time = None   # timestamp of last frame with a detected person
+        self._ai_rotate_cooldown = 0.0  # timestamp of last AI-requested rotation
 
     # ------------------------------------------------------------------
     # _load_song override — always loads TETRIS song, then re-pins the
@@ -64,6 +78,10 @@ class Tetris(AutoDrum):
             r0, r1, _, _ = inst['area']
             inst['area'] = (r0, r1, mc0, mc1)
         self._voice_span = (mc0, mc1)
+        # Restrict crash to the melody column band so line-clear hits don't
+        # scatter pixels into the game board area (cols 8–27).
+        r0, r1, _, _ = self.instruments['crash']['area']
+        self.instruments['crash']['area'] = (r0, r1, mc0, mc1)
 
     # ------------------------------------------------------------------
     # _tetris_background override — fixed 10-column player board layout
@@ -102,6 +120,10 @@ class Tetris(AutoDrum):
             'game_over':      False,
             'game_over_time': None,
         }
+        self._ai_target = None
+        self._ai_piece_id = None
+        self._last_person_time = None
+        self._ai_rotate_cooldown = 0.0
         self._player_spawn()
 
     def _player_tet_fits(self, cells, row, col):
@@ -214,6 +236,10 @@ class Tetris(AutoDrum):
         self._drop_armed = True
         self._pending = {'move': 0, 'rotate': False}
         self._jingle_events = []
+        self._ai_target = None
+        self._ai_piece_id = None
+        self._last_person_time = None
+        self._ai_rotate_cooldown = 0.0
         self._player_spawn()
         self._bg_frame = self._render_player_board()
 
@@ -327,6 +353,94 @@ class Tetris(AutoDrum):
         return bg
 
     # ------------------------------------------------------------------
+    # AI attract-mode helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _ai_score_board(board, ncols, nrows):
+        """Heuristic score for a board state — higher is better."""
+        col_heights = np.zeros(ncols, dtype=int)
+        for col in range(ncols):
+            for row in range(nrows):
+                if board[row, col]:
+                    col_heights[col] = nrows - row
+                    break
+        aggregate_height = int(col_heights.sum())
+        complete_lines = int(board.all(axis=1).sum())
+        holes = 0
+        for col in range(ncols):
+            h = col_heights[col]
+            if h == 0:
+                continue
+            top_row = nrows - h
+            for row in range(top_row + 1, nrows):
+                if not board[row, col]:
+                    holes += 1
+        bumpiness = int(np.abs(np.diff(col_heights)).sum())
+        return complete_lines * 100 - aggregate_height * 0.51 - holes * 8 - bumpiness * 1.5
+
+    def _ai_best_placement(self):
+        """Return (target_col, target_rot_idx) that maximises board score."""
+        t = self._tetris
+        p = self._player['piece']
+        board = self._player['board']
+        best_score = None
+        best_col = p['col']
+        best_rot = p['rot_idx']
+        for rot_idx, cells in enumerate(p['all_rots']):
+            piece_max_dc = max(dc for _, dc in cells)
+            for col in range(0, t['ncols'] - piece_max_dc):
+                # Simulate drop from above the board so every column is
+                # evaluated correctly regardless of where the piece currently is.
+                row = -(max(dr for dr, _ in cells) + 1)
+                while self._player_tet_fits(cells, row + 1, col):
+                    row += 1
+                # Skip placements that land entirely above the visible board
+                if row + max(dr for dr, _ in cells) < 0:
+                    continue
+                # Stamp onto a copy and score
+                temp = board.copy()
+                valid = True
+                for dr, dc in cells:
+                    r, cc = row + dr, col + dc
+                    if r < 0:
+                        valid = False
+                        break
+                    temp[r, cc] = True
+                if not valid:
+                    continue
+                score = self._ai_score_board(temp, t['ncols'], t['nrows'])
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_col = col
+                    best_rot = rot_idx
+        return best_col, best_rot
+
+    def _handle_ai(self, now):
+        """Drive the current piece toward the AI's chosen placement."""
+        p = self._player['piece']
+        if p is None:
+            return
+        # Recompute target whenever a new piece spawns
+        if id(p) != self._ai_piece_id:
+            self._ai_target = self._ai_best_placement()
+            self._ai_piece_id = id(p)
+            self._ai_rotate_cooldown = 0.0
+        target_col, target_rot = self._ai_target
+        # Rotate toward target using a dedicated cooldown — independent of
+        # _left_raise_armed so human takeover is never disrupted, and multiple
+        # rotations (e.g. 180°) work correctly.  Wait until the piece has
+        # entered the visible board (row >= 0) so the rotation is observable.
+        if (p['rot_idx'] != target_rot and p['row'] >= 0
+                and now - self._ai_rotate_cooldown >= 0.15):
+            self._pending['rotate'] = True
+            self._ai_rotate_cooldown = now
+        # Steer toward target column in parallel — don't wait for rotation.
+        if p['col'] != target_col and now - self._last_move_time >= 0.15:
+            self._pending['move'] = 1 if target_col > p['col'] else -1
+            self._last_move_time = now
+
+    # ------------------------------------------------------------------
     # Gesture handling
     # ------------------------------------------------------------------
 
@@ -343,6 +457,22 @@ class Tetris(AutoDrum):
             if (self._player['game_over_time'] is not None
                     and now - self._player['game_over_time'] >= 10.0):
                 self._restart_game()
+            return
+
+        # ---- Presence detection: route to AI if no person detected ----
+        person_present = (
+            pose_results is not None
+            and getattr(pose_results, 'pose_landmarks', None) is not None
+        )
+        if person_present:
+            self._last_person_time = now
+        else:
+            delay_expired = (
+                self._last_person_time is None
+                or now - self._last_person_time >= self.AI_TAKEOVER_DELAY
+            )
+            if delay_expired:
+                self._handle_ai(now)
             return
 
         # ---- Rotate: buffer intent, execute on next step ----
