@@ -32,6 +32,8 @@ class AutoDrum:
       pitches are (name, MIDI) highest-first, 'long' lists pitches that
       get a ringing '<name>_long' variant
     * 'image'  – a picture XOR'd under everything (Vader for MARCH)
+    * 'bg'     – name of a method drawing a procedural background
+                 (the Tetris well for TETRIS)
     """
 
     SKIP_HOLD_TIME = 1.0  # seconds to hold left hand raised to skip to next song
@@ -210,6 +212,45 @@ class AutoDrum:
             },
         },
         {
+            'name': 'TETRIS',
+            'bpm': 144,
+            'subdivisions': 2,  # 8th notes; 64 steps = Korobeiniki Theme A
+            'sections': [
+                (0, [
+                    # Bar 1: E5(q) B4(8) C5(8) D5(q) C5(8) B4(8)
+                    {'e5'}, set(), {'b4'}, {'c5'},
+                    {'d5'}, set(), {'c5'}, {'b4'},
+                    # Bar 2: A4(q) A4(8) C5(8) E5(q) D5(8) C5(8)
+                    {'a4'}, set(), {'a4'}, {'c5'},
+                    {'e5'}, set(), {'d5'}, {'c5'},
+                    # Bar 3: B4(q.) C5(8) D5(q) E5(q)
+                    {'b4'}, set(), set(), {'c5'},
+                    {'d5'}, set(), {'e5'}, set(),
+                    # Bar 4: C5(q) A4(q) A4(HALF — rings out)
+                    {'c5'}, set(), {'a4'}, set(),
+                    {'a4_long'}, set(), set(), set(),
+                    # Bar 5: D5(q.) F5(8) A5(q) G5(8) F5(8) — the high turn
+                    {'d5'}, set(), set(), {'f5'},
+                    {'a5'}, set(), {'g5'}, {'f5'},
+                    # Bar 6: E5(q.) C5(8) E5(q) D5(8) C5(8)
+                    {'e5'}, set(), set(), {'c5'},
+                    {'e5'}, set(), {'d5'}, {'c5'},
+                    # Bar 7: B4(q) B4(8) C5(8) D5(q) E5(q)
+                    {'b4'}, set(), {'b4'}, {'c5'},
+                    {'d5'}, set(), {'e5'}, set(),
+                    # Bar 8: C5(q) A4(q) A4(HALF) — home
+                    {'c5'}, set(), {'a4'}, set(),
+                    {'a4_long'}, set(), set(), set(),
+                ]),
+            ],
+            'bg': '_tetris_background',
+            'melody': {
+                'pitches': (('a5', 81), ('g5', 79), ('f5', 77), ('e5', 76),
+                            ('d5', 74), ('c5', 72), ('b4', 71), ('a4', 69)),
+                'long': ('a4',),
+            },
+        },
+        {
             'name': 'STORM',
             'bpm': 136,
             'subdivisions': 4,  # 16th notes; every section all repeats>0,
@@ -325,11 +366,14 @@ class AutoDrum:
         self._voice_area = None   # area of the currently sounding note
         song = self.SONGS[self.song_index]
         h, w = self.height, self.width
-        # Background image, XOR'd under everything at render time
+        # Background, XOR'd under everything at render time: either an
+        # image file ('image') or a procedural drawing method ('bg')
         if 'image' in song:
             img = Image.open(song['image']).convert('L').resize(
                 (self.width, self.height), Image.NEAREST)
             self._bg_frame = (np.asarray(img) < 128).astype(np.uint8)
+        elif 'bg' in song:
+            self._bg_frame = getattr(self, song['bg'])()
         else:
             self._bg_frame = None
         # Drop the previous song's melody instruments, restore drum defaults
@@ -361,6 +405,44 @@ class AutoDrum:
                     'area': self.instruments[name]['area'], 'density': 1.0,
                     'voice': True, 'decay': list(self.MELODY_LONG_DECAY)}
                 self._melody_names.append(name + '_long')
+
+    def _tetris_background(self):
+        """Procedural 1-bit Tetris well: settled stack + falling T-piece.
+
+        Blocks are (c-1)×(c-1) filled squares on a c-grid, so a 1-dot
+        gap separates them and they read as tetromino cells.  One
+        column is left empty — the classic well waiting for an I-piece.
+        The bottom panel row is kept clear for the step cursor.
+        """
+        h, w = self.height, self.width
+        bg = np.zeros((h, w), dtype=np.uint8)
+        # Cell size incl. 1-dot gap; never below 3 so blocks are at
+        # least 2×2 dots and actually read as tetromino cells.
+        c = max(3, min(h, w) // 8)
+        ncols = w // c
+
+        def block(row_up, col):
+            """Draw one cell; row_up counts upward from the floor."""
+            r1 = (h - 1) - row_up * c          # floor = panel row h-2
+            r0, c0 = max(r1 - (c - 1), 0), col * c
+            bg[r0:r1, c0:c0 + c - 1] = 1
+
+        # Settled stack: deterministic jagged skyline, one empty well
+        skyline = [2, 3, 1, 3, 3, 2, 1, 2]
+        heights = [skyline[i % len(skyline)] for i in range(ncols)]
+        heights[max(0, ncols - 2)] = 0     # the empty I-piece well
+        for col, stack_h in enumerate(heights):
+            for row_up in range(stack_h):
+                block(row_up, col)
+
+        # Falling T-piece near the top, left of centre
+        top, mid = 1, max(1, ncols // 2 - 2)
+        for col in (mid, mid + 1, mid + 2):
+            r0, c0 = top * c, col * c
+            bg[r0:r0 + c - 1, c0:c0 + c - 1] = 1
+        r0, c0 = (top + 1) * c, (mid + 1) * c
+        bg[r0:r0 + c - 1, c0:c0 + c - 1] = 1
+        return bg
 
     def _scatter_flip(self, name, density):
         """XOR a random subset of the instrument's area; density 1.0 = solid."""
@@ -503,5 +585,4 @@ class AutoDrum:
             progress = min(int((now - self._skip_hold_start) / self.SKIP_HOLD_TIME * self.width), self.width)
             frame[0, :progress] ^= 1
 
-        frame = human_pose.draw_right_index_pointer(frame, pose_results, size=2)
         return frame
