@@ -113,6 +113,9 @@ while True:
             else:
                 mode_manager.reset_menu_click()
 
+        if current_mode == ModeManager.MODE_PAINT and mode_manager.mode != ModeManager.MODE_PAINT:
+            paint.clear()
+
     if mode_manager.mode == ModeManager.MODE_SLEEP:
         dots[:,:] = img_sleep
     elif mode_manager.mode == ModeManager.MODE_POSE:

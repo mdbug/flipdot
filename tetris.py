@@ -19,8 +19,9 @@ class Tetris(AutoDrum):
 
     Layout (28×28 panel)
     --------------------
-    * Melody band: columns 0–6 (7 px), inverted — pitch stripes appear dark
-      on a lit background.
+    * Melody band: columns 0–6 (7 px).  The score (top) and next-piece
+      preview (below it) are XOR'd over the band, so they invert
+      whatever lies beneath and stay readable under note stripes.
     * Separator : column 7, always lit.
     * Game board: columns 8–27, 10 cells × 2 px wide (20 px), 14 rows tall.
 
@@ -32,35 +33,38 @@ class Tetris(AutoDrum):
 
     Game-over screen
     ----------------
-    Flashes the panel, then shows "GAME / OVER" + lines cleared.
-    Raise left hand (or wait 10 s) to restart.
+    Death jingle, panel flash, then "GAME / OVER" + lines + high score.
+    Raise left hand (or wait 10 s) to restart; every new game also
+    restarts the song from the top of the theme.
 
     AI attract mode
     ---------------
     When no person is detected, an AI takes over after AI_TAKEOVER_DELAY
-    seconds.  The AI evaluates every possible (rotation, column) placement
-    with a classic heuristic and steers the falling piece toward the best
-    one using the same buffered-input path as human gestures.
+    seconds.  The AI evaluates every (rotation, column) placement of the
+    current piece AND of the known next piece (one-ply lookahead via the
+    preview) with a classic heuristic, then steers the falling piece
+    using the same buffered-input path as human gestures.  The tempo
+    ramp doubles as a natural kill screen: as lines accumulate, the
+    music — and therefore beat-locked gravity — eventually outruns the
+    AI's fixed input cadence, so even the attract mode dies in the end.
     """
 
     AI_TAKEOVER_DELAY = 5.0   # seconds of absence before AI takes over
 
     def __init__(self, width, height, mode_manager):
-        # super().__init__ → _load_song(0) → our override → super()._load_song(4)
+        # These must exist before super().__init__: the init chain
+        # (_load_song → _tetris_background → … → _player_spawn) can in
+        # principle reach _trigger_game_over, which uses them.
+        self._best = 0                  # high score — survives restarts
+        self._jingle_events = []        # (due_time, note_name) death-jingle queue
+        # super().__init__ → _load_song(0) → our override → super()._load_song(idx)
         # which calls _tetris_background() → _init_player_state() → _player_spawn().
         # All game state is ready by the time super() returns.
         super().__init__(width, height, mode_manager)
         # Gesture edge-detection state (set after super so init chain is clean)
-        self._left_raise_armed = True   # True  = ready to trigger on next raise
-        self._drop_armed = True         # True  = ready to trigger on next low-Y
+        self._left_raise_armed = True   # True = ready to trigger on next raise
         self._last_move_time = 0.0      # timestamp of last horizontal step
         self._pending = {'move': 0, 'rotate': False}  # buffered per-step intent
-        self._jingle_events = []        # (due_time, note_name) death-jingle queue
-        # AI attract-mode state
-        self._ai_target = None          # (target_col, target_rot_idx) for current piece
-        self._ai_piece_id = None        # id() of piece when _ai_target was computed
-        self._last_person_time = None   # timestamp of last frame with a detected person
-        self._ai_rotate_cooldown = 0.0  # timestamp of last AI-requested rotation
 
     # ------------------------------------------------------------------
     # _load_song override — always loads TETRIS song, then re-pins the
@@ -114,17 +118,19 @@ class Tetris(AutoDrum):
         self._player = {
             'board':          np.zeros((t['nrows'], t['ncols']), dtype=bool),
             'piece':          None,
+            'piece_seq':      0,     # monotonic spawn counter (AI retarget key)
+            'next_rots':      None,  # rotations of the upcoming piece (preview)
             'flash':          [],
             'flash_ticks':    0,
             'lines':          0,
             'game_over':      False,
             'game_over_time': None,
         }
-        self._ai_target = None
-        self._ai_piece_id = None
-        self._last_person_time = None
-        self._ai_rotate_cooldown = 0.0
-        self._player_spawn()
+        self._ai_target = None          # (target_col, target_rot_idx)
+        self._ai_piece_id = None        # piece_seq when _ai_target was computed
+        self._last_person_time = None   # timestamp of last detected person
+        self._ai_rotate_cooldown = 0.0  # timestamp of last AI-requested rotation
+        self._player_spawn(time.time())
 
     def _player_tet_fits(self, cells, row, col):
         """Collision test against the player's board (not the AI board)."""
@@ -138,37 +144,48 @@ class Tetris(AutoDrum):
                 return False
         return True
 
-    def _trigger_game_over(self):
+    def _trigger_game_over(self, now):
         """Set game-over state and schedule the descending death jingle."""
-        now = time.time()
         self._player['game_over'] = True
         self._player['game_over_time'] = now
+        self._best = max(self._best, self._player['lines'])
         notes = ['a5', 'g5', 'f5', 'e5', 'd5', 'c5', 'b4', 'a4']
         self._jingle_events = [
             (now + i * 0.08, note) for i, note in enumerate(notes)
         ]
 
-    def _player_spawn(self):
-        """Spawn a random tetromino centred at the top."""
+    def _player_spawn(self, now):
+        """Promote the previewed piece to falling; draw a new next piece."""
         t = self._tetris
         shapes = list(self.TETROMINOES.values())
+        if self._player['next_rots'] is None:   # very first spawn of a game
+            shape = shapes[int(self.rng.integers(len(shapes)))]
+            self._player['next_rots'] = self._rotations(shape)
+        all_rots = self._player['next_rots']
+        # Draw the upcoming piece now: it feeds both the preview render
+        # and the AI's one-ply lookahead.
         shape = shapes[int(self.rng.integers(len(shapes)))]
-        all_rots = self._rotations(shape)
+        self._player['next_rots'] = self._rotations(shape)
+
         cells = all_rots[0]
         piece_width = max(dc for _, dc in cells) + 1
         col = (t['ncols'] - piece_width) // 2
         row = -(max(dr for dr, _ in cells) + 1)
+        self._player['piece_seq'] += 1
         piece = {
             'cells':    cells,
             'row':      row,
             'col':      col,
             'all_rots': all_rots,
             'rot_idx':  0,
+            'seq':      self._player['piece_seq'],
         }
         self._player['piece'] = piece
+        # A fresh piece must not inherit input buffered for the old one.
+        self._pending = {'move': 0, 'rotate': False}
         # Game over when spawn position is already blocked
         if not self._player_tet_fits(cells, row, col):
-            self._trigger_game_over()
+            self._trigger_game_over(now)
             self._player['piece'] = None
 
     def _player_rotate(self):
@@ -188,7 +205,7 @@ class Tetris(AutoDrum):
                 self._bg_frame = self._render_player_board()
                 return
 
-    def _player_lock(self):
+    def _player_lock(self, now):
         """Stamp the current piece into the board, detect full rows."""
         t = self._tetris
         p = self._player['piece']
@@ -203,51 +220,41 @@ class Tetris(AutoDrum):
                 self._player['board'][r, cc] = True
         self._player['piece'] = None
         if game_over:
-            self._trigger_game_over()
+            self._trigger_game_over(now)
             return
         full = list(np.flatnonzero(self._player['board'].all(axis=1)))
         if full:
             self._player['flash'] = full
             self._player['flash_ticks'] = 0
         else:
-            self._player_spawn()
+            self._player_spawn(now)
 
     def _player_hard_drop(self):
-        """Drop the piece to the lowest valid row and lock it."""
+        """Drop the piece to the lowest valid row and lock it. (Unused —
+        kept in case a safe gesture for it is found later.)"""
         p = self._player['piece']
         if p is None:
             return
         while self._player_tet_fits(p['cells'], p['row'] + 1, p['col']):
             p['row'] += 1
-        self._player_lock()
+        self._player_lock(time.time())
         self._bg_frame = self._render_player_board()
 
     def _restart_game(self):
-        """Reset board to empty state and spawn the first piece."""
-        t = self._tetris
-        self._player['board'][:] = False
-        self._player['piece'] = None
-        self._player['flash'] = []
-        self._player['flash_ticks'] = 0
-        self._player['lines'] = 0
-        self._player['game_over'] = False
-        self._player['game_over_time'] = None
-        self._left_raise_armed = False
-        self._drop_armed = True
-        self._pending = {'move': 0, 'rotate': False}
+        """Start a fresh game AND the song from the top of the theme."""
         self._jingle_events = []
-        self._ai_target = None
-        self._ai_piece_id = None
-        self._last_person_time = None
-        self._ai_rotate_cooldown = 0.0
-        self._player_spawn()
-        self._bg_frame = self._render_player_board()
+        self._left_raise_armed = False
+        self._pending = {'move': 0, 'rotate': False}
+        # _load_song resets the sequencer to bar 1, silences the melody
+        # column, and — via the 'bg' hook — rebuilds the board
+        # (_init_player_state + first spawn).  self._best survives.
+        self._load_song(0)
 
     # ------------------------------------------------------------------
-    # _tetris_step override — gravity / line-clear on each beat
+    # _tetris_step override — buffered input each step, gravity on beats
     # ------------------------------------------------------------------
 
-    def _tetris_step(self):
+    def _tetris_step(self, now):
         """Called on every sequencer step; execute buffered input, then gravity on beats."""
         t = self._tetris
         song = self.SONGS[self.song_index]
@@ -298,16 +305,16 @@ class Tetris(AutoDrum):
                 # Extra crash hit for multi-line clears; the flip-dot splash
                 # plus shimmer tail scales naturally with line count.
                 if n_cleared >= 2:
-                    self._hit('crash', time.time())
-                self._player_spawn()
+                    self._hit('crash', now)
+                self._player_spawn(now)
         elif self._player['piece'] is not None:
             p = self._player['piece']
             if self._player_tet_fits(p['cells'], p['row'] + 1, p['col']):
                 p['row'] += 1
             else:
-                self._player_lock()
+                self._player_lock(now)
         else:
-            self._player_spawn()
+            self._player_spawn(now)
 
         self._bg_frame = self._render_player_board()
 
@@ -358,7 +365,11 @@ class Tetris(AutoDrum):
 
     @staticmethod
     def _ai_score_board(board, ncols, nrows):
-        """Heuristic score for a board state — higher is better."""
+        """Heuristic score for a (post-clear) board — higher is better.
+
+        Line clears are rewarded separately by the caller, so this only
+        judges the shape of what remains.
+        """
         col_heights = np.zeros(ncols, dtype=int)
         for col in range(ncols):
             for row in range(nrows):
@@ -366,13 +377,12 @@ class Tetris(AutoDrum):
                     col_heights[col] = nrows - row
                     break
         aggregate_height = int(col_heights.sum())
-        complete_lines = int(board.all(axis=1).sum())
         holes = 0
         for col in range(ncols):
-            h = col_heights[col]
-            if h == 0:
+            ch = col_heights[col]
+            if ch == 0:
                 continue
-            top_row = nrows - h
+            top_row = nrows - ch
             for row in range(top_row + 1, nrows):
                 if not board[row, col]:
                     holes += 1
@@ -381,63 +391,108 @@ class Tetris(AutoDrum):
         # penalise quadratically so deep wells are disproportionately bad.
         wells = 0
         for col in range(ncols):
-            left  = col_heights[col - 1] if col > 0        else nrows
+            left = col_heights[col - 1] if col > 0 else nrows
             right = col_heights[col + 1] if col < ncols - 1 else nrows
             depth = min(left, right) - col_heights[col]
             if depth > 0:
                 wells += depth * (depth + 1) // 2
-        return (complete_lines * 100
-                - aggregate_height * 0.51
+        return (- aggregate_height * 0.51
                 - holes * 6
                 - bumpiness * 1.8
                 - wells * 1.2)
 
+    def _ai_drop_board(self, board, cells, col):
+        """Simulate dropping cells at col onto board.
+
+        Returns (board_after_line_clears, lines_cleared), or None if the
+        placement is impossible or would lock above the playfield.
+        """
+        t = self._tetris
+
+        def fits(r):
+            for dr, dc in cells:
+                rr, cc = r + dr, col + dc
+                if cc < 0 or cc >= t['ncols'] or rr >= t['nrows']:
+                    return False
+                if rr >= 0 and board[rr, cc]:
+                    return False
+            return True
+
+        row = -(max(dr for dr, _ in cells) + 1)
+        if not fits(row):
+            return None
+        while fits(row + 1):
+            row += 1
+        if row + min(dr for dr, _ in cells) < 0:
+            return None   # would lock sticking out of the top
+        nb = board.copy()
+        for dr, dc in cells:
+            nb[row + dr, col + dc] = True
+        full = nb.all(axis=1)
+        cleared = int(full.sum())
+        if cleared:
+            nb = np.vstack([np.zeros((cleared, t['ncols']), dtype=bool),
+                            nb[~full]])
+        return nb, cleared
+
     def _ai_best_placement(self):
-        """Return (target_col, target_rot_idx) that maximises board score."""
+        """(target_col, target_rot_idx) maximising score with lookahead.
+
+        For every placement of the current piece, the resulting board is
+        re-evaluated against every placement of the KNOWN next piece (the
+        one shown in the preview), and the best combined outcome wins —
+        depth-2 search, exact because the next piece is not random to us.
+        Runs once per spawn; on a 10×14 board this is ~1.5k leaf
+        evaluations, a few ms of work.
+        """
         t = self._tetris
         p = self._player['piece']
         board = self._player['board']
-        best_score = None
-        best_col = p['col']
-        best_rot = p['rot_idx']
+        next_rots = self._player['next_rots']
+        best = None
         for rot_idx, cells in enumerate(p['all_rots']):
             piece_max_dc = max(dc for _, dc in cells)
             for col in range(0, t['ncols'] - piece_max_dc):
-                # Simulate drop from above the board so every column is
-                # evaluated correctly regardless of where the piece currently is.
-                row = -(max(dr for dr, _ in cells) + 1)
-                while self._player_tet_fits(cells, row + 1, col):
-                    row += 1
-                # Skip placements that land entirely above the visible board
-                if row + max(dr for dr, _ in cells) < 0:
+                res = self._ai_drop_board(board, cells, col)
+                if res is None:
                     continue
-                # Stamp onto a copy and score
-                temp = board.copy()
-                valid = True
-                for dr, dc in cells:
-                    r, cc = row + dr, col + dc
-                    if r < 0:
-                        valid = False
-                        break
-                    temp[r, cc] = True
-                if not valid:
-                    continue
-                score = self._ai_score_board(temp, t['ncols'], t['nrows'])
-                if best_score is None or score > best_score:
-                    best_score = score
-                    best_col = col
-                    best_rot = rot_idx
-        return best_col, best_rot
+                b1, c1 = res
+                # Lookahead: best response with the previewed next piece
+                best_next = None
+                for ncells in next_rots:
+                    n_max_dc = max(dc for _, dc in ncells)
+                    for ncol in range(0, t['ncols'] - n_max_dc):
+                        res2 = self._ai_drop_board(b1, ncells, ncol)
+                        if res2 is None:
+                            continue
+                        b2, c2 = res2
+                        s2 = c2 * 100 + self._ai_score_board(
+                            b2, t['ncols'], t['nrows'])
+                        if best_next is None or s2 > best_next:
+                            best_next = s2
+                if best_next is None:
+                    # Next piece would have nowhere to go: near-certain death
+                    score = c1 * 100 + self._ai_score_board(
+                        b1, t['ncols'], t['nrows']) - 1000
+                else:
+                    score = c1 * 100 + best_next
+                if best is None or score > best[0]:
+                    best = (score, col, rot_idx)
+        if best is None:
+            return p['col'], p['rot_idx']
+        return best[1], best[2]
 
     def _handle_ai(self, now):
         """Drive the current piece toward the AI's chosen placement."""
         p = self._player['piece']
         if p is None:
             return
-        # Recompute target whenever a new piece spawns
-        if id(p) != self._ai_piece_id:
+        # Recompute target whenever a new piece spawns.  Keyed on the
+        # monotonic spawn counter — NOT id(p), which CPython can reuse
+        # for a new dict allocated at a freed dict's address.
+        if p['seq'] != self._ai_piece_id:
             self._ai_target = self._ai_best_placement()
-            self._ai_piece_id = id(p)
+            self._ai_piece_id = p['seq']
             self._ai_rotate_cooldown = 0.0
         target_col, target_rot = self._ai_target
         # Rotate toward target using a dedicated cooldown — independent of
@@ -463,7 +518,6 @@ class Tetris(AutoDrum):
             left_raised = human_pose.is_left_hand_raised(pose_results)
             if left_raised and self._left_raise_armed:
                 self._restart_game()
-                self._left_raise_armed = False
             elif not left_raised:
                 self._left_raise_armed = True
             # Auto-restart after 10 s
@@ -511,16 +565,16 @@ class Tetris(AutoDrum):
                 self._pending['move'] = 1 if target_col > p['col'] else -1
                 self._last_move_time = now
 
-        # ---- Hard drop removed (too easy to trigger accidentally) ----
-
     def get_frame(self, pose_results):
         now = time.time()
         song = self.SONGS[self.song_index]
         step_interval = 60.0 / song['bpm'] / song['subdivisions']
+        # Tempo ramp: every 5 lines the song — and beat-locked gravity —
+        # speeds up.  Deliberately uncapped: at extreme line counts the
+        # beat outruns the AI's fixed 0.15 s input cadence, giving the
+        # attract mode an emergent kill screen.
         step_interval /= (1 + 0.08 * (self._player['lines'] // 5))
 
-        # Handle player gestures before advancing the sequencer so that
-        # a hard-drop locks the piece into _bg_frame before it renders.
         self._handle_gestures(pose_results, now)
 
         if self._player['game_over']:
@@ -547,20 +601,24 @@ class Tetris(AutoDrum):
         if self._bg_frame is not None:
             frame ^= self._bg_frame
 
-        # Separator line between melody (cols 0–7) and game board (cols 8–27)
+        # Separator line between melody band (cols 0–6) and game board
         frame[:, 7] = 1
 
-        # Invert the melody column so it reads as light-on-dark
-        frame[:, :7] ^= 1
-
-        # Live score at the top of the melody column, XOR'd with melody.
+        # Score (top) and next-piece preview live in a UI layer XOR'd
+        # over the melody band: the glyphs and preview cells invert
+        # whatever lies beneath, so they stay readable when a note
+        # stripe passes under them.
         if not self._player['game_over']:
+            ui = np.zeros((self.height, 7), dtype=np.uint8)
             score_str = str(min(self._player['lines'], 99))
             score_w = len(score_str) * 4 - 1
-            score_x = max(0, (7 - score_w) // 2)
-            score_layer = np.ones((self.height, 7), dtype=np.uint8)
-            text.write(score_layer, score_str, x=score_x, y=1, size=5, color=0)
-            frame[:, :7] ^= score_layer
+            text.write(ui, score_str, x=max(0, (7 - score_w) // 2), y=1, size=5)
+            nxt = self._player['next_rots'][0]
+            pw = max(dc for _, dc in nxt) + 1
+            px = max(0, (7 - pw) // 2)
+            for dr, dc in nxt:           # 1 px per cell, under the score
+                ui[9 + dr, px + dc] = 1
+            frame[:, :7] ^= ui
 
         # Game-over overlay: jingle first, then flash, then static screen
         if self._player['game_over'] and self._player['game_over_time'] is not None:
@@ -572,7 +630,7 @@ class Tetris(AutoDrum):
                 if int((elapsed - 0.7) / 0.1) % 2:
                     frame ^= 1
             else:
-                # Full-screen static display: "GAME" / "OVER" + large score
+                # Full-screen static display: "GAME / OVER", lines, high score
                 frame[:, :] = 0
                 # Each word = 4 chars × (3 px + 1 px spacing) − 1 trailing = 15 px
                 word_x = (self.width - 15) // 2
@@ -582,6 +640,10 @@ class Tetris(AutoDrum):
                 # size-6 digits: 5 px wide + 1 px spacing per char, minus trailing
                 score_width = len(score_str) * 6 - 1
                 score_x = max(0, (self.width - score_width) // 2)
-                text.write(frame, score_str, x=score_x, y=19, size=6)
+                text.write(frame, score_str, x=score_x, y=16, size=6)
+                hi_str = 'HI ' + str(self._best)
+                hi_w = len(hi_str) * 4 - 1
+                text.write(frame, hi_str,
+                           x=max(0, (self.width - hi_w) // 2), y=23, size=5)
 
         return frame

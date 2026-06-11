@@ -14,6 +14,12 @@ class Paint:
         self.last_pointer_duration = 0
         self.drawing = False
 
+    def clear(self):
+        self.canvas[:, :] = 0
+        self.drawing = False
+        self.last_pointer_position = None
+        self.last_pointer_duration = 0
+
     def get_frame(self, pose_results):
         finger_x, finger_y = human_pose.get_right_index_finger_position(pose_results)
         if finger_x is not None and finger_y is not None:

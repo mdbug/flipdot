@@ -549,7 +549,7 @@ class AutoDrum:
                       'row': -(max(dr for dr, _ in cells) + 1),
                       'col': (t['ncols'] - width) // 2, 'tcol': col}
 
-    def _tetris_step(self):
+    def _tetris_step(self, now):
         """Advance the demo one sequencer step (acts only on beats)."""
         t = self._tetris
         t['ticks'] += 1
@@ -712,7 +712,7 @@ class AutoDrum:
             # Advance any animated background in the SAME frame as the
             # step, so its dot flips land exactly on the musical grid.
             if 'bg_step' in song:
-                getattr(self, song['bg_step'])()
+                getattr(self, song['bg_step'])(now)
 
             # Completed one full pass through the pattern?
             if prev == len(pattern) - 1:
@@ -753,6 +753,18 @@ class AutoDrum:
         # like a pitch indicator jumping around the silhouette.
         if self._bg_frame is not None:
             frame ^= self._bg_frame
+
+        # Step cursor along the bottom row
+        _, pattern = self._section()
+        if self.step >= 0:
+            frame[-1, :] = 0
+            n = len(pattern)
+            if n <= self.width:
+                seg = self.width // n
+                frame[-1, self.step * seg:min((self.step + 1) * seg, self.width)] = 1
+            else:
+                # Pattern longer than display width: single-pixel position indicator
+                frame[-1, self.step * self.width // n] = 1
 
         # Song name overlay for first 2 s after a load
         if now - self.song_start_time < 2.0:
