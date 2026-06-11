@@ -267,6 +267,11 @@ class AutoDrum:
                 'pitches': (('a5', 81), ('g5', 79), ('f5', 77), ('e5', 76),
                             ('d5', 74), ('c5', 72), ('b4', 71), ('a4', 69)),
                 'long': ('a4',),
+                # Split screen: melody bounces on the left 40%, the
+                # demo owns the right 60%.  Thicker stripes win back
+                # the dots (≈ loudness) lost to the narrower band.
+                'cols': (0.0, 0.4),
+                'thickness': 4,
             },
         },
         {
@@ -405,21 +410,28 @@ class AutoDrum:
             self.instruments[name]['density'] = d
             self.instruments[name]['decay'] = list(self._default_decays[name])
         # Build monophonic voice stripes for songs with a melody:
-        # full-width stripe per pitch, placed proportionally to its MIDI
-        # number (top = highest), so leaps look like leaps and chromatic
-        # runs wiggle in place.
+        # stripe per pitch, placed proportionally to its MIDI number
+        # (top = highest), so leaps look like leaps and chromatic runs
+        # wiggle in place.  'cols' confines the melody to a column band
+        # (fractions of panel width) so e.g. a demo can own the rest;
+        # 'thickness' can rebalance loudness for narrow bands.
+        self._voice_span = (0, w)
         if 'melody' in song:
-            pitches = song['melody']['pitches']
+            m = song['melody']
+            f0, f1 = m.get('cols', (0.0, 1.0))
+            mc0, mc1 = int(w * f0), int(w * f1)
+            self._voice_span = (mc0, mc1)
+            pitches = m['pitches']
             hi, lo = pitches[0][1], pitches[-1][1]
-            thickness = max(2, (h - 1) // (hi - lo))
+            thickness = m.get('thickness', max(2, (h - 1) // (hi - lo)))
             for name, midi in pitches:
                 r0 = round((hi - midi) / (hi - lo) * (h - 1 - thickness))
                 self.instruments[name] = {
-                    'area': (r0, r0 + thickness, 0, w), 'density': 1.0,
+                    'area': (r0, r0 + thickness, mc0, mc1), 'density': 1.0,
                     'voice': True, 'decay': []}
                 self._melody_names.append(name)
             # Held notes ring out with the shimmering tail.
-            for name in song['melody'].get('long', ()):
+            for name in m.get('long', ()):
                 self.instruments[name + '_long'] = {
                     'area': self.instruments[name]['area'], 'density': 1.0,
                     'voice': True, 'decay': list(self.MELODY_LONG_DECAY)}
@@ -434,10 +446,23 @@ class AutoDrum:
         always on the grid, never between beats.
         """
         h, w = self.height, self.width
-        c = max(2, min(h, w) // 8)  # cell size (solid, no gaps)
-        ncols, nrows = w // c, (h - 1) // c
+        # Take whichever column band the melody does NOT occupy; if the
+        # melody is full-width, overlay over the whole panel as before.
+        song = self.SONGS[self.song_index]
+        f0, f1 = song.get('melody', {}).get('cols', (0.0, 1.0))
+        x0, x1 = max(((0.0, f0), (f1, 1.0)), key=lambda b: b[1] - b[0])
+        x0, x1 = int(w * x0), int(w * x1)
+        if x1 - x0 < 4:
+            x0, x1 = 0, w
+        avail = x1 - x0
+        c = max(2, min(h - 1, avail) // 8)  # cell size (solid, no gaps)
+        ncols, nrows = avail // c, (h - 1) // c
+        # Park leftover band pixels on the side facing the melody, so
+        # they read as a divider gap rather than a dead edge column.
+        if x0 > 0:
+            x0 += avail - ncols * c
         self._tetris = {
-            'c': c, 'ncols': ncols, 'nrows': nrows,
+            'c': c, 'ncols': ncols, 'nrows': nrows, 'x0': x0,
             'board': np.zeros((nrows, ncols), dtype=bool),
             'piece': None, 'flash': [], 'flash_ticks': 0, 'ticks': -1,
         }
@@ -572,11 +597,12 @@ class AutoDrum:
         t = self._tetris
         c, h, w = t['c'], self.height, self.width
         top = (h - 1) - t['nrows'] * c
+        x0 = t['x0']
         bg = np.zeros((h, w), dtype=np.uint8)
 
         def block(r, cc):
             if r >= 0:
-                r0, c0 = top + r * c, cc * c
+                r0, c0 = top + r * c, x0 + cc * c
                 bg[r0:r0 + c, c0:c0 + c] = 1
 
         flash = set(t['flash'])
@@ -588,8 +614,9 @@ class AutoDrum:
             for dr, dc in p['cells']:
                 block(p['row'] + dr, p['col'] + dc)
         if flash and t['flash_ticks'] % 2 == 0:
-            for r in flash:            # full-width solid flash
-                bg[top + r * c:top + (r + 1) * c, :] = 1
+            for r in flash:            # solid flash across the board
+                bg[top + r * c:top + (r + 1) * c,
+                   x0:x0 + t['ncols'] * c] = 1
         return bg
 
     def _scatter_flip(self, name, density):
@@ -627,9 +654,14 @@ class AutoDrum:
         # outside the new stripe (wiped below) or get absorbed by it.
         self._voice_decay = []
         self._voice_shimmer = None
+        # Wipe leftovers only within the melody's own column band, so a
+        # split-screen neighbour (e.g. the Tetris demo) is never touched.
+        mc0, mc1 = self._voice_span
         region = np.zeros_like(self.state, dtype=bool)
         region[r0:r1, c0:c1] = True
-        self.state[~region] = 0          # cleanup, hidden inside the attack
+        band = np.zeros_like(self.state, dtype=bool)
+        band[:, mc0:mc1] = True
+        self.state[band & ~region] = 0   # cleanup, hidden inside the attack
         self.state[r0:r1, c0:c1] ^= 1    # the attack clack
         self._voice_area = (r0, r1, c0, c1)
         if inst['decay']:
