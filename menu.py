@@ -117,6 +117,10 @@ class Menu:
                 Button("BEATS", 2, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_AUTODRUM)),
                 Button("MORE", 3, width, on_click=self.next_page),
             ],
+            [
+                Button("TETR", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_TETRIS)),
+                Button("MORE", 3, width, on_click=self.next_page),
+            ],
         ]
 
     @property

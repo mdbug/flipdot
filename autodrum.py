@@ -748,18 +748,6 @@ class AutoDrum:
         if self._bg_frame is not None:
             frame ^= self._bg_frame
 
-        # Step cursor along the bottom row
-        _, pattern = self._section()
-        if self.step >= 0:
-            frame[-1, :] = 0
-            n = len(pattern)
-            if n <= self.width:
-                seg = self.width // n
-                frame[-1, self.step * seg:min((self.step + 1) * seg, self.width)] = 1
-            else:
-                # Pattern longer than display width: single-pixel position indicator
-                frame[-1, self.step * self.width // n] = 1
-
         # Song name overlay for first 2 s after a load
         if now - self.song_start_time < 2.0:
             frame[:6, :] = 0
@@ -770,5 +758,4 @@ class AutoDrum:
             progress = min(int((now - self._skip_hold_start) / self.SKIP_HOLD_TIME * self.width), self.width)
             frame[0, :progress] ^= 1
 
-        frame = human_pose.draw_right_index_pointer(frame, pose_results, size=2)
         return frame
