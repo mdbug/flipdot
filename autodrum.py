@@ -32,8 +32,14 @@ class AutoDrum:
       pitches are (name, MIDI) highest-first, 'long' lists pitches that
       get a ringing '<name>_long' variant
     * 'image'  – a picture XOR'd under everything (Vader for MARCH)
-    * 'bg'     – name of a method drawing a procedural background
-                 (the Tetris well for TETRIS)
+    * 'bg'     – name of a method drawing/initialising a procedural
+                 background (the Tetris demo for TETRIS)
+    * 'bg_step'– name of a method advancing an animated background once
+                 per sequencer step.  Background changes flip dots and
+                 therefore CLICK, so animations must move on the
+                 musical grid — the Tetris demo drops one cell per
+                 beat (a metronome tick) and line clears collapse in a
+                 single frame (a crash), always in time.
     """
 
     SKIP_HOLD_TIME = 1.0  # seconds to hold left hand raised to skip to next song
@@ -49,6 +55,18 @@ class AutoDrum:
     # previous tick's scatter in the same frame it adds a smaller one).
     MELODY_LONG_DECAY = [0.15, 0.12, 0.10, 0.09, 0.08, 0.07,
                          0.06, 0.05, 0.05, 0.04, 0.04, 0.03]
+
+    # The seven tetrominoes as (row, col) cell offsets; rotations are
+    # generated at spawn time (see _rotations).
+    TETROMINOES = {
+        'I': ((0, 0), (0, 1), (0, 2), (0, 3)),
+        'O': ((0, 0), (0, 1), (1, 0), (1, 1)),
+        'T': ((0, 0), (0, 1), (0, 2), (1, 1)),
+        'S': ((0, 1), (0, 2), (1, 0), (1, 1)),
+        'Z': ((0, 0), (0, 1), (1, 1), (1, 2)),
+        'J': ((0, 0), (1, 0), (1, 1), (1, 2)),
+        'L': ((0, 2), (1, 0), (1, 1), (1, 2)),
+    }
 
     SONGS = [
         {
@@ -244,6 +262,7 @@ class AutoDrum:
                 ]),
             ],
             'bg': '_tetris_background',
+            'bg_step': '_tetris_step',
             'melody': {
                 'pitches': (('a5', 81), ('g5', 79), ('f5', 77), ('e5', 76),
                             ('d5', 74), ('c5', 72), ('b4', 71), ('a4', 69)),
@@ -407,41 +426,170 @@ class AutoDrum:
                 self._melody_names.append(name + '_long')
 
     def _tetris_background(self):
-        """Procedural 1-bit Tetris well: settled stack + falling T-piece.
+        """Start the auto-playing Tetris demo; returns its first frame.
 
-        Blocks are (c-1)×(c-1) filled squares on a c-grid, so a 1-dot
-        gap separates them and they read as tetromino cells.  One
-        column is left empty — the classic well waiting for an I-piece.
-        The bottom panel row is kept clear for the step cursor.
+        The demo advances one move per BEAT (see _tetris_step), so its
+        dot flips are themselves musical: the falling piece ticks like
+        a quiet metronome under the melody and line clears crash —
+        always on the grid, never between beats.
         """
         h, w = self.height, self.width
+        c = max(2, min(h, w) // 8)  # cell size (solid, no gaps)
+        ncols, nrows = w // c, (h - 1) // c
+        self._tetris = {
+            'c': c, 'ncols': ncols, 'nrows': nrows,
+            'board': np.zeros((nrows, ncols), dtype=bool),
+            'piece': None, 'flash': [], 'flash_ticks': 0, 'ticks': -1,
+        }
+        # Mid-game starter stack: bottom rows nearly full, with gaps
+        for i, r in enumerate(range(nrows - 1, max(nrows - 3, 0), -1)):
+            gaps = self.rng.choice(ncols, size=min(2 + 2 * i, ncols),
+                                   replace=False)
+            self._tetris['board'][r, :] = True
+            self._tetris['board'][r, gaps] = False
+        self._tet_spawn()
+        return self._tetris_render()
+
+    @staticmethod
+    def _rotations(shape):
+        """All distinct rotations of a tetromino, offsets normalised."""
+        rots, cur = [], tuple(shape)
+        for _ in range(4):
+            mr = min(r for r, _ in cur)
+            mc = min(cc for _, cc in cur)
+            norm = tuple(sorted((r - mr, cc - mc) for r, cc in cur))
+            if norm not in rots:
+                rots.append(norm)
+            cur = tuple((cc, -r) for r, cc in cur)
+        return rots
+
+    def _tet_fits(self, cells, row, col):
+        t = self._tetris
+        for dr, dc in cells:
+            r, cc = row + dr, col + dc
+            if cc < 0 or cc >= t['ncols'] or r >= t['nrows']:
+                return False
+            if r >= 0 and t['board'][r, cc]:
+                return False
+        return True
+
+    def _tet_eval(self, cells, col):
+        """Landing row + greedy badness score for dropping cells at col."""
+        t = self._tetris
+        row = -4
+        if not self._tet_fits(cells, row, col):
+            return None
+        while self._tet_fits(cells, row + 1, col):
+            row += 1
+        if row + min(dr for dr, _ in cells) < 0:
+            return None  # would lock sticking out of the top
+        b = t['board'].copy()
+        for dr, dc in cells:
+            b[row + dr, col + dc] = True
+        full = b.all(axis=1)
+        cleared = int(full.sum())
+        if cleared:
+            b = np.vstack([np.zeros((cleared, t['ncols']), dtype=bool),
+                           b[~full]])
+        heights = np.where(b.any(axis=0), t['nrows'] - b.argmax(axis=0), 0)
+        holes = 0
+        for cc in range(t['ncols']):
+            colv = b[:, cc]
+            if colv.any():
+                holes += int((~colv[colv.argmax():]).sum())
+        score = 10 * holes + int(heights.sum()) + 2 * int(heights.max()) \
+            - 30 * cleared
+        return score, row
+
+    def _tet_spawn(self):
+        """Pick a random piece and the least-bad place to put it."""
+        t = self._tetris
+        shapes = list(self.TETROMINOES.values())
+        shape = shapes[int(self.rng.integers(len(shapes)))]
+        best = None
+        for cells in self._rotations(shape):
+            width = max(dc for _, dc in cells) + 1
+            for col in range(t['ncols'] - width + 1):
+                ev = self._tet_eval(cells, col)
+                if ev is not None and (best is None or ev[0] < best[0]):
+                    best = (ev[0], cells, col)
+        if best is None:
+            # Board jammed solid: flash-clear the bottom row instead
+            t['piece'] = None
+            t['flash'], t['flash_ticks'] = [t['nrows'] - 1], 0
+            return
+        _, cells, col = best
+        width = max(dc for _, dc in cells) + 1
+        t['piece'] = {'cells': cells,
+                      'row': -(max(dr for dr, _ in cells) + 1),
+                      'col': (t['ncols'] - width) // 2, 'tcol': col}
+
+    def _tetris_step(self):
+        """Advance the demo one sequencer step (acts only on beats)."""
+        t = self._tetris
+        t['ticks'] += 1
+        if t['ticks'] % self.SONGS[self.song_index]['subdivisions']:
+            return
+        if t['flash']:
+            t['flash_ticks'] += 1
+            if t['flash_ticks'] >= 2:  # blinked → collapse the rows
+                keep = np.ones(t['nrows'], dtype=bool)
+                keep[t['flash']] = False
+                t['board'] = np.vstack([
+                    np.zeros((len(t['flash']), t['ncols']), dtype=bool),
+                    t['board'][keep]])
+                t['flash'] = []
+                self._tet_spawn()
+        else:
+            p = t['piece']
+            if p['col'] != p['tcol']:
+                # glide sideways to the planned column first…
+                d = 1 if p['tcol'] > p['col'] else -1
+                if self._tet_fits(p['cells'], p['row'], p['col'] + d):
+                    p['col'] += d
+                else:
+                    p['tcol'] = p['col']
+            elif self._tet_fits(p['cells'], p['row'] + 1, p['col']):
+                p['row'] += 1          # …then fall one cell per beat
+            else:
+                # lock into the stack
+                for dr, dc in p['cells']:
+                    if p['row'] + dr >= 0:
+                        t['board'][p['row'] + dr, p['col'] + dc] = True
+                t['piece'] = None
+                full = list(np.flatnonzero(t['board'].all(axis=1)))
+                if full:
+                    t['flash'], t['flash_ticks'] = full, 0
+                elif t['board'][:2].any():
+                    # failsafe: stack near the top → clear bottom row
+                    t['flash'], t['flash_ticks'] = [t['nrows'] - 1], 0
+                else:
+                    self._tet_spawn()
+        self._bg_frame = self._tetris_render()
+
+    def _tetris_render(self):
+        """Draw board + falling piece (+ flashing rows) as a bg frame."""
+        t = self._tetris
+        c, h, w = t['c'], self.height, self.width
+        top = (h - 1) - t['nrows'] * c
         bg = np.zeros((h, w), dtype=np.uint8)
-        # Cell size incl. 1-dot gap; never below 3 so blocks are at
-        # least 2×2 dots and actually read as tetromino cells.
-        c = max(3, min(h, w) // 8)
-        ncols = w // c
 
-        def block(row_up, col):
-            """Draw one cell; row_up counts upward from the floor."""
-            r1 = (h - 1) - row_up * c          # floor = panel row h-2
-            r0, c0 = max(r1 - (c - 1), 0), col * c
-            bg[r0:r1, c0:c0 + c - 1] = 1
+        def block(r, cc):
+            if r >= 0:
+                r0, c0 = top + r * c, cc * c
+                bg[r0:r0 + c, c0:c0 + c] = 1
 
-        # Settled stack: deterministic jagged skyline, one empty well
-        skyline = [2, 3, 1, 3, 3, 2, 1, 2]
-        heights = [skyline[i % len(skyline)] for i in range(ncols)]
-        heights[max(0, ncols - 2)] = 0     # the empty I-piece well
-        for col, stack_h in enumerate(heights):
-            for row_up in range(stack_h):
-                block(row_up, col)
-
-        # Falling T-piece near the top, left of centre
-        top, mid = 1, max(1, ncols // 2 - 2)
-        for col in (mid, mid + 1, mid + 2):
-            r0, c0 = top * c, col * c
-            bg[r0:r0 + c - 1, c0:c0 + c - 1] = 1
-        r0, c0 = (top + 1) * c, (mid + 1) * c
-        bg[r0:r0 + c - 1, c0:c0 + c - 1] = 1
+        flash = set(t['flash'])
+        for r, cc in zip(*np.nonzero(t['board'])):
+            if int(r) not in flash:
+                block(int(r), int(cc))
+        if t['piece'] is not None:
+            p = t['piece']
+            for dr, dc in p['cells']:
+                block(p['row'] + dr, p['col'] + dc)
+        if flash and t['flash_ticks'] % 2 == 0:
+            for r in flash:            # full-width solid flash
+                bg[top + r * c:top + (r + 1) * c, :] = 1
         return bg
 
     def _scatter_flip(self, name, density):
@@ -531,6 +679,11 @@ class AutoDrum:
             for name in pattern[self.step]:
                 self._hit(name, now)
 
+            # Advance any animated background in the SAME frame as the
+            # step, so its dot flips land exactly on the musical grid.
+            if 'bg_step' in song:
+                getattr(self, song['bg_step'])()
+
             # Completed one full pass through the pattern?
             if prev == len(pattern) - 1:
                 self.section_repeats += 1
@@ -585,4 +738,5 @@ class AutoDrum:
             progress = min(int((now - self._skip_hold_start) / self.SKIP_HOLD_TIME * self.width), self.width)
             frame[0, :progress] ^= 1
 
+        frame = human_pose.draw_right_index_pointer(frame, pose_results, size=2)
         return frame
