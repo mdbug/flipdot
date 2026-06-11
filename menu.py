@@ -118,7 +118,7 @@ class Menu:
                 Button("MORE", 3, width, on_click=self.next_page),
             ],
             [
-                Button("TETR", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_TETRIS)),
+                Button("TETRIS", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_TETRIS)),
                 Button("MORE", 3, width, on_click=self.next_page),
             ],
         ]
