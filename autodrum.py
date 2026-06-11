@@ -675,18 +675,13 @@ class AutoDrum:
     def _section(self):
         return self.SONGS[self.song_index]['sections'][self.section_index]
 
-    def get_frame(self, pose_results):
-        now = time.time()
-        song = self.SONGS[self.song_index]
-        step_interval = 60.0 / song['bpm'] / song['subdivisions']
-
-        # Fire any due decay-tail flips (cymbal rattle / ring-out)
+    def _tick_voice(self, now):
+        """Fire due decay-tail flips and advance the melody ring-out shimmer."""
         if self._decay_events:
             due = [e for e in self._decay_events if e[0] <= now]
             self._decay_events = [e for e in self._decay_events if e[0] > now]
             for _, name, density in due:
                 self._scatter_flip(name, density)
-
         # Melody ring-out shimmer (self-cancelling: each tick undoes the
         # previous tick's dots and scatters a smaller fresh set in the
         # same frame — one rattle click per tick, zero residue).
@@ -702,7 +697,10 @@ class AutoDrum:
                 ).astype(np.uint8)
                 self.state[r0:r1, c0:c1] ^= self._voice_shimmer
 
-        # Advance the sequencer, catching up if we fell behind
+    def _advance_sequencer(self, now, step_interval):
+        """Advance the sequencer by as many steps as have elapsed, catching up
+        if we fell behind (e.g. after a mode switch)."""
+        song = self.SONGS[self.song_index]
         while now >= self.next_step_time:
             repeats, pattern = self._section()
             prev = self.step
@@ -722,12 +720,20 @@ class AutoDrum:
                 if repeats > 0 and self.section_repeats >= repeats:
                     self.section_index = (self.section_index + 1) % len(song['sections'])
                     self.section_repeats = 0
-                    self.step = -1  # next iteration will start the new section at 0
+                    self.step = -1
 
             self.next_step_time += step_interval
             # After a long pause (mode switch etc.) don't try to catch up
             if now - self.next_step_time > 1.0:
                 self.next_step_time = now + step_interval
+
+    def get_frame(self, pose_results):
+        now = time.time()
+        song = self.SONGS[self.song_index]
+        step_interval = 60.0 / song['bpm'] / song['subdivisions']
+
+        self._tick_voice(now)
+        self._advance_sequencer(now, step_interval)
 
         # Raise left hand above head and hold for SKIP_HOLD_TIME → next song
         if human_pose.is_left_hand_raised(pose_results):

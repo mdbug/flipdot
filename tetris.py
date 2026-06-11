@@ -4,8 +4,11 @@ import text
 import human_pose
 from autodrum import AutoDrum
 
-# Index of the TETRIS song in AutoDrum.SONGS
-_TETRIS_SONG_IDX = 4
+# Index of the TETRIS song in AutoDrum.SONGS, looked up by name so it
+# stays correct if the song list is ever reordered.
+_TETRIS_SONG_IDX = next(
+    i for i, s in enumerate(AutoDrum.SONGS) if s['name'] == 'TETRIS'
+)
 
 
 class Tetris(AutoDrum):
@@ -16,21 +19,21 @@ class Tetris(AutoDrum):
 
     Layout (28×28 panel)
     --------------------
-    * Game board : columns 0–19, 10 cells wide × 2 px each (20 px).
-    * Melody band: columns 20–27 (right 8 px) — pitch stripes XOR here,
-      keeping the game area free of note flashes while still clicking.
-    * Bottom row (row 27): sequencer step cursor (inherited).
+    * Melody band: columns 0–6 (7 px), inverted — pitch stripes appear dark
+      on a lit background.
+    * Separator : column 7, always lit.
+    * Game board: columns 8–27, 10 cells × 2 px wide (20 px), 14 rows tall.
 
     Gesture controls
     ----------------
     * Right index finger X  → steer piece left/right (auto-repeat 150 ms)
     * Left hand raised      → rotate piece (rising-edge trigger)
-    * Finger Y > 0.7        → hard-drop piece (rising-edge trigger)
     * Arms crossed          → exit to menu (handled by main loop as usual)
 
     Game-over screen
     ----------------
-    Shows "OVER" + lines cleared.  Raise left hand (or wait 5 s) to restart.
+    Flashes the panel, then shows "GAME / OVER" + lines cleared.
+    Raise left hand (or wait 10 s) to restart.
     """
 
     def __init__(self, width, height, mode_manager):
@@ -42,17 +45,20 @@ class Tetris(AutoDrum):
         self._left_raise_armed = True   # True  = ready to trigger on next raise
         self._drop_armed = True         # True  = ready to trigger on next low-Y
         self._last_move_time = 0.0      # timestamp of last horizontal step
+        self._pending = {'move': 0, 'rotate': False}  # buffered per-step intent
+        self._jingle_events = []        # (due_time, note_name) death-jingle queue
 
     # ------------------------------------------------------------------
     # _load_song override — always loads TETRIS song, then re-pins the
-    # melody band to the right 8 columns so the game board stays clean.
+    # melody band to cols 0–6 so col 7 (separator) is never masked.
     # ------------------------------------------------------------------
 
     def _load_song(self, index):
         super()._load_song(_TETRIS_SONG_IDX)
-        # Reposition every melody-voice instrument to the right 8 px.
-        mc0 = 0            # melody in left 8 px
-        mc1 = 8
+        # Melody band: cols 0–6 (7 px); col 7 is the separator, not part of
+        # the band, so state flips there always reach the panel as sound.
+        mc0 = 0
+        mc1 = 7
         for name in self._melody_names:
             inst = self.instruments[name]
             r0, r1, _, _ = inst['area']
@@ -110,6 +116,16 @@ class Tetris(AutoDrum):
                 return False
         return True
 
+    def _trigger_game_over(self):
+        """Set game-over state and schedule the descending death jingle."""
+        now = time.time()
+        self._player['game_over'] = True
+        self._player['game_over_time'] = now
+        notes = ['a5', 'g5', 'f5', 'e5', 'd5', 'c5', 'b4', 'a4']
+        self._jingle_events = [
+            (now + i * 0.08, note) for i, note in enumerate(notes)
+        ]
+
     def _player_spawn(self):
         """Spawn a random tetromino centred at the top."""
         t = self._tetris
@@ -130,8 +146,7 @@ class Tetris(AutoDrum):
         self._player['piece'] = piece
         # Game over when spawn position is already blocked
         if not self._player_tet_fits(cells, row, col):
-            self._player['game_over'] = True
-            self._player['game_over_time'] = time.time()
+            self._trigger_game_over()
             self._player['piece'] = None
 
     def _player_rotate(self):
@@ -166,8 +181,7 @@ class Tetris(AutoDrum):
                 self._player['board'][r, cc] = True
         self._player['piece'] = None
         if game_over:
-            self._player['game_over'] = True
-            self._player['game_over_time'] = time.time()
+            self._trigger_game_over()
             return
         full = list(np.flatnonzero(self._player['board'].all(axis=1)))
         if full:
@@ -198,6 +212,8 @@ class Tetris(AutoDrum):
         self._player['game_over_time'] = None
         self._left_raise_armed = False
         self._drop_armed = True
+        self._pending = {'move': 0, 'rotate': False}
+        self._jingle_events = []
         self._player_spawn()
         self._bg_frame = self._render_player_board()
 
@@ -206,12 +222,33 @@ class Tetris(AutoDrum):
     # ------------------------------------------------------------------
 
     def _tetris_step(self):
-        """Called on every sequencer step; acts only on full beats."""
+        """Called on every sequencer step; execute buffered input, then gravity on beats."""
         t = self._tetris
         song = self.SONGS[self.song_index]
         t['ticks'] += 1
+
+        # Execute buffered player input on every step (eighth-note resolution).
+        # This runs before the beat guard so moves and rotations land as
+        # grace notes even on off-beats, keeping them in sync with the grid.
+        if not self._player['game_over'] and not self._player['flash']:
+            changed = False
+            if self._pending['rotate']:
+                self._player_rotate()   # _player_rotate also updates _bg_frame
+                self._pending['rotate'] = False
+                changed = True
+            if self._pending['move']:
+                p = self._player['piece']
+                if p is not None:
+                    new_col = p['col'] + self._pending['move']
+                    if self._player_tet_fits(p['cells'], p['row'], new_col):
+                        p['col'] = new_col
+                        changed = True
+                self._pending['move'] = 0
+            if changed:
+                self._bg_frame = self._render_player_board()
+
         if t['ticks'] % song['subdivisions']:
-            return   # only act on full beats
+            return   # only gravity/lock/flash on full beats
 
         if self._player['game_over']:
             return
@@ -228,9 +265,14 @@ class Tetris(AutoDrum):
                     np.zeros((len(flash), t['ncols']), dtype=bool),
                     self._player['board'][keep],
                 ])
-                self._player['lines'] += len(flash)
+                n_cleared = len(flash)
+                self._player['lines'] += n_cleared
                 self._player['flash'] = []
                 self._player['flash_ticks'] = 0
+                # Extra crash hit for multi-line clears; the flip-dot splash
+                # plus shimmer tail scales naturally with line count.
+                if n_cleared >= 2:
+                    self._hit('crash', time.time())
                 self._player_spawn()
         elif self._player['piece'] is not None:
             p = self._player['piece']
@@ -303,15 +345,15 @@ class Tetris(AutoDrum):
                 self._restart_game()
             return
 
-        # ---- Rotate: rising edge of left hand raised ----
+        # ---- Rotate: buffer intent, execute on next step ----
         left_raised = human_pose.is_left_hand_raised(pose_results)
         if left_raised and self._left_raise_armed:
-            self._player_rotate()
+            self._pending['rotate'] = True
             self._left_raise_armed = False
         elif not left_raised:
             self._left_raise_armed = True
 
-        # ---- Steer: right index finger X → target column ----
+        # ---- Steer: buffer direction, execute on next step ----
         finger_x, finger_y = human_pose.get_right_index_finger_position(pose_results)
         if finger_x is not None and self._player['piece'] is not None:
             t = self._tetris
@@ -323,83 +365,39 @@ class Tetris(AutoDrum):
             max_col = t['ncols'] - piece_max_dc - 1
             target_col = max(0, min(max_col, int((screen_x - t['x0']) / t['c'])))
             if target_col != p['col'] and now - self._last_move_time >= 0.15:
-                direction = 1 if target_col > p['col'] else -1
-                new_col = p['col'] + direction
-                if self._player_tet_fits(p['cells'], p['row'], new_col):
-                    p['col'] = new_col
-                    self._last_move_time = now
-                    self._bg_frame = self._render_player_board()
+                self._pending['move'] = 1 if target_col > p['col'] else -1
+                self._last_move_time = now
 
         # ---- Hard drop removed (too easy to trigger accidentally) ----
-
-    # ------------------------------------------------------------------
-    # get_frame — sequencer + sound (from AutoDrum) + player display
-    # ------------------------------------------------------------------
 
     def get_frame(self, pose_results):
         now = time.time()
         song = self.SONGS[self.song_index]
         step_interval = 60.0 / song['bpm'] / song['subdivisions']
+        step_interval /= (1 + 0.08 * (self._player['lines'] // 5))
 
         # Handle player gestures before advancing the sequencer so that
         # a hard-drop locks the piece into _bg_frame before it renders.
         self._handle_gestures(pose_results, now)
 
         if self._player['game_over']:
-            # Silence any ringing melody note and freeze the sequencer.
-            if self._voice_shimmer is not None and self._voice_area is not None:
-                r0, r1, c0, c1 = self._voice_area
-                self.state[r0:r1, c0:c1] ^= self._voice_shimmer
-                self._voice_shimmer = None
-            self._voice_decay = []
-            self._decay_events = []
-            mc0, mc1 = self._voice_span
-            self.state[:, mc0:mc1] = 0
-        else:
-            # Fire any due decay-tail flips (cymbal rattle / ring-out)
-            if self._decay_events:
-                due = [e for e in self._decay_events if e[0] <= now]
-                self._decay_events = [e for e in self._decay_events if e[0] > now]
-                for _, name, density in due:
-                    self._scatter_flip(name, density)
-
-            # Melody ring-out shimmer (self-cancelling per-tick)
-            while self._voice_decay and self._voice_decay[0][0] <= now:
-                _, density = self._voice_decay.pop(0)
-                r0, r1, c0, c1 = self._voice_area
-                if self._voice_shimmer is not None:
+            # Fire any scheduled jingle notes, then drain tails via shared method
+            due_jingle = [e for e in self._jingle_events if e[0] <= now]
+            self._jingle_events = [e for e in self._jingle_events if e[0] > now]
+            for _, note in due_jingle:
+                self._hit(note, now)
+            self._tick_voice(now)
+            # Once jingle and all tails are spent, silence the melody column
+            if not self._jingle_events and not self._voice_decay and not self._decay_events:
+                if self._voice_shimmer is not None and self._voice_area is not None:
+                    r0, r1, c0, c1 = self._voice_area
                     self.state[r0:r1, c0:c1] ^= self._voice_shimmer
                     self._voice_shimmer = None
-                if density > 0:
-                    self._voice_shimmer = (
-                        self.rng.random((r1 - r0, c1 - c0)) < density
-                    ).astype(np.uint8)
-                    self.state[r0:r1, c0:c1] ^= self._voice_shimmer
-
-            # Advance the sequencer (calls our _tetris_step on each beat)
-            while now >= self.next_step_time:
-                repeats, pattern = self._section()
-                prev = self.step
-                self.step = (self.step + 1) % len(pattern)
-
-                for name in pattern[self.step]:
-                    self._hit(name, now)
-
-                if 'bg_step' in song:
-                    getattr(self, song['bg_step'])()
-
-                if prev == len(pattern) - 1:
-                    self.section_repeats += 1
-                    if repeats > 0 and self.section_repeats >= repeats:
-                        self.section_index = (
-                            (self.section_index + 1) % len(song['sections'])
-                        )
-                        self.section_repeats = 0
-                        self.step = -1
-
-                self.next_step_time += step_interval
-                if now - self.next_step_time > 1.0:
-                    self.next_step_time = now + step_interval
+                mc0, mc1 = self._voice_span
+                self.state[:, mc0:mc1] = 0
+        else:
+            self._tick_voice(now)
+            self._advance_sequencer(now, step_interval)
 
         # Composite: melody state XOR game board background
         frame = self.state.copy()
@@ -417,14 +415,18 @@ class Tetris(AutoDrum):
             score_str = str(min(self._player['lines'], 99))
             score_w = len(score_str) * 4 - 1
             score_x = max(0, (7 - score_w) // 2)
-            text.write(frame, score_str, x=score_x, y=1, size=5, color=0)
+            score_layer = np.ones((self.height, 7), dtype=np.uint8)
+            text.write(score_layer, score_str, x=score_x, y=1, size=5, color=0)
+            frame[:, :7] ^= score_layer
 
-        # Game-over overlay
+        # Game-over overlay: jingle first, then flash, then static screen
         if self._player['game_over'] and self._player['game_over_time'] is not None:
             elapsed = now - self._player['game_over_time']
-            if elapsed < 1.2:
+            if elapsed < 0.7:
+                pass  # jingle plays over the live board
+            elif elapsed < 1.9:
                 # Flash the whole frame at 10 Hz for a dramatic crash effect
-                if int(elapsed / 0.1) % 2:
+                if int((elapsed - 0.7) / 0.1) % 2:
                     frame ^= 1
             else:
                 # Full-screen static display: "GAME" / "OVER" + large score
