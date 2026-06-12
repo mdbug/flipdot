@@ -9,7 +9,9 @@ class ModeManager:
     MODE_CARICATURE = 'caricature'
     MODE_PERCUSSION = 'percussion'
     MODE_AUTODRUM = 'autodrum'
+    MODE_BEATMIRROR = 'beatmirror'
     MODE_TETRIS = 'tetris'
+    MODE_PONG = 'pong'
     MODE_DEFAULT = MODE_CLOCK
     MAX_FPS = {
         MODE_SLEEP: 1,
@@ -20,7 +22,9 @@ class ModeManager:
         MODE_CARICATURE: 30,
         MODE_PERCUSSION: 30,
         MODE_AUTODRUM: 30,
+        MODE_BEATMIRROR: 30,
         MODE_TETRIS: 30,
+        MODE_PONG: 30,
     }
 
     def __init__(self, mode=MODE_DEFAULT):

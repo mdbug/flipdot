@@ -15,7 +15,9 @@ from paint import Paint
 from caricature import Caricature
 from percussion import Percussion
 from autodrum import AutoDrum
+from beatmirror import BeatMirror
 from tetris import Tetris
+from pong import Pong
 from dotenv import load_dotenv
 import os
 import text
@@ -44,7 +46,9 @@ paint = Paint(panel.WIDTH, panel.HEIGHT, mode_manager)
 caricature = Caricature(panel.WIDTH, panel.HEIGHT, mode_manager)
 percussion = Percussion(panel.WIDTH, panel.HEIGHT, mode_manager)
 autodrum = AutoDrum(panel.WIDTH, panel.HEIGHT, mode_manager)
+beatmirror = BeatMirror(panel.WIDTH, panel.HEIGHT, mode_manager)
 tetris_game = Tetris(panel.WIDTH, panel.HEIGHT, mode_manager)
+pong_game = Pong(panel.WIDTH, panel.HEIGHT, mode_manager)
 img_sleep = image.load('sleep.png')
 
 while True:
@@ -75,7 +79,8 @@ while True:
 
         if current_mode in (ModeManager.MODE_MENU, ModeManager.MODE_PAINT,
                             ModeManager.MODE_PERCUSSION, ModeManager.MODE_AUTODRUM,
-                            ModeManager.MODE_TETRIS):
+                            ModeManager.MODE_BEATMIRROR, ModeManager.MODE_TETRIS,
+                            ModeManager.MODE_PONG):
             if human_pose.is_arms_crossed(pose_results):
                 mode_manager.click_menu()
             else:
@@ -143,8 +148,12 @@ while True:
         dots = percussion.get_frame(pose_results)
     elif mode_manager.mode == ModeManager.MODE_AUTODRUM:
         dots = autodrum.get_frame(pose_results)
+    elif mode_manager.mode == ModeManager.MODE_BEATMIRROR:
+        dots = beatmirror.get_frame(pose_results)
     elif mode_manager.mode == ModeManager.MODE_TETRIS:
         dots = tetris_game.get_frame(pose_results)
+    elif mode_manager.mode == ModeManager.MODE_PONG:
+        dots = pong_game.get_frame(pose_results)
 
     process_time = time.time() - t_process_start
     fps_limit = mode_manager.get_fps_limit()

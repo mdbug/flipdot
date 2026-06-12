@@ -119,6 +119,8 @@ class Menu:
             ],
             [
                 Button("TETRIS", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_TETRIS)),
+                Button("MIRROR", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_BEATMIRROR)),
+                Button("PONG", 2, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_PONG)),
                 Button("MORE", 3, width, on_click=self.next_page),
             ],
         ]
