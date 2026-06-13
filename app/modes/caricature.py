@@ -3,6 +3,7 @@ import io
 import os
 import threading
 import time
+import logging
 
 import cv2
 import numpy as np
@@ -11,6 +12,9 @@ import requests
 
 import app.services.text as text_module
 from app.core.mode_manager import ModeManager
+
+
+logger = logging.getLogger(__name__)
 
 
 class Caricature:
@@ -83,11 +87,11 @@ class Caricature:
                 timeout=30,
             )
             if not resp.ok:
-                print(f"Caricature API error (generate-image-v2) {resp.status_code}: {resp.text[:2000]}")
+                logger.error("Caricature API generate-image-v2 error status=%s body=%s", resp.status_code, resp.text[:2000])
             resp.raise_for_status()
 
             job_id = resp.json()["background_job_id"]
-            print(f"Caricature: job {job_id} queued, polling...")
+            logger.info("Caricature job queued id=%s", job_id)
 
             # Poll until complete (max 2 minutes)
             result_pil = None
@@ -104,11 +108,12 @@ class Caricature:
                 status = data.get("status")
                 if status == "completed":
                     last = data.get("last_response") or {}
-                    print(f"Caricature: job completed, last_response keys: {list(last.keys())}")
+                    logger.info("Caricature job completed id=%s", job_id)
+                    logger.debug("Caricature last_response keys=%s", list(last.keys()))
                     images = last.get("images", [])
                     if not images:
                         raise ValueError(f"No images in completed job: {last}")
-                    print(f"Caricature: saving {len(images)} image(s)")
+                    logger.info("Caricature received %s image candidate(s)", len(images))
                     pil_images = []
                     for i, img_entry in enumerate(images):
                         img_b64_raw = img_entry.get("base64", "")
@@ -122,12 +127,12 @@ class Caricature:
                     break
                 elif status == "failed":
                     raise ValueError(f"Job failed: {data.get('last_response')}")
-                print(f"Caricature: status={status}...")
+                logger.debug("Caricature poll id=%s status=%s", job_id, status)
 
             if result_pil is None:
                 raise TimeoutError("Caricature job timed out after 2 minutes")
 
-            print(f"Caricature: result[0] ({result_pil.size}, mode={result_pil.mode})")
+            logger.info("Caricature result ready size=%s mode=%s", result_pil.size, result_pil.mode)
 
             dots = self._pil_image_to_dots(result_pil)
 
@@ -137,14 +142,14 @@ class Caricature:
                     self.state = self.STATE_DISPLAYING
                     self.display_start_time = time.time()
                     cv2.imwrite('caricature_result.png', self.caricature_dots * 255)
-                    print("Caricature: saved result to caricature_result.png")
+                    logger.info("Saved caricature result to caricature_result.png")
 
-        except Exception as e:
-            print(f"Caricature API error: {e}")
+        except Exception:
+            logger.exception("Caricature API workflow failed")
             with self._lock:
                 if self._generation == generation:
                     self.state = self.STATE_ERROR
-                    self.error_msg = str(e)[:24]
+                    self.error_msg = "Generation failed"
 
     def _fit_within_limit(self, width, height, limit):
         max_side = max(width, height)
@@ -200,10 +205,10 @@ class Caricature:
             elif openai_key:
                 return self._pick_with_openai(thumbs_b64, original_b64, prompt, openai_key, len(pil_images))
             else:
-                print("Caricature: no AI key (ANTHROPIC_API_KEY / OPENAI_API_KEY) for image selection, using index 0")
+                logger.info("No AI key available for image selection; using candidate index 0")
                 return 0
-        except Exception as e:
-            print(f"Caricature: AI image selection failed ({e}), using index 0")
+        except Exception:
+            logger.exception("AI image selection failed; using candidate index 0")
             return 0
 
     def _pick_with_anthropic(self, thumbs_b64, original_b64, prompt, api_key, n):
@@ -236,7 +241,7 @@ class Caricature:
         text = resp.json()["content"][0]["text"].strip()
         idx = int(text.split()[0])
         idx = max(0, min(idx, n - 1))
-        print(f"Caricature: Anthropic chose image {idx}")
+        logger.info("Anthropic chose image index=%s", idx)
         return idx
 
     def _pick_with_openai(self, thumbs_b64, original_b64, prompt, api_key, n):
@@ -268,7 +273,7 @@ class Caricature:
         text = resp.json()["choices"][0]["message"]["content"].strip()
         idx = int(text.split()[0])
         idx = max(0, min(idx, n - 1))
-        print(f"Caricature: OpenAI chose image {idx}")
+        logger.info("OpenAI chose image index=%s", idx)
         return idx
 
     def _start_capture(self, camera_frame):
@@ -286,7 +291,7 @@ class Caricature:
             return
 
         cv2.imwrite('caricature_debug.jpg', camera_frame)
-        print("Caricature: saved capture to caricature_debug.jpg")
+        logger.info("Saved caricature input capture to caricature_debug.jpg")
 
         image_b64 = base64.standard_b64encode(buf).decode('utf-8')
 

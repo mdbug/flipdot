@@ -1,0 +1,18 @@
+[Unit]
+Description=Flipdot Display Controller
+After=network.target
+
+[Service]
+Type=simple
+User=flipdot
+Group=flipdot
+WorkingDirectory=/home/flipdot/flipdot
+ExecStart=/usr/bin/python3 /home/flipdot/flipdot/flipdot.py
+Restart=always
+RestartSec=2
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=append:/var/log/flipdot/output.log
+StandardError=append:/var/log/flipdot/error.log
+
+[Install]
+WantedBy=multi-user.target

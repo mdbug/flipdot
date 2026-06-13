@@ -4,6 +4,10 @@ import numpy as np
 import os
 import time
 import threading
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 CLOSE_FACE_DISTANCE = float(os.getenv('CLOSE_FACE_DISTANCE', '0.9'))
 VERY_CLOSE_FACE_DISTANCE = float(os.getenv('VERY_CLOSE_FACE_DISTANCE', '0.5'))
@@ -126,6 +130,7 @@ try:
         )
     except Exception:
         # GPU delegate unavailable — fall back to CPU
+        logger.warning("MediaPipe GPU delegate unavailable, falling back to CPU")
         _delegate = BaseOptions.Delegate.CPU
         _pose_landmarker = PoseLandmarker.create_from_options(
             PoseLandmarkerOptions(
@@ -157,10 +162,10 @@ try:
 
     _USE_TASKS_API = True
     _delegate_name = 'GPU' if _delegate == BaseOptions.Delegate.GPU else 'CPU'
-    print(f"[human_pose] Using MediaPipe Tasks API ({_delegate_name} delegate)")
+    logger.info("Using MediaPipe Tasks API (%s delegate)", _delegate_name)
 
 except Exception as _tasks_err:
-    print(f"[human_pose] Tasks API unavailable ({_tasks_err}), using legacy API")
+    logger.warning("Tasks API unavailable (%s), using legacy API", _tasks_err)
     try:
         mp_drawing = mp.solutions.drawing_utils
         mp_pose = mp.solutions.pose
@@ -191,6 +196,7 @@ try:
     mp_pose  # already defined (legacy path)
 except NameError:
     mp_pose = mp.solutions.pose
+    logger.debug("Loaded mp.solutions.pose constants for Tasks API compatibility")
 
 
 # ---------------------------------------------------------------------------

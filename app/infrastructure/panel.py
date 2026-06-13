@@ -3,6 +3,10 @@ import numpy as np
 import serial
 import threading
 import queue
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 class Panel:
@@ -27,6 +31,7 @@ class Panel:
             self._writer_thread = threading.Thread(
                 target=self._serial_writer, daemon=True)
             self._writer_thread.start()
+            logger.info("Panel serial writer started on /dev/ttyUSB0")
 
         self.panel = flippydot.Panel([
             [1],
@@ -42,8 +47,11 @@ class Panel:
     def _serial_writer(self):
         """Drain write queue in a background thread."""
         while True:
-            data = self._write_queue.get()
-            self.serial.write(data)
+            try:
+                data = self._write_queue.get()
+                self.serial.write(data)
+            except Exception:
+                logger.exception("Panel serial writer thread error")
 
     def update(self, frame):
         if self.preview:

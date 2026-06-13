@@ -26,7 +26,7 @@ Modes (`ModeManager.MODE_*`): `sleep`, `clock`, `pose`, `menu`, `paint`. Each ha
 - **Device:** NVIDIA Jetson Orin Nano (aarch64), JetPack R36.4.7, running Ubuntu with Python 3.10.
 - **Hardware deps:** real serial flip-dot panel at `/dev/ttyUSB0` (57600 baud) and a V4L2 webcam at `/dev/video0`.
 - Run with `PREVIEW=true` to use `flippydot`'s on-screen pygame preview instead of serial — essential for dev without hardware.
-- Config via `.env` (loaded by `python-dotenv`): `CAMERA_INDEX`, `PREVIEW`, `DEBUG`, `OPENWEATHER_API_KEY`. `DEBUG=true` overlays distance/angle text on the bottom rows.
+- Config via `.env` (loaded by `python-dotenv`): `CAMERA_INDEX`, `PREVIEW`, `DEBUG`, `LOG_LEVEL`, `OPENWEATHER_API_KEY`. `DEBUG=true` overlays distance/angle text on the bottom rows; `LOG_LEVEL` controls Python logging verbosity (default `INFO`, set `DEBUG` for per-second performance logs).
 - `flippydot/` is a vendored fork of the flip-dot driver library; `Panel` (`panel.py`) wraps it.
 
 ## Installed software on the Jetson
@@ -46,17 +46,16 @@ Useful commands on the device:
 ```bash
 sudo systemctl status flipdot.service   # check if running
 sudo systemctl restart flipdot.service  # restart after deploy
-journalctl -u flipdot.service -f        # live logs (stdout → /var/log/flipdot/output.log, stderr → error.log)
-sudo journalctl -u flipdot.service -f   # same with sudo if needed
-sudo tail -f /var/log/flipdot/error.log    # Python tracebacks and stderr
-sudo tail -f /var/log/flipdot/output.log   # FPS stats and stdout prints
+sudo tail -f /var/log/flipdot/output.log   # app INFO/DEBUG logs
+sudo tail -f /var/log/flipdot/error.log    # tracebacks and stderr
+sudo logrotate -f /etc/logrotate.d/flipdot # force log rotation check
 ```
 
 ## Developer workflows
 
 - **Run locally (dev machine):** `PREVIEW=true python3 flipdot.py`
 - **Run on device:** `sudo systemctl start flipdot.service`; the service auto-restarts on crash (`Restart=always`).
-- **Deploy:** `./deploy.sh [--debug]` — rsyncs to `flipdot@flipdot:/home/flipdot/flipdot` (with `--delete`, but `models/` and `.env` are excluded), sets `DEBUG` in `.env`, then `sudo systemctl restart flipdot.service`.
+- **Deploy:** `./deploy.sh [--debug]` — rsyncs to `flipdot@flipdot:/home/flipdot/flipdot` (with `--delete`, but `models/` and `.env` are excluded), sets `DEBUG` in `.env`, ensures `/var/log/flipdot` exists, installs `ops/systemd/flipdot.service` and `ops/logrotate/flipdot` on the device, then reloads and restarts `flipdot.service`.
   - **Important:** the `models/` directory is excluded from rsync. MediaPipe `.task` model files must be downloaded manually once:
     ```bash
     ssh flipdot

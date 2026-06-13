@@ -1,6 +1,10 @@
 from collections import deque
 import numpy as np
 import time
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 class FPSTracker:
     def __init__(self, window_size=30):
@@ -54,8 +58,12 @@ class FPSTracker:
         fps = self.get_fps()
         avg_fps = self.get_average_fps()
         stats = self.get_timing_stats()
-        print(f"FPS: {fps:.1f} | Avg: {avg_fps:.1f} | "
-                f"Cap: {stats.get('capture_ms', 0):.1f}ms | "
-                f"Proc: {stats.get('process_ms', 0):.1f}ms | "
-                f"Total: {stats.get('total_ms', 0):.1f}ms | ")
+        logger.info(
+            "fps=%.1f avg_fps=%.1f cap_ms=%.1f proc_ms=%.1f total_ms=%.1f",
+            fps,
+            avg_fps,
+            stats.get('capture_ms', 0),
+            stats.get('process_ms', 0),
+            stats.get('total_ms', 0),
+        )
             

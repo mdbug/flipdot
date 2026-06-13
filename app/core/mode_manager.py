@@ -1,4 +1,8 @@
 import time
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 class ModeManager:
     MODE_SLEEP = 'sleep'
@@ -36,12 +40,15 @@ class ModeManager:
         self.pose_enabled = True
 
     def set_mode(self, mode):
+        requested_mode = mode
         if mode == self.MODE_POSE and not self.pose_enabled:
             mode = self.MODE_CLOCK
 
         if mode != self.mode:
+            previous_mode = self.mode
             self.last_mode = self.mode
             self.mode_start_time = time.time()
+            logger.info("Mode changed from %s to %s (requested=%s)", previous_mode, mode, requested_mode)
 
         self.mode = mode
         self.mode_update_time = time.time()
@@ -74,3 +81,4 @@ class ModeManager:
     
     def toggle_pose_enabled(self):
         self.pose_enabled = not self.pose_enabled
+        logger.info("Pose mode enabled=%s", self.pose_enabled)
