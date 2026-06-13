@@ -17,6 +17,7 @@ class ModeManager:
     MODE_TETRIS = 'tetris'
     MODE_PONG = 'pong'
     MODE_WORLDCUP = 'worldcup'
+    MODE_BOARD = 'board'
     MODE_DEFAULT = MODE_CLOCK
     MAX_FPS = {
         MODE_SLEEP: 1,
@@ -31,6 +32,7 @@ class ModeManager:
         MODE_TETRIS: 30,
         MODE_PONG: 30,
         MODE_WORLDCUP: 4,
+        MODE_BOARD: 30,
     }
 
     def __init__(self, mode=MODE_DEFAULT):

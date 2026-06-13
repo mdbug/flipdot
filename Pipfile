@@ -12,6 +12,7 @@ pillow = "*"
 python-dotenv = "*"
 fastapi = "*"
 uvicorn = "*"
+python-multipart = "*"
 flippydot = {editable = true, path = "./flipPyDot"}
 
 [dev-packages]

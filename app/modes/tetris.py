@@ -87,7 +87,7 @@ class Tetris(AutoDrum):
         override = os.getenv(self._BEST_FILE_ENV)
         if override:
             return Path(override)
-        return Path(__file__).resolve().parents[2] / '.tetris_highscore'
+        return Path(__file__).resolve().parents[2] / 'state' / 'tetris_highscore'
 
     def _load_best(self):
         try:

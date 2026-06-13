@@ -8,6 +8,7 @@ from app.modes.beatmirror import BeatMirror
 from app.modes.tetris import Tetris
 from app.modes.pong import Pong
 from app.modes.worldcup import WorldCup
+from app.modes.board import Board
 
 
 def create_mode_instances(width, height, mode_manager):
@@ -24,4 +25,5 @@ def create_mode_instances(width, height, mode_manager):
         "tetris": Tetris(width, height, mode_manager),
         "pong": Pong(width, height, mode_manager),
         "worldcup": WorldCup(width, height, mode_manager),
+        "board": Board(width, height, mode_manager),
     }

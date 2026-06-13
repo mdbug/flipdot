@@ -34,6 +34,8 @@ def write(
 ):
     font_def = _get_font(font, size, style)
     cell_w = font_def.cell_width
+    cursor_x = int(x)
+    cursor_y = int(y)
     for char in text:
         glyph = _get_glyph(font, size, style, char)
         if cell_w is not None:
@@ -46,16 +48,28 @@ def write(
             pad_right = cell_w - glyph_w - pad_left
             glyph = np.pad(glyph, ((0, 0), (pad_left, pad_right)))
 
-        y1 = min(y + glyph.shape[0], frame.shape[0])
-        x1 = min(x + glyph.shape[1], frame.shape[1])
-        if y1 > y and x1 > x:
-            if color == 1:
-                frame[y:y1, x:x1] = glyph[0 : y1 - y, 0 : x1 - x]
-            else:
-                frame[y:y1, x:x1] = np.logical_not(glyph[0 : y1 - y, 0 : x1 - x])
+        glyph_h = glyph.shape[0]
+        glyph_w = glyph.shape[1]
 
-        x = x1 + spacing
-        if x >= frame.shape[1]:
+        dst_y0 = max(cursor_y, 0)
+        dst_x0 = max(cursor_x, 0)
+        dst_y1 = min(cursor_y + glyph_h, frame.shape[0])
+        dst_x1 = min(cursor_x + glyph_w, frame.shape[1])
+
+        if dst_y1 > dst_y0 and dst_x1 > dst_x0:
+            src_y0 = dst_y0 - cursor_y
+            src_x0 = dst_x0 - cursor_x
+            src_y1 = src_y0 + (dst_y1 - dst_y0)
+            src_x1 = src_x0 + (dst_x1 - dst_x0)
+            src = glyph[src_y0:src_y1, src_x0:src_x1]
+
+            if color == 1:
+                frame[dst_y0:dst_y1, dst_x0:dst_x1] = src
+            else:
+                frame[dst_y0:dst_y1, dst_x0:dst_x1] = np.logical_not(src)
+
+        cursor_x += glyph_w + spacing
+        if cursor_x >= frame.shape[1]:
             break
 
 

@@ -58,6 +58,20 @@ def get_web_controls(mode: str) -> list[dict[str, str]]:
                 "action": "autodrum_next_song",
             }
         ],
+        ModeManager.MODE_BOARD: [
+            {
+                "id": "board_clear",
+                "label": "Clear",
+                "variant": "secondary",
+                "action": "board_clear",
+            },
+            {
+                "id": "board_undo",
+                "label": "Undo",
+                "variant": "secondary",
+                "action": "board_undo",
+            },
+        ],
     }
     controls.extend(mode_controls.get(mode, []))
     return controls
@@ -109,6 +123,9 @@ def main():
     tetris_game = mode_instances["tetris"]
     pong_game = mode_instances["pong"]
     worldcup = mode_instances["worldcup"]
+    board = mode_instances["board"]
+    if web_server is not None:
+        web_server.attach_board(board)
     img_sleep = image.load('sleep.png')
     mode_registry = build_mode_registry(
         clock=clock,
@@ -121,6 +138,7 @@ def main():
         tetris_game=tetris_game,
         pong_game=pong_game,
         worldcup=worldcup,
+        board=board,
         img_sleep=img_sleep,
         clock_resolve_time=CLOCK_RESOLVE_TIME,
         clock_disolve_time=CLOCK_DISOLVE_TIME,
@@ -171,6 +189,10 @@ def main():
                     paint.clear()
                 elif action.action == 'autodrum_next_song' and mode_manager.mode == ModeManager.MODE_AUTODRUM:
                     autodrum.next_song()
+                elif action.action == 'board_clear' and mode_manager.mode == ModeManager.MODE_BOARD:
+                    board.clear()
+                elif action.action == 'board_undo' and mode_manager.mode == ModeManager.MODE_BOARD:
+                    board.undo()
 
             transition_state = transition_policy.apply(
                 frame=frame,

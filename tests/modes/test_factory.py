@@ -20,6 +20,7 @@ def _load_factory_module(monkeypatch):
         "app.modes.tetris": "Tetris",
         "app.modes.pong": "Pong",
         "app.modes.worldcup": "WorldCup",
+        "app.modes.board": "Board",
     }
 
     for module_name, symbol in stubs.items():
@@ -46,6 +47,7 @@ def test_create_mode_instances_returns_expected_keys(monkeypatch):
         "tetris",
         "pong",
         "worldcup",
+        "board",
     }
 
 

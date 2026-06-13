@@ -56,6 +56,25 @@ def test_write_clips_when_text_goes_out_of_bounds():
     assert frame.sum() >= 0
 
 
+def test_write_handles_negative_x_without_crash():
+    frame = np.zeros((8, 8), dtype=np.uint8)
+    text_module.write(frame, "12", x=-2, y=1, size=6, style="monospace")
+
+    assert frame.shape == (8, 8)
+    assert frame.dtype == np.uint8
+    assert int(frame.sum()) > 0
+
+
+def test_write_negative_x_changes_visible_slice_as_text_moves():
+    frame_a = np.zeros((8, 8), dtype=np.uint8)
+    frame_b = np.zeros((8, 8), dtype=np.uint8)
+
+    text_module.write(frame_a, "12", x=0, y=1, size=6, style="monospace")
+    text_module.write(frame_b, "12", x=-1, y=1, size=6, style="monospace")
+
+    assert np.any(frame_a != frame_b)
+
+
 def test_unknown_style_raises_key_error():
     with pytest.raises(KeyError):
         text_module.width("1", size=6, style="bold")
