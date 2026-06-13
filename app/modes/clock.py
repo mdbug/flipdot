@@ -33,8 +33,16 @@ class Clock:
         now = datetime.now()
         date_now = now.strftime('%d.%m.%y')
         time_now = now.strftime('%H:%M')
-        write(self.frame, date_now, y=0, size=5)
-        write_centered(self.frame, time_now, y=6, size=6, mono=True, spacing=0)
+        write(self.frame, date_now, y=0, size=5, style="regular")
+        write_centered(
+            self.frame,
+            time_now,
+            y=6,
+            font="scoreline",
+            size=6,
+            style="regular",
+            spacing=1,
+        )
 
         self.frame[25, 1:27] = 1
         self.frame[26, 1] = 1
@@ -44,7 +52,14 @@ class Clock:
 
         weather = self.get_weather()
         if weather is not None:
-            write(self.frame, f"{weather['current_temperature']}°/{weather['max_temperature_today']}°", x=1, y=14, size=5)
+            write(
+                self.frame,
+                f"{weather['current_temperature']}°/{weather['max_temperature_today']}°",
+                x=1,
+                y=14,
+                size=5,
+                style="regular",
+            )
             self.frame[20:24, 1:27] = 0
             for rain_forecasts in weather['hourly_rain_forecast']:
                 hour = int(rain_forecasts['time'].split(':')[0])

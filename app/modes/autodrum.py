@@ -772,7 +772,7 @@ class AutoDrum:
         # Song name overlay for first 2 s after a load
         if now - self.song_start_time < 2.0:
             frame[:6, :] = 0
-            text.write(frame, song['name'], x=1, y=0, size=5)
+            text.write(frame, song['name'], x=1, y=0, size=5, style="regular")
 
         # Skip progress bar on top row while left hand is raised
         if self._skip_hold_start is not None:

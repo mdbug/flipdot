@@ -386,13 +386,13 @@ class Pong(AutoDrum):
 
         if elapsed >= 1.05:
             msg = self._pong['win_text']
-            text.write_centered(frame, msg, y=6, size=5)
+            text.write_centered(frame, msg, y=6, size=5, style="regular")
         if elapsed >= 1.45 and int(elapsed * 12) % 2 == 0:
             frame[:, :] ^= 1
 
     def _draw_big_score(self, frame, scores):
         score_str = self._score_text(scores)
-        text.write_centered(frame, score_str, y=10, size=6)
+        text.write_centered(frame, score_str, y=10, size=6, style="regular")
 
     @staticmethod
     def _score_text(scores):
@@ -455,7 +455,7 @@ class Pong(AutoDrum):
                 bg[mr - 3:mr + 3, w // 2 - 3:w // 2 + 3] = 1
         # Score digits at the top (drawn last, over the ball — classic)
         score_str = self._score_text(p['score'])
-        text.write_centered(bg, score_str, y=1, size=5)
+        text.write_centered(bg, score_str, y=1, size=5, style="regular")
         return bg
 
     # ------------------------------------------------------------------
@@ -519,15 +519,15 @@ class Pong(AutoDrum):
         # Mode name overlay for the first 2 s
         if celebration_frame is None and now - self.song_start_time < 2.0:
             frame[:6, :] = 0
-            text.write(frame, song['name'], x=1, y=0, size=5)
+            text.write(frame, song['name'], x=1, y=0, size=5, style="regular")
 
         # Win screen: fanfare plays over the final court for a moment,
         # then the static result
         if p['winner'] is not None and now - p['win_time'] >= self.WIN_FANFARE_TIME:
             frame[:, :] = 0
             msg = p['win_text']
-            text.write_centered(frame, msg, y=6, size=5)
+            text.write_centered(frame, msg, y=6, size=5, style="regular")
             score_str = self._score_text(p['score'])
-            text.write_centered(frame, score_str, y=15, size=6)
+            text.write_centered(frame, score_str, y=15, size=6, style="regular")
 
         return frame

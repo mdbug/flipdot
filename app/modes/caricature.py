@@ -340,7 +340,7 @@ class Caricature:
 
         if state == self.STATE_ERROR:
             frame = np.zeros((self.height, self.width), dtype=np.uint8)
-            text_module.write(frame, "ERR", x=1, y=10, size=5)
+            text_module.write(frame, "ERR", x=1, y=10, size=5, style="regular")
             return frame
 
         return np.zeros((self.height, self.width), dtype=np.uint8)
@@ -350,7 +350,7 @@ class Caricature:
         frame = np.zeros((self.height, self.width), dtype=np.uint8)
         # Render digit into a 3x5 buffer then scale 3x → 9x15
         small = np.zeros((5, 3), dtype=np.uint8)
-        text_module.write(small, str(seconds_left), x=0, y=0, size=5)
+        text_module.write(small, str(seconds_left), x=0, y=0, size=5, style="regular")
         big = np.kron(small, np.ones((3, 3), dtype=np.uint8))
         y_off = (self.height - big.shape[0]) // 2
         x_off = (self.width - big.shape[1]) // 2

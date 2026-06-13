@@ -1,715 +1,149 @@
 import numpy as np
 
-FONTS = {
-    5: {
-        ' ': np.array([
-            [0],
-            [0],
-            [0],
-            [0],
-            [0],
-        ]),
-        '+': np.array([
-            [0, 1, 0],
-            [0, 1, 0],
-            [1, 1, 1],
-            [0, 1, 0],
-            [0, 1, 0],
-        ]),
-        ',': np.array([
-            [0],
-            [0],
-            [0],
-            [1],
-            [1],
-        ]),
-        '.': np.array([
-            [0],
-            [0],
-            [0],
-            [0],
-            [1],
-        ]),
-        '/': np.array([
-            [0, 0, 1],
-            [0, 0, 1],
-            [0, 1, 0],
-            [1, 0, 0],
-            [1, 0, 0],
-        ]),
-        '0': np.array([
-            [1, 1, 1],
-            [1, 0, 1],
-            [1, 0, 1],
-            [1, 0, 1],
-            [1, 1, 1],
-        ]),
-        '1': np.array([
-            [0, 1, 0],
-            [1, 1, 0],
-            [0, 1, 0],
-            [0, 1, 0],
-            [1, 1, 1],
-        ]),
-        '2': np.array([
-            [1, 1, 1],
-            [0, 0, 1],
-            [1, 1, 1],
-            [1, 0, 0],
-            [1, 1, 1],
-        ]),
-        '3': np.array([
-            [1, 1, 1],
-            [0, 0, 1],
-            [1, 1, 1],
-            [0, 0, 1],
-            [1, 1, 1],
-        ]),
-        '4': np.array([
-            [1, 0, 1],
-            [1, 0, 1],
-            [1, 1, 1],
-            [0, 0, 1],
-            [0, 0, 1],
-        ]),
-        '5': np.array([
-            [1, 1, 1],
-            [1, 0, 0],
-            [1, 1, 1],
-            [0, 0, 1],
-            [1, 1, 1],
-        ]),
-        '6': np.array([
-            [1, 1, 1],
-            [1, 0, 0],
-            [1, 1, 1],
-            [1, 0, 1],
-            [1, 1, 1],
-        ]),
-        '7': np.array([
-            [1, 1, 1],
-            [0, 0, 1],
-            [0, 1, 0],
-            [1, 0, 0],
-            [1, 0, 0],
-        ]),
-        '8': np.array([
-            [1, 1, 1],
-            [1, 0, 1],
-            [1, 1, 1],
-            [1, 0, 1],
-            [1, 1, 1],
-        ]),
-        '9': np.array([
-            [1, 1, 1],
-            [1, 0, 1],
-            [1, 1, 1],
-            [0, 0, 1],
-            [1, 1, 1],
-        ]),
-        ':': np.array([
-            [0],
-            [1],
-            [0],
-            [1],
-            [0],
-        ]),
-        'A': np.array([
-            [1, 1, 1],
-            [1, 0, 1],
-            [1, 1, 1],
-            [1, 0, 1],
-            [1, 0, 1],
-        ]),
-        'B': np.array([
-            [1, 1, 0],
-            [1, 0, 1],
-            [1, 1, 0],
-            [1, 0, 1],
-            [1, 1, 0],
-        ]),
-        'C': np.array([
-            [1, 1, 1],
-            [1, 0, 0],
-            [1, 0, 0],
-            [1, 0, 0],
-            [1, 1, 1],
-        ]),
-        'D': np.array([
-            [1, 1, 0],
-            [1, 0, 1],
-            [1, 0, 1],
-            [1, 0, 1],
-            [1, 1, 0],
-        ]),
-        'E': np.array([
-            [1, 1, 1],
-            [1, 0, 0],
-            [1, 1, 1],
-            [1, 0, 0],
-            [1, 1, 1],
-        ]),
-        'F': np.array([
-            [1, 1, 1],
-            [1, 0, 0],
-            [1, 1, 1],
-            [1, 0, 0],
-            [1, 0, 0],
-        ]),
-        'G': np.array([
-            [0, 1, 1],
-            [1, 0, 0],
-            [1, 0, 1],
-            [1, 0, 1],
-            [0, 1, 1],
-        ]),
-        'H': np.array([
-            [1, 0, 1],
-            [1, 0, 1],
-            [1, 1, 1],
-            [1, 0, 1],
-            [1, 0, 1],
-        ]),
-        'I': np.array([
-            [1],
-            [1],
-            [1],
-            [1],
-            [1],
-        ]),
-        'J': np.array([
-            [0, 0, 1],
-            [0, 0, 1],
-            [0, 0, 1],
-            [1, 0, 1],
-            [0, 1, 0],
-        ]),
-        'K': np.array([
-            [1, 0, 1],
-            [1, 0, 1],
-            [1, 1, 0],
-            [1, 0, 1],
-            [1, 0, 1],
-        ]),
-        'L': np.array([
-            [1, 0, 0],
-            [1, 0, 0],
-            [1, 0, 0],
-            [1, 0, 0],
-            [1, 1, 1],
-        ]),
-        'M': np.array([
-            [1, 0, 1],
-            [1, 1, 1],
-            [1, 0, 1],
-            [1, 0, 1],
-            [1, 0, 1],
-        ]),
-        'N': np.array([
-            [1, 0, 1],
-            [1, 1, 1],
-            [1, 1, 1],
-            [1, 0, 1],
-            [1, 0, 1],
-        ]),
-        'O': np.array([
-            [1, 1, 1],
-            [1, 0, 1],
-            [1, 0, 1],
-            [1, 0, 1],
-            [1, 1, 1],
-        ]),
-        'P': np.array([
-            [1, 1, 0],
-            [1, 0, 1],
-            [1, 1, 0],
-            [1, 0, 0],
-            [1, 0, 0],
-        ]),
-        'Q': np.array([
-            [0, 1, 0],
-            [1, 0, 1],
-            [1, 0, 1],
-            [1, 1, 1],
-            [0, 1, 1],
-        ]),
-        'R': np.array([
-            [1, 1, 0],
-            [1, 0, 1],
-            [1, 1, 0],
-            [1, 0, 1],
-            [1, 0, 1],
-        ]),
-        'S': np.array([
-            [0, 1, 1],
-            [1, 0, 0],
-            [0, 1, 0],
-            [0, 0, 1],
-            [1, 1, 0],
-        ]),
-        'T': np.array([
-            [1, 1, 1],
-            [0, 1, 0],
-            [0, 1, 0],
-            [0, 1, 0],
-            [0, 1, 0],
-        ]),
-        'U': np.array([
-            [1, 0, 1],
-            [1, 0, 1],
-            [1, 0, 1],
-            [1, 0, 1],
-            [0, 1, 0],
-        ]),
-        'V': np.array([
-            [1, 0, 1],
-            [1, 0, 1],
-            [1, 0, 1],
-            [0, 1, 0],
-            [0, 1, 0],
-        ]),
-        'W': np.array([
-            [1, 0, 1],
-            [1, 0, 1],
-            [1, 0, 1],
-            [1, 1, 1],
-            [1, 0, 1],
-        ]),
-        'X': np.array([
-            [1, 0, 1],
-            [1, 0, 1],
-            [0, 1, 0],
-            [1, 0, 1],
-            [1, 0, 1],
-        ]),
-        'Y': np.array([
-            [1, 0, 1],
-            [1, 0, 1],
-            [0, 1, 0],
-            [0, 1, 0],
-            [0, 1, 0],
-        ]),
-        'Z': np.array([
-            [1, 1, 1],
-            [0, 0, 1],
-            [0, 1, 0],
-            [1, 0, 0],
-            [1, 1, 1],
-        ]),
-        '°': np.array([
-            [0, 1, 0],
-            [1, 0, 1],
-            [0, 1, 0],
-            [0, 0, 0],
-            [0, 0, 0],
-        ])
-    },
-    6: {
-        ' ': np.array([
-            [0, 0],
-            [0, 0],
-            [0, 0],
-            [0, 0],
-            [0, 0],
-            [0, 0],
-        ]),
-        '%': np.array([
-            [1, 0, 0, 1],
-            [0, 0, 1, 0],
-            [0, 0, 1, 1],
-            [0, 1, 0, 0],
-            [0, 1, 0, 0],
-            [1, 0, 0, 1],
-        ]),
-        '+': np.array([
-            [0, 0, 1, 0, 0],
-            [0, 0, 1, 0, 0],
-            [1, 1, 1, 1, 1],
-            [0, 0, 1, 0, 0],
-            [0, 0, 1, 0, 0],
-            [0, 0, 1, 0, 0],
-        ]),
-        ',': np.array([
-            [0, 0],
-            [0, 0],
-            [0, 0],
-            [0, 1],
-            [1, 1],
-            [1, 0],
-        ]),
-        '.': np.array([
-            [0, 0],
-            [0, 0],
-            [0, 0],
-            [0, 0],
-            [0, 0],
-            [1, 1],
-        ]),
-        '/': np.array([
-            [0, 0, 0, 1],
-            [0, 0, 1, 0],
-            [0, 0, 1, 0],
-            [0, 1, 0, 0],
-            [0, 1, 0, 0],
-            [1, 0, 0, 0],
-        ]),
-        '0': np.array([
-            [0, 1, 1, 1, 0],
-            [1, 0, 0, 1, 1],
-            [1, 0, 1, 0, 1],
-            [1, 0, 1, 0, 1],
-            [1, 1, 0, 0, 1],
-            [0, 1, 1, 1, 0],
-        ]),
-        '1': np.array([
-            [0, 1, 0],
-            [1, 1, 0],
-            [0, 1, 0],
-            [0, 1, 0],
-            [0, 1, 0],
-            [1, 1, 1],
-        ]),
-        '2': np.array([
-            [0, 1, 1, 1, 0],
-            [1, 0, 0, 0, 1],
-            [0, 0, 0, 1, 0],
-            [0, 0, 1, 0, 0],
-            [0, 1, 0, 0, 0],
-            [1, 1, 1, 1, 1],
-        ]),
-        '3': np.array([
-            [0, 1, 1, 1, 0],
-            [1, 0, 0, 0, 1],
-            [0, 0, 1, 1, 0],
-            [0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [0, 1, 1, 1, 0],
-        ]),
-        '4': np.array([
-            [0, 0, 0, 1, 0],
-            [0, 0, 1, 1, 0],
-            [0, 1, 0, 1, 0],
-            [1, 0, 0, 1, 0],
-            [1, 1, 1, 1, 1],
-            [0, 0, 0, 1, 0],
-        ]),
-        '5': np.array([
-            [1, 1, 1, 1, 1],
-            [1, 0, 0, 0, 0],
-            [1, 1, 1, 1, 0],
-            [0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [0, 1, 1, 1, 0],
-        ]),
-        '6': np.array([
-            [0, 1, 1, 1, 0],
-            [1, 0, 0, 0, 0],
-            [1, 1, 1, 1, 0],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [0, 1, 1, 1, 0],
-        ]),
-        '7': np.array([
-            [1, 1, 1, 1, 1],
-            [0, 0, 0, 0, 1],
-            [0, 0, 0, 1, 0],
-            [0, 0, 1, 0, 0],
-            [0, 1, 0, 0, 0],
-            [1, 0, 0, 0, 0],
-        ]),
-        '8': np.array([
-            [0, 1, 1, 1, 0],
-            [1, 0, 0, 0, 1],
-            [0, 1, 1, 1, 0],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [0, 1, 1, 1, 0],
-        ]),
-        '9': np.array([
-            [0, 1, 1, 1, 0],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [0, 1, 1, 1, 1],
-            [0, 0, 0, 0, 1],
-            [0, 1, 1, 1, 0],
-        ]),
-        ':': np.array([
-            [0, 0],
-            [1, 1],
-            [1, 1],
-            [0, 0],
-            [1, 1],
-            [1, 1],
-        ]),
-        'A': np.array([
-            [0, 1, 1, 1, 0],
-            [1, 0, 0, 0, 1],
-            [1, 1, 1, 1, 1],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-        ]),
-        'B': np.array([
-            [1, 1, 1, 1, 0],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [1, 1, 1, 1, 0],
-            [1, 0, 0, 0, 1],
-            [1, 1, 1, 1, 0],
-        ]),
-        'C': np.array([
-            [0, 1, 1, 1, 0],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0],
-            [1, 0, 0, 0, 0],
-            [1, 0, 0, 0, 1],
-            [0, 1, 1, 1, 0],
-        ]),
-        'D': np.array([
-            [1, 1, 1, 0, 0],
-            [1, 0, 0, 1, 0],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 1, 0],
-            [1, 1, 1, 0, 0],
-        ]),
-        'E': np.array([
-            [1, 1, 1, 1, 1],
-            [1, 0, 0, 0, 0],
-            [1, 0, 0, 0, 0],
-            [1, 1, 1, 1, 0],
-            [1, 0, 0, 0, 0],
-            [1, 1, 1, 1, 1],
-        ]),
-        'F': np.array([
-            [1, 1, 1, 1, 1],
-            [1, 0, 0, 0, 0],
-            [1, 0, 0, 0, 0],
-            [1, 1, 1, 1, 0],
-            [1, 0, 0, 0, 0],
-            [1, 0, 0, 0, 0],
-        ]),
-        'G': np.array([
-            [0, 1, 1, 1, 0],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0],
-            [1, 0, 1, 1, 1],
-            [1, 0, 0, 0, 1],
-            [0, 1, 1, 1, 0],
-        ]),
-        'H': np.array([
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [1, 1, 1, 1, 1],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-        ]),
-        'I': np.array([
-            [1, 1, 1],
-            [0, 1, 0],
-            [0, 1, 0],
-            [0, 1, 0],
-            [0, 1, 0],
-            [1, 1, 1],
-        ]),
-        'J': np.array([
-            [0, 1, 1, 1],
-            [0, 0, 0, 1],
-            [0, 0, 0, 1],
-            [0, 0, 0, 1],
-            [1, 0, 0, 1],
-            [0, 1, 1, 0],
-        ]),
-        'K': np.array([
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 1, 0],
-            [1, 0, 1, 0, 0],
-            [1, 1, 1, 0, 0],
-            [1, 0, 0, 1, 0],
-            [1, 0, 0, 0, 1],
-        ]),
-        'L': np.array([
-            [1, 0, 0, 0, 0],
-            [1, 0, 0, 0, 0],
-            [1, 0, 0, 0, 0],
-            [1, 0, 0, 0, 0],
-            [1, 0, 0, 0, 0],
-            [1, 1, 1, 1, 1],
-        ]),
-        'M': np.array([
-            [1, 0, 0, 0, 1],
-            [1, 1, 0, 1, 1],
-            [1, 0, 1, 0, 1],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-        ]),
-        'N': np.array([
-            [1, 0, 0, 0, 1],
-            [1, 1, 0, 0, 1],
-            [1, 0, 1, 0, 1],
-            [1, 0, 1, 0, 1],
-            [1, 0, 0, 1, 1],
-            [1, 0, 0, 0, 1],
-        ]),
-        'O': np.array([
-            [0, 1, 1, 1, 0],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [0, 1, 1, 1, 0],
-        ]),
-        'P': np.array([
-            [1, 1, 1, 1, 0],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [1, 1, 1, 1, 0],
-            [1, 0, 0, 0, 0],
-            [1, 0, 0, 0, 0],
-        ]),
-        'Q': np.array([
-            [0, 1, 1, 1, 0],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [1, 0, 1, 0, 1],
-            [1, 0, 0, 1, 0],
-            [0, 1, 1, 0, 1],
-        ]),
-        'R': np.array([
-            [1, 1, 1, 1, 0],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [1, 1, 1, 1, 0],
-            [1, 0, 0, 1, 0],
-            [1, 0, 0, 0, 1],
-        ]),
-        'S': np.array([
-            [0, 1, 1, 1, 1],
-            [1, 0, 0, 0, 0],
-            [1, 0, 0, 0, 0],
-            [0, 1, 1, 1, 0],
-            [0, 0, 0, 0, 1],
-            [1, 1, 1, 1, 0],
-        ]),
-        'T': np.array([
-            [1, 1, 1, 1, 1],
-            [0, 0, 1, 0, 0],
-            [0, 0, 1, 0, 0],
-            [0, 0, 1, 0, 0],
-            [0, 0, 1, 0, 0],
-            [0, 0, 1, 0, 0],
-        ]),
-        'U': np.array([
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [0, 1, 1, 1, 0],
-        ]),
-        'V': np.array([
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [0, 1, 0, 1, 0],
-            [0, 1, 0, 1, 0],
-            [0, 0, 1, 0, 0],
-        ]),
-        'W': np.array([
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [1, 0, 1, 0, 1],
-            [1, 0, 1, 0, 1],
-            [0, 1, 0, 1, 0],
-            [0, 1, 0, 1, 0],
-        ]),
-        'X': np.array([
-            [1, 0, 0, 0, 1],
-            [0, 1, 0, 1, 0],
-            [0, 0, 1, 0, 0],
-            [0, 0, 1, 0, 0],
-            [0, 1, 0, 1, 0],
-            [1, 0, 0, 0, 1],
-        ]),
-        'Y': np.array([
-            [1, 0, 0, 0, 1],
-            [1, 0, 0, 0, 1],
-            [0, 1, 0, 1, 0],
-            [0, 0, 1, 0, 0],
-            [0, 0, 1, 0, 0],
-            [0, 0, 1, 0, 0],
-        ]),
-        'Z': np.array([
-            [1, 1, 1, 1, 1],
-            [0, 0, 0, 0, 1],
-            [0, 0, 0, 1, 0],
-            [0, 0, 1, 0, 0],
-            [0, 1, 0, 0, 0],
-            [1, 1, 1, 1, 1],
-        ]),
-        '°': np.array([
-            [0, 1, 1, 0],
-            [1, 0, 0, 1],
-            [1, 0, 0, 1],
-            [0, 1, 1, 0],
-            [0, 0, 0, 0],
-            [0, 0, 0, 0],
-        ])
-    }
-}
+from app.services.fonts import available_sizes, available_styles, get_font_definition
 
-# Fixed cell width used when rendering in monospace mode.
-CELL_WIDTHS = {5: 3, 6: 5}
+DEFAULT_FONT_FAMILY = "classic"
+DEFAULT_FONT_SIZE = 6
+DEFAULT_FONT_STYLE = "regular"
 
 
-def write(frame: np.array, text: str, x=0, y=0, size=6, spacing=1, color=1, mono=False):
-    font = FONTS[size]
-    cell_w = CELL_WIDTHS[size] if mono else None
+def _get_font(font: str, size: int, style: str):
+    return get_font_definition(font, size, style)
+
+
+def _get_glyph(font: str, size: int, style: str, char: str) -> np.ndarray:
+    glyphs = _get_font(font, size, style).glyphs
+    if char not in glyphs:
+        raise KeyError(
+            f"Unsupported character '{char}' for font '{font}' size {size} style '{style}'"
+        )
+    return glyphs[char]
+
+
+def write(
+    frame: np.ndarray,
+    text: str,
+    x=0,
+    y=0,
+    *,
+    font=DEFAULT_FONT_FAMILY,
+    size=DEFAULT_FONT_SIZE,
+    style=DEFAULT_FONT_STYLE,
+    spacing=1,
+    color=1,
+):
+    font_def = _get_font(font, size, style)
+    cell_w = font_def.cell_width
     for char in text:
-        c = font[char]
+        glyph = _get_glyph(font, size, style, char)
         if cell_w is not None:
-            glyph_w = c.shape[1]
+            glyph_w = glyph.shape[1]
+            if glyph_w > cell_w:
+                raise ValueError(
+                    f"Glyph '{char}' width {glyph_w} exceeds monospace cell width {cell_w}"
+                )
             pad_left = (cell_w - glyph_w) // 2
             pad_right = cell_w - glyph_w - pad_left
-            c = np.pad(c, ((0, 0), (pad_left, pad_right)))
-        y1 = min(y+c.shape[0], frame.shape[0])
-        x1 = min(x+c.shape[1], frame.shape[1])
-        if color == 1:
-            frame[y:y1,x:x1] = c[0:y1-y,0:x1-x]
-        else:
-            frame[y:y1,x:x1] = np.logical_not(c[0:y1-y,0:x1-x])
-        x = x1+spacing
+            glyph = np.pad(glyph, ((0, 0), (pad_left, pad_right)))
+
+        y1 = min(y + glyph.shape[0], frame.shape[0])
+        x1 = min(x + glyph.shape[1], frame.shape[1])
+        if y1 > y and x1 > x:
+            if color == 1:
+                frame[y:y1, x:x1] = glyph[0 : y1 - y, 0 : x1 - x]
+            else:
+                frame[y:y1, x:x1] = np.logical_not(glyph[0 : y1 - y, 0 : x1 - x])
+
+        x = x1 + spacing
         if x >= frame.shape[1]:
             break
 
 
-def width(value: str, size=6, spacing=1, mono=False):
+def width(
+    value: str,
+    *,
+    font=DEFAULT_FONT_FAMILY,
+    size=DEFAULT_FONT_SIZE,
+    style=DEFAULT_FONT_STYLE,
+    spacing=1,
+):
     if not value:
         return 0
-    if mono:
-        cell_w = CELL_WIDTHS[size]
-        return len(value) * cell_w + spacing * (len(value) - 1)
-    font = FONTS[size]
-    return sum(font[ch].shape[1] for ch in value) + spacing * (len(value) - 1)
+
+    font_def = _get_font(font, size, style)
+    if font_def.cell_width is not None:
+        return len(value) * font_def.cell_width + spacing * (len(value) - 1)
+
+    return (
+        sum(_get_glyph(font, size, style, ch).shape[1] for ch in value)
+        + spacing * (len(value) - 1)
+    )
 
 
-def center_x(frame_width: int, value: str, size=6, spacing=1, mono=False):
-    return max(0, (frame_width - width(value, size=size, spacing=spacing, mono=mono)) // 2)
+def center_x(
+    frame_width: int,
+    value: str,
+    *,
+    font=DEFAULT_FONT_FAMILY,
+    size=DEFAULT_FONT_SIZE,
+    style=DEFAULT_FONT_STYLE,
+    spacing=1,
+):
+    return max(
+        0,
+        (
+            frame_width
+            - width(value, font=font, size=size, style=style, spacing=spacing)
+        )
+        // 2,
+    )
 
 
-def write_centered(frame: np.array, value: str, y=0, size=6, spacing=1, color=1, mono=False):
-    x = center_x(frame.shape[1], value, size=size, spacing=spacing, mono=mono)
-    write(frame, value, x=x, y=y, size=size, spacing=spacing, color=color, mono=mono)
+def write_centered(
+    frame: np.ndarray,
+    value: str,
+    *,
+    y=0,
+    font=DEFAULT_FONT_FAMILY,
+    size=DEFAULT_FONT_SIZE,
+    style=DEFAULT_FONT_STYLE,
+    spacing=1,
+    color=1,
+):
+    x = center_x(
+        frame.shape[1],
+        value,
+        font=font,
+        size=size,
+        style=style,
+        spacing=spacing,
+    )
+    write(
+        frame,
+        value,
+        x=x,
+        y=y,
+        font=font,
+        size=size,
+        style=style,
+        spacing=spacing,
+        color=color,
+    )
 
 
-def supported_characters(sizes=None):
-    """Return supported bitmap font characters for one or more font sizes."""
+def supported_characters(
+    *,
+    font=DEFAULT_FONT_FAMILY,
+    sizes=None,
+    styles=None,
+):
     if sizes is None:
-        sizes = tuple(FONTS.keys())
+        sizes = available_sizes(font)
 
     chars = set()
     for size in sizes:
-        chars.update(FONTS[size].keys())
+        requested_styles = styles if styles is not None else available_styles(font, size)
+        for style in requested_styles:
+            chars.update(_get_font(font, size, style).glyphs.keys())
+
     return frozenset(chars)

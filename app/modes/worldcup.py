@@ -18,7 +18,7 @@ class WorldCup:
         self.width = width
         self.height = height
         self.mode_manager = mode_manager
-        self.allowed_chars = supported_characters((5, 6))
+        self.allowed_chars = supported_characters(sizes=(5, 6), styles=("regular", "monospace"))
         self.last_refresh = 0.0
         self.last_payload = None
         self.known_scores = {}
@@ -126,7 +126,7 @@ class WorldCup:
             teams_text = self._sanitize(f"{home} {away}")
             event_id = match.get("event_id")
 
-            write_centered(frame, teams_text, y=band_top, size=5)
+            write_centered(frame, teams_text, y=band_top, size=5, style="regular")
             self._render_score(frame, event_id, home_score, away_score, y=band_top + 6)
 
             if blink_on:
@@ -145,7 +145,7 @@ class WorldCup:
         selection = payload.get("selection", "none")
 
         if match is None:
-            write(frame, "NO DATA", x=2, y=11, size=5)
+            write(frame, "NO DATA", x=2, y=11, size=5, style="regular")
             return
 
         home = self._team_code(match, "home_code")
@@ -163,8 +163,8 @@ class WorldCup:
         event_id = match.get("event_id")
 
         self._render_score(frame, event_id, home_score, away_score, y=4)
-        write_centered(frame, teams_text, y=14, size=5)
-        write_centered(frame, status_text, y=20, size=5)
+        write_centered(frame, teams_text, y=14, size=5, style="regular")
+        write_centered(frame, status_text, y=20, size=5, style="regular")
 
     def _score_visibility(self, event_id):
         now = time.time()
@@ -189,20 +189,20 @@ class WorldCup:
         away_text = self._sanitize(str(away_score))
         score_text = f"{home_text}:{away_text}"
 
-        x = center_x(self.width, score_text, size=6, mono=True)
-        home_w = width(home_text, size=6, mono=True)
-        colon_w = width(":", size=6, mono=True)
+        x = center_x(self.width, score_text, font="scoreline", size=6, style="regular")
+        home_w = width(home_text, font="scoreline", size=6, style="regular")
+        colon_w = width(":", font="scoreline", size=6, style="regular")
 
         show_home, show_away = self._score_visibility(event_id)
         if show_home:
-            write(frame, home_text, x=x, y=y, size=6, mono=True)
+            write(frame, home_text, x=x, y=y, font="scoreline", size=6, style="regular")
 
         colon_x = x + home_w + 1
-        write(frame, ":", x=colon_x, y=y, size=6, mono=True)
+        write(frame, ":", x=colon_x, y=y, font="scoreline", size=6, style="regular")
 
         away_x = colon_x + colon_w + 1
         if show_away:
-            write(frame, away_text, x=away_x, y=y, size=6, mono=True)
+            write(frame, away_text, x=away_x, y=y, font="scoreline", size=6, style="regular")
 
     def _collect_score_snapshot(self, payload):
         snapshot = {}
@@ -266,7 +266,14 @@ class WorldCup:
             frame[:, 0] = 1
             frame[:, -1] = 1
             frame[9:19, :] = 0
-            write(frame, "GOAL", x=center_x(self.width, "GOAL", size=6), y=11, size=6)
+            write(
+                frame,
+                "GOAL",
+                x=center_x(self.width, "GOAL", size=6, style="regular"),
+                y=11,
+                size=6,
+                style="regular",
+            )
             return
 
         checker = (np.indices(frame.shape).sum(axis=0) % 2).astype(np.uint8)
@@ -288,7 +295,7 @@ class WorldCup:
         self._refresh_if_needed()
         self.frame = np.zeros((self.height, self.width), dtype=np.uint8)
         if self.last_payload is None:
-            write(self.frame, "LOADING", x=2, y=11, size=5)
+            write(self.frame, "LOADING", x=2, y=11, size=5, style="regular")
             return self.frame
 
         self._render_match(self.frame, self.last_payload)

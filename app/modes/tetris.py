@@ -687,8 +687,14 @@ class Tetris(AutoDrum):
         if not self._player['game_over']:
             ui = np.zeros((self.height, 7), dtype=np.uint8)
             score_str = str(self._player['lines'] % 100)
-            text.write(ui, score_str, x=text.center_x(7, score_str, size=5),
-                       y=3, size=5)
+            text.write(
+                ui,
+                score_str,
+                x=text.center_x(7, score_str, size=5, style="regular"),
+                y=3,
+                size=5,
+                style="regular",
+            )
             nxt = self._player['next_rots'][0]
             pw = max(dc for _, dc in nxt) + 1
             # Center against cols 0..7 (melody band + separator line),
@@ -724,11 +730,11 @@ class Tetris(AutoDrum):
             else:
                 # Full-screen static display: "GAME / OVER", lines, high score
                 frame[:, :] = 0
-                text.write_centered(frame, 'GAME', y=2, size=5)
-                text.write_centered(frame, 'OVER', y=9, size=5)
+                text.write_centered(frame, 'GAME', y=2, size=5, style="regular")
+                text.write_centered(frame, 'OVER', y=9, size=5, style="regular")
                 score_str = str(self._player['lines'])
-                text.write_centered(frame, score_str, y=16, size=6)
+                text.write_centered(frame, score_str, y=16, size=6, style="regular")
                 hi_str = 'HI ' + str(self._best)
-                text.write_centered(frame, hi_str, y=23, size=5)
+                text.write_centered(frame, hi_str, y=23, size=5, style="regular")
 
         return frame

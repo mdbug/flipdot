@@ -140,7 +140,7 @@ class BeatMirror(AutoDrum):
         # The blink toggles inside this step update, so even the
         # invitation clicks in rhythm.
         if not m['mask'].any() and m['flips'] == 0 and m['beat'] % 4 < 2:
-            text.write_centered(bg, 'DANCE', y=h // 2 - 3, size=5)
+            text.write_centered(bg, 'DANCE', y=h // 2 - 3, size=5, style="regular")
         return bg
 
     # ------------------------------------------------------------------
@@ -264,6 +264,6 @@ class BeatMirror(AutoDrum):
         # Mode name overlay for the first 2 s
         if now - self.song_start_time < 2.0:
             frame[:6, :] = 0
-            text.write(frame, song['name'], x=1, y=0, size=5)
+            text.write(frame, song['name'], x=1, y=0, size=5, style="regular")
 
         return frame

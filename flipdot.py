@@ -206,7 +206,13 @@ def main():
                 angle = transition_state.angle
                 estimated_distance_str = f"{estimated_distance:.1f}" if estimated_distance is not None else " "
                 angle_str = f"{angle:02.0f}°" if angle is not None else " "
-                text.write(dots, f"{estimated_distance_str}  {angle_str}", y=23, size=5)
+                text.write(
+                    dots,
+                    f"{estimated_distance_str}  {angle_str}",
+                    y=23,
+                    size=5,
+                    style="regular",
+                )
 
             t_panel_start = time.time()
             panel.update(dots)

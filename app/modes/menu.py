@@ -71,7 +71,7 @@ class Button(MenuItem):
         super().__init__(label, row, width, on_click)
 
     def draw(self, frame):
-        write(frame, self.label, x=1, y=self.y, size=5)
+        write(frame, self.label, x=1, y=self.y, size=5, style="regular")
         sep = min(self.y+6, frame.shape[0]-1)
         frame[sep, 0:self.width] = 1
         self.draw_hover(frame)
@@ -82,7 +82,7 @@ class Checkbox(MenuItem):
         self.checked = checked
 
     def draw(self, frame):
-        write(frame, self.label, x=7, y=self.y, size=5)
+        write(frame, self.label, x=7, y=self.y, size=5, style="regular")
         sep = min(self.y+6, frame.shape[0]-1)
         frame[sep, 0:self.width] = 1
         self.draw_hover(frame)
