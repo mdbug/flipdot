@@ -20,14 +20,12 @@ class Pong(AutoDrum):
                       mirror of the wall flash), then a semicircular
                       ripple radiating from the impact point
     * serve         → a centre burst as the ball launches
-    * point scored  → a double shockwave (two concentric wavefronts)
-                      rolling out of the goal mouth for a full second,
-                      plus a three-note jingle through the voice
-                      stripes: ascending when the human scores,
-                      descending when the machine does
-    * game won      → a six-note arpeggio fanfare (ascending for the
-                      human, descending for the machine) over the final
-                      shockwave, then the result screen
+    * point scored  → the whole panel becomes the hit: a goal-mouth
+                      shockwave, full-screen sweeps, score flashes, and
+                      loud panel-wide percussion before the next serve
+    * game won      → a full-screen fanfare that expands, sweeps, and
+                      flashes across the whole display, then lands on
+                      the result screen
 
     Rallies accelerate the tempo (and therefore the ball) the same way
     Tetris lines speed the song — beat-locked physics gets faster with
@@ -58,6 +56,8 @@ class Pong(AutoDrum):
     BALL = 2           # ball is BALL×BALL px
     PLAYER_SPEED = 3   # px per step
     AI_SPEED = 2       # px per step
+    POINT_CELEBRATION_TIME = 1.25
+    WIN_FANFARE_TIME = 2.0
 
     SONGS = [
         {
@@ -69,7 +69,8 @@ class Pong(AutoDrum):
             ],                                     # the ball is the beat
             'bg': '_pong_background',
             'bg_step': '_pong_step',
-            # Voice stripes for the point jingles and win fanfare
+            # Voice stripes are retained for AutoDrum compatibility;
+            # Pong's score/win moments use full-screen events below.
             'melody': {
                 'pitches': (('g5', 79), ('e5', 76), ('c5', 72),
                             ('g4', 67), ('e4', 64), ('c4', 60)),
@@ -79,8 +80,8 @@ class Pong(AutoDrum):
     ]
 
     def __init__(self, width, height, mode_manager):
-        self._jingle = []    # (due_time, note) jingle/fanfare queue;
-        #                      must exist before the super() init chain
+        self._celebration_hits = []  # (due_time, instrument_name) queue;
+        #                             exists before the super() init chain
         super().__init__(width, height, mode_manager)
         self._left_raise_armed = True
         self._human_target = None      # latest finger-derived paddle top
@@ -106,6 +107,7 @@ class Pong(AutoDrum):
             'serve_wait': 8,             # steps until serve (ball blinks)
             'serve_dir': 1 if self.rng.random() < 0.5 else -1,
             'serve_blink': 0,
+            'celebration': None,
             'winner': None, 'win_time': None, 'win_text': '',
         }
         return self._compose_pong_bg()
@@ -169,13 +171,14 @@ class Pong(AutoDrum):
             p['serve_wait'] -= 1
             p['serve_blink'] += 1
             if p['serve_wait'] == 0:
-                # Wipe the point-jingle stripe residue in the SAME
-                # frame as the serve burst — silent cleanup — and drop
-                # any shimmer bookkeeping so nothing re-flips later.
+                # Wipe celebration/drum residue in the SAME frame as
+                # the serve burst, so cleanup is absorbed by the launch.
                 mc0, mc1 = self._voice_span
                 self.state[:, mc0:mc1] = 0
+                self._decay_events = []
                 self._voice_decay = []
                 self._voice_shimmer = None
+                p['celebration'] = None
                 p['ball'] = [self.width // 2 - 1,
                              (p['ft'] + p['fb'] - self.BALL) // 2]
                 p['v'] = [2 * p['serve_dir'],
@@ -253,15 +256,10 @@ class Pong(AutoDrum):
         p['rally'] = 0
         p['fx'].append({'kind': 'burst', 'ttl': 8, 'ttl0': 8,
                         'cx': exit_x, 'cy': exit_y})
+        self._start_celebration('point', side, now, exit_x, exit_y)
         if p['score'][side] >= self.WIN_SCORE:
             self._trigger_win(side, now)
             return
-        # Point jingle: ascending "ta-da" for the human (right side),
-        # descending "womp" for the machine; the last note rings out.
-        notes = (['e4', 'g4', 'c5_long'] if side == 1
-                 else ['g4', 'e4', 'c4_long'])
-        self._jingle = [(now + 0.1 + i * 0.12, n)
-                        for i, n in enumerate(notes)]
         p['serve_wait'] = 12
         p['serve_blink'] = 0
         # Serve toward the player who just lost the point
@@ -275,17 +273,142 @@ class Pong(AutoDrum):
         p['win_time'] = now
         human_won = side == 1 and self._human_active(now)
         p['win_text'] = 'YOU WIN' if human_won else 'AI WINS'
-        notes = (['c4', 'e4', 'g4', 'c5', 'e5', 'g5_long'] if human_won
-                 else ['g5', 'e5', 'c5', 'g4', 'e4', 'c4_long'])
-        self._jingle = [(now + 0.2 + i * 0.15, n)
-                        for i, n in enumerate(notes)]
+        exit_x = 0 if side == 1 else self.width - 1
+        exit_y = p['ball'][1] + self.BALL // 2
+        self._start_celebration('win', side, now, exit_x, exit_y)
 
     def _restart_match(self):
-        self._jingle = []
+        self._celebration_hits = []
         self._left_raise_armed = False
         # _load_song resets the sequencer and, via the 'bg' hook,
         # rebuilds the whole match state.
         self._load_song(0)
+
+    def _start_celebration(self, kind, side, now, exit_x, exit_y):
+        duration = (self.WIN_FANFARE_TIME if kind == 'win'
+                    else self.POINT_CELEBRATION_TIME)
+        self._pong['celebration'] = {
+            'kind': kind,
+            'side': side,
+            'start': now,
+            'duration': duration,
+            'cx': int(exit_x),
+            'cy': int(max(0, min(self.height - 1, exit_y))),
+            'score': tuple(self._pong['score']),
+        }
+        if kind == 'win':
+            names = (['crash', 'clap', 'tom', 'kick', 'clap', 'crash']
+                     if side == 1
+                     else ['crash', 'kick', 'tom', 'clap', 'kick', 'crash'])
+            offsets = [0.0, 0.16, 0.32, 0.50, 0.72, 1.02]
+        else:
+            names = (['crash', 'clap', 'tom', 'crash'] if side == 1
+                     else ['crash', 'kick', 'tom', 'clap'])
+            offsets = [0.0, 0.14, 0.30, 0.48]
+        self._celebration_hits = [(now + offset, name)
+                                  for offset, name in zip(offsets, names)]
+
+    def _render_celebration(self, now):
+        celebration = self._pong.get('celebration')
+        if celebration is None:
+            return None
+        elapsed = now - celebration['start']
+        if elapsed >= celebration['duration']:
+            if celebration['kind'] != 'win':
+                self._pong['celebration'] = None
+            return None
+
+        height, width = self.height, self.width
+        frame = np.zeros((height, width), dtype=np.uint8)
+        yy, xx = np.ogrid[:height, :width]
+        origin_x, origin_y = celebration['cx'], celebration['cy']
+        progress = max(0.0, min(1.0, elapsed / celebration['duration']))
+        score_side = celebration['side']
+        human_scored = score_side == 1
+
+        distance2 = (yy - origin_y) ** 2 + (xx - origin_x) ** 2
+        lead = 3 + int(progress * (width + height))
+        for radius in (lead, lead - 7, lead - 14):
+            if radius > 1:
+                frame[(distance2 >= (radius - 1) ** 2)
+                      & (distance2 <= (radius + 1) ** 2)] = 1
+
+        if celebration['kind'] == 'point':
+            self._draw_point_celebration(frame, celebration, elapsed,
+                                         progress, human_scored)
+        else:
+            self._draw_win_celebration(frame, celebration, elapsed,
+                                       progress, human_scored)
+        return frame
+
+    def _draw_point_celebration(self, frame, celebration, elapsed, progress,
+                                human_scored):
+        height, width = self.height, self.width
+        yy, xx = np.indices((height, width))
+        sweep = int(progress * (height + 8))
+        if human_scored:
+            frame[height - min(height, sweep):height, :] = 1
+            frame[((yy + xx + int(elapsed * 18)) % 6) < 2] ^= 1
+        else:
+            frame[:min(height, sweep), :] = 1
+            frame[((yy - xx + int(elapsed * 18)) % 6) < 2] ^= 1
+
+        band_width = max(3, int(width * (1.0 - progress)))
+        if human_scored:
+            frame[:, max(0, width - band_width):width] = 1
+        else:
+            frame[:, 0:min(width, band_width)] = 1
+
+        if 0.28 <= elapsed <= 0.75:
+            self._draw_big_score(frame, celebration['score'])
+        if elapsed >= 0.75 and int(elapsed * 12) % 2 == 0:
+            frame[height // 2 - 2:height // 2 + 2, :] = 1
+
+    def _draw_win_celebration(self, frame, celebration, elapsed, progress,
+                              human_won):
+        height, width = self.height, self.width
+        yy, xx = np.indices((height, width))
+        center_y, center_x = height // 2, width // 2
+        fan = np.abs(yy - center_y) <= (np.abs(xx - center_x) * progress + 1)
+        frame[fan] = 1
+
+        sweep = int(progress * (height + width))
+        if human_won:
+            frame[(height - 1 - yy) + np.abs(xx - center_x) < sweep] ^= 1
+        else:
+            frame[yy + np.abs(xx - center_x) < sweep] ^= 1
+
+        beat = int(elapsed / 0.16)
+        if beat % 2 == 0:
+            frame[(yy + xx + beat) % 4 == 0] = 1
+        else:
+            frame[(yy - xx + beat) % 4 == 0] = 1
+
+        if elapsed >= 1.05:
+            msg = self._pong['win_text']
+            msg_w = self._text_width(msg, size=5)
+            text.write(frame, msg, x=max(0, (width - msg_w) // 2),
+                       y=6, size=5)
+        if elapsed >= 1.45 and int(elapsed * 12) % 2 == 0:
+            frame[:, :] ^= 1
+
+    def _draw_big_score(self, frame, scores):
+        width = self.width
+        score_str = self._score_text(scores)
+        score_w = self._text_width(score_str, size=6)
+        text.write(frame, score_str, x=max(0, (width - score_w) // 2),
+                   y=10, size=6)
+
+    @staticmethod
+    def _score_text(scores):
+        return '%d:%d' % (scores[0], scores[1])
+
+    @staticmethod
+    def _text_width(value, size=5, spacing=1):
+        font = text.FONTS[size]
+        if not value:
+            return 0
+        return sum(font[ch].shape[1] for ch in value) + spacing * (len(value) - 1)
 
     # ------------------------------------------------------------------
     # Rendering
@@ -343,8 +466,9 @@ class Pong(AutoDrum):
                 mr = (p['ft'] + p['fb']) // 2
                 bg[mr - 3:mr + 3, w // 2 - 3:w // 2 + 3] = 1
         # Score digits at the top (drawn last, over the ball — classic)
-        text.write(bg, str(p['score'][0]), x=w // 2 - 6, y=1, size=5)
-        text.write(bg, str(p['score'][1]), x=w // 2 + 4, y=1, size=5)
+        score_str = self._score_text(p['score'])
+        score_w = self._text_width(score_str, size=5)
+        text.write(bg, score_str, x=max(0, (w - score_w) // 2), y=1, size=5)
         return bg
 
     # ------------------------------------------------------------------
@@ -386,11 +510,11 @@ class Pong(AutoDrum):
 
         self._handle_gestures(pose_results, now)
 
-        # Fire any scheduled jingle/fanfare notes through the stripes
-        due = [e for e in self._jingle if e[0] <= now]
-        self._jingle = [e for e in self._jingle if e[0] > now]
-        for _, note in due:
-            self._hit(note, now)
+        due = [e for e in self._celebration_hits if e[0] <= now]
+        self._celebration_hits = [e for e in self._celebration_hits
+                                  if e[0] > now]
+        for _, instrument_name in due:
+            self._hit(instrument_name, now)
 
         self._tick_voice(now)
         # The sequencer keeps ticking after a win too: the pattern is
@@ -401,21 +525,25 @@ class Pong(AutoDrum):
         if self._bg_frame is not None:
             frame ^= self._bg_frame
 
+        celebration_frame = self._render_celebration(now)
+        if celebration_frame is not None:
+            frame = celebration_frame
+
         # Mode name overlay for the first 2 s
-        if now - self.song_start_time < 2.0:
+        if celebration_frame is None and now - self.song_start_time < 2.0:
             frame[:6, :] = 0
             text.write(frame, song['name'], x=1, y=0, size=5)
 
         # Win screen: fanfare plays over the final court for a moment,
         # then the static result
-        if p['winner'] is not None and now - p['win_time'] >= 2.0:
+        if p['winner'] is not None and now - p['win_time'] >= self.WIN_FANFARE_TIME:
             frame[:, :] = 0
             msg = p['win_text']
-            msg_w = len(msg) * 4 - 1
+            msg_w = self._text_width(msg, size=5)
             text.write(frame, msg, x=max(0, (self.width - msg_w) // 2),
                        y=6, size=5)
-            score_str = '%d %d' % (p['score'][0], p['score'][1])
-            score_w = len(score_str) * 6 - 1
+            score_str = self._score_text(p['score'])
+            score_w = self._text_width(score_str, size=6)
             text.write(frame, score_str,
                        x=max(0, (self.width - score_w) // 2), y=15, size=6)
 
