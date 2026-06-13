@@ -62,7 +62,9 @@ class MenuItem:
         if self.hovered:
             duration = self.get_hover_duration()
             slice = min(int(self.width*duration/MenuItem.CLICK_TIME), 28)
-            frame[self.y:self.y+6, 0:slice] = frame[self.y:self.y+6, 0:slice] ^ 1
+            hover_top = max(0, self.y - 1)
+            hover_bottom = min(frame.shape[0], self.y + 6)
+            frame[hover_top:hover_bottom, 0:slice] = frame[hover_top:hover_bottom, 0:slice] ^ 1
 
 class Button(MenuItem):
     def __init__(self, label, row, width, on_click=None):
