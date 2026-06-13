@@ -437,6 +437,9 @@ class AutoDrum:
                     'voice': True, 'decay': list(self.MELODY_LONG_DECAY)}
                 self._melody_names.append(name + '_long')
 
+    def next_song(self):
+        self._load_song(self.song_index + 1)
+
     def _tetris_background(self):
         """Start the auto-playing Tetris demo; returns its first frame.
 
@@ -740,7 +743,7 @@ class AutoDrum:
             if self._skip_hold_start is None:
                 self._skip_hold_start = now
             elif now - self._skip_hold_start >= self.SKIP_HOLD_TIME:
-                self._load_song(self.song_index + 1)
+                self.next_song()
                 return self.state.copy()
         else:
             self._skip_hold_start = None

@@ -18,6 +18,7 @@ class RenderContext:
     mode_time: float
     panel_width: int
     panel_height: int
+    input_hub: Any = None
 
 
 class ModeRegistry:

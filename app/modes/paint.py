@@ -20,35 +20,74 @@ class Paint:
         self.last_pointer_position = None
         self.last_pointer_duration = 0
 
-    def get_frame(self, pose_results):
-        finger_x, finger_y = human_pose.get_right_index_finger_position(pose_results)
-        if finger_x is not None and finger_y is not None:
-            pixel_x = min(int(self.width - (finger_x*self.width)), self.width - 1)
-            pixel_y = min(int(finger_y * self.height), self.height - 1)
+    def _pointer_to_pixel(self, source, x, y):
+        if source == "pose":
+            pixel_x = int(self.width - (x * self.width))
+        else:
+            pixel_x = int(x * self.width)
+        pixel_y = int(y * self.height)
+        pixel_x = max(0, min(self.width - 1, pixel_x))
+        pixel_y = max(0, min(self.height - 1, pixel_y))
+        return pixel_x, pixel_y
 
-            if self.last_pointer_position is not None:
-                if (pixel_x, pixel_y) == self.last_pointer_position:
-                    self.last_pointer_duration += 1
-                else:
-                    self.last_pointer_duration = 0
-                
-                if self.last_pointer_duration == self.CLICK_TIME:
-                    if pixel_x == self.width - 1 and pixel_y == 0:
-                        self.canvas[:, :] = 0
-                        self.drawing = False
-                    else:
-                        self.drawing = not self.drawing
+    def get_frame(self, pose_results, input_hub=None):
+        pointer_source = "pose"
+        web_button_down = input_hub.is_button_down(source="web") if input_hub is not None else False
+        pointer_sample = input_hub.get_active_pointer(max_age_sec=0.8) if input_hub is not None else None
+        if pointer_sample is not None:
+            pointer_source = pointer_sample.source
+            pixel_x, pixel_y = self._pointer_to_pixel(pointer_sample.source, pointer_sample.x, pointer_sample.y)
+            has_pointer = True
+        else:
+            finger_x, finger_y = human_pose.get_right_index_finger_position(pose_results)
+            has_pointer = finger_x is not None and finger_y is not None
+            if has_pointer:
+                pixel_x, pixel_y = self._pointer_to_pixel("pose", finger_x, finger_y)
 
-                if self.drawing:    
+        if has_pointer:
+
+            if pointer_source == "web":
+                self.last_pointer_duration = 0
+                if self.last_pointer_position is not None and web_button_down:
                     cv2.line(self.canvas, self.last_pointer_position, (pixel_x, pixel_y), 1, thickness=1)
+            else:
+                if self.last_pointer_position is not None:
+                    if (pixel_x, pixel_y) == self.last_pointer_position:
+                        self.last_pointer_duration += 1
+                    else:
+                        self.last_pointer_duration = 0
+
+                    if self.last_pointer_duration == self.CLICK_TIME:
+                        if pixel_x == self.width - 1 and pixel_y == 0:
+                            self.canvas[:, :] = 0
+                            self.drawing = False
+                        else:
+                            self.drawing = not self.drawing
+
+                    if self.drawing:
+                        cv2.line(self.canvas, self.last_pointer_position, (pixel_x, pixel_y), 1, thickness=1)
 
             self.last_pointer_position = (pixel_x, pixel_y)
         else:
             self.last_pointer_position = None
 
         frame = self.canvas.copy()
-        frame = human_pose.draw_right_index_pointer(frame, pose_results, size=2)
-        if not self.drawing:
+        if pointer_source == "pose":
+            frame = human_pose.draw_right_index_pointer(frame, pose_results, size=2)
+        else:
+            if self.last_pointer_position is not None:
+                pointer_x = self.last_pointer_position[0] / self.width
+                pointer_y = self.last_pointer_position[1] / self.height
+            else:
+                pointer_x = None
+                pointer_y = None
+            frame = human_pose.draw_pointer(frame, pointer_x, pointer_y, size=2, mirror_x=False)
+        if pointer_source == "web":
+            if web_button_down:
+                frame[self.height-1, 0:self.width] = 1
+            else:
+                frame[self.height-1, 0:self.width] = 0
+        elif not self.drawing:
             if self.last_pointer_duration > self.CLICK_TIME:
                 frame[self.height-1, 0:self.width] = 0
             else:

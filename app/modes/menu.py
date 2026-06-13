@@ -393,20 +393,49 @@ class Menu:
                 if progress > 0:
                     frame[indicator_y:self.height, x0:x0 + progress] = 1
 
-    def get_frame(self, pose_results):
+    def _pointer_to_panel(self, source, x, y):
+        if source == "pose":
+            panel_x = int(self.width - (x * self.width))
+        else:
+            panel_x = int(x * self.width)
+        panel_y = int(y * self.height)
+        panel_x = max(0, min(self.width - 1, panel_x))
+        panel_y = max(0, min(self.height - 1, panel_y))
+        return panel_x, panel_y
+
+    def get_frame(self, pose_results, input_hub=None):
         frame = np.zeros((self.height, self.width), dtype=np.uint8)
 
-        finger_x, finger_y = human_pose.get_right_index_finger_position(pose_results)
         now = time.time()
+        pointer_source = "pose"
 
-        if finger_x is not None and finger_y is not None:
-            panel_x = int(self.width - (finger_x * self.width))
-            panel_y = int(finger_y * self.height)
-            panel_x = max(0, min(self.width - 1, panel_x))
-            panel_y = max(0, min(self.height - 1, panel_y))
+        panel_x = None
+        panel_y = None
+        active_pointer = input_hub.get_active_pointer(max_age_sec=0.8) if input_hub is not None else None
+
+        if active_pointer is not None:
+            pointer_source = active_pointer.source
+            panel_x, panel_y = self._pointer_to_panel(active_pointer.source, active_pointer.x, active_pointer.y)
         else:
-            panel_x = None
-            panel_y = None
+            finger_x, finger_y = human_pose.get_right_index_finger_position(pose_results)
+            if finger_x is not None and finger_y is not None:
+                panel_x, panel_y = self._pointer_to_panel("pose", finger_x, finger_y)
+
+        if input_hub is not None:
+            for click in input_hub.pop_clicks(max_age_sec=1.2):
+                click_x, click_y = self._pointer_to_panel(click.source, click.x, click.y)
+                clicked_indicator_page = self._get_indicator_page(click_x, click_y)
+                if clicked_indicator_page is not None:
+                    if clicked_indicator_page != self.page:
+                        self.page = clicked_indicator_page
+                        for item in self.items:
+                            item.hover(False)
+                    continue
+
+                for item in self.items:
+                    if item.is_hovered(click_y):
+                        item.click()
+                        break
 
         hovered_indicator_page = self._get_indicator_page(panel_x, panel_y)
         in_indicator_area = hovered_indicator_page is not None
@@ -421,13 +450,18 @@ class Menu:
         for item in self.items:
             if in_indicator_area:
                 item.hover(False)
-            elif finger_y is not None:
-                item.hover(item.is_hovered(finger_y * self.height))
+            elif panel_y is not None:
+                item.hover(item.is_hovered(panel_y))
             else:
                 item.hover(False)
 
             item.draw(frame)
 
         self._draw_page_indicator(frame)
-        frame = human_pose.draw_right_index_pointer(frame, pose_results)
+        if pointer_source == "pose":
+            frame = human_pose.draw_right_index_pointer(frame, pose_results)
+        else:
+            pointer_x = (panel_x / self.width) if panel_x is not None else None
+            pointer_y = (panel_y / self.height) if panel_y is not None else None
+            frame = human_pose.draw_pointer(frame, pointer_x, pointer_y, mirror_x=False)
         return frame

@@ -10,6 +10,8 @@ mediapipe = "==0.10.18"
 pyserial = "*"
 pillow = "*"
 python-dotenv = "*"
+fastapi = "*"
+uvicorn = "*"
 flippydot = {editable = true, path = "./flipPyDot"}
 
 [dev-packages]

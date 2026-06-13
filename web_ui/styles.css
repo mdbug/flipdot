@@ -1,0 +1,157 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Bricolage+Grotesque:wght@600;700&display=swap");
+
+:root {
+  --bg: #09111d;
+  --panel: #121f31;
+  --panel-edge: #2b3d52;
+  --fg: #f9f2d0;
+  --muted: #9fb0c5;
+  --accent: #1d8f7a;
+  --accent-hover: #27a88f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--fg);
+  font-family: "Space Grotesk", sans-serif;
+  overscroll-behavior: none;
+  background:
+    radial-gradient(circle at 20% 15%, #223349 0%, transparent 35%),
+    radial-gradient(circle at 80% 80%, #1f2d3f 0%, transparent 30%),
+    linear-gradient(150deg, #070d17 0%, #0b1523 55%, #0f1a2a 100%);
+}
+
+.shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+  padding: 1.25rem;
+  max-width: 1120px;
+  margin: 0 auto;
+}
+
+.panel-wrap {
+  background: rgba(16, 28, 43, 0.88);
+  border: 1px solid var(--panel-edge);
+  border-radius: 24px;
+  padding: 1rem;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.35);
+}
+
+.panel-head h1 {
+  font-family: "Bricolage Grotesque", sans-serif;
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+
+.panel-head p {
+  margin: 0.25rem 0 1rem;
+  color: var(--muted);
+}
+
+#matrix {
+  width: min(100%, 560px);
+  height: auto;
+  aspect-ratio: 1;
+  display: block;
+  border: 1px solid #304355;
+  background: var(--panel);
+  image-rendering: pixelated;
+  margin: 0 auto;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.status-row {
+  margin-top: 0.75rem;
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.controls {
+  background: rgba(16, 28, 43, 0.88);
+  border: 1px solid var(--panel-edge);
+  border-radius: 24px;
+  padding: 1rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+#modeControls {
+  display: grid;
+  gap: 0.75rem;
+}
+
+button {
+  width: 100%;
+  border: none;
+  border-radius: 14px;
+  padding: 0.85rem 1rem;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button.accent {
+  background: var(--accent);
+  color: #fff7ec;
+}
+
+button.accent:hover {
+  background: var(--accent-hover);
+}
+
+button.secondary {
+  background: transparent;
+  border: 1px solid #3a5068;
+  color: var(--fg);
+}
+
+button.secondary:hover {
+  border-color: #567493;
+  background: rgba(60, 90, 120, 0.18);
+}
+
+@media (max-width: 899px) {
+  .shell {
+    padding: 1rem 0.5rem 0 0.5rem;
+    gap: 1rem;
+  }
+
+  .panel-wrap {
+    border-left: 0;
+    border-right: 0;
+    border-radius: 0;
+    padding: 0;
+  }
+
+  #matrix {
+    width: calc(100vw - 1rem);
+    max-width: calc(100vw - 1rem);
+    margin: 0 auto;
+  }
+
+  .status-row,
+  .controls {
+    margin-left: 1rem;
+    margin-right: 1rem;
+  }
+}
+
+@media (min-width: 900px) {
+  .shell {
+    grid-template-columns: 2fr 1fr;
+    align-items: start;
+    padding: 2rem;
+  }
+}

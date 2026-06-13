@@ -855,10 +855,17 @@ def is_left_hand_raised(pose_results=None):
 
 def draw_right_index_pointer(frame, pose_results=None, size=1):
     finger_x, finger_y = get_right_index_finger_position(pose_results)
+    return draw_pointer(frame, finger_x, finger_y, size=size, mirror_x=True)
+
+
+def draw_pointer(frame, finger_x, finger_y, size=1, mirror_x=True):
     height, width = frame.shape
 
     if finger_x is not None and finger_y is not None:
-        x = int(width - (finger_x * width))
+        if mirror_x:
+            x = int(width - (finger_x * width))
+        else:
+            x = int(finger_x * width)
         y = int(finger_y * height)
         if 0 <= x < width and 0 <= y < height:
             cv2.circle(frame, (x, y), size//2, 0, -1)

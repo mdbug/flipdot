@@ -56,9 +56,9 @@ def build_mode_registry(
 
     registry.register(ModeManager.MODE_SLEEP, render_sleep)
     registry.register(ModeManager.MODE_POSE, render_pose)
-    registry.register(ModeManager.MODE_MENU, lambda c: menu.get_frame(c.pose_results))
+    registry.register(ModeManager.MODE_MENU, lambda c: menu.get_frame(c.pose_results, input_hub=c.input_hub))
     registry.register(ModeManager.MODE_CLOCK, render_clock)
-    registry.register(ModeManager.MODE_PAINT, lambda c: paint.get_frame(c.pose_results))
+    registry.register(ModeManager.MODE_PAINT, lambda c: paint.get_frame(c.pose_results, input_hub=c.input_hub))
     registry.register(ModeManager.MODE_CARICATURE, lambda c: caricature.get_frame(c.frame))
     registry.register(ModeManager.MODE_PERCUSSION, lambda c: percussion.get_frame(c.pose_results))
     registry.register(ModeManager.MODE_AUTODRUM, lambda c: autodrum.get_frame(c.pose_results))

@@ -64,6 +64,15 @@ class ModeManager:
                 self.set_mode(previous_mode)
             self.menu_click_start = None
 
+    def toggle_menu(self):
+        if self.mode != self.MODE_MENU:
+            self.set_mode(self.MODE_MENU)
+            return
+
+        previous_mode = self.last_mode if self.last_mode not in (None, self.MODE_MENU) else self.MODE_POSE
+        self.set_mode(previous_mode)
+        self.menu_click_start = None
+
     def reset_menu_click(self):
         self.menu_click_start = None
 

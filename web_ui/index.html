@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>Flipdot Console</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel-wrap">
+        <canvas id="matrix" width="560" height="560" aria-label="Flipdot display"></canvas>
+        <div class="status-row">
+          <span id="statusText">Connecting...</span>
+          <span id="sourceText">Source: none</span>
+        </div>
+      </section>
+
+      <section class="controls">
+        <div id="modeControls"></div>
+      </section>
+    </main>
+  </body>
+</html>
