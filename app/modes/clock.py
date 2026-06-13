@@ -1,6 +1,6 @@
 from datetime import datetime
 from app.services.weather import get_weather_forecast
-from app.services.text import write
+from app.services.text import write, write_centered
 import time
 import numpy as np
 
@@ -34,7 +34,7 @@ class Clock:
         date_now = now.strftime('%d.%m.%y')
         time_now = now.strftime('%H:%M')
         write(self.frame, date_now, y=0, size=5)
-        write(self.frame, time_now, x=1, y=6, size=6)
+        write_centered(self.frame, time_now, y=6, size=6, mono=True, spacing=0)
 
         self.frame[25, 1:27] = 1
         self.frame[26, 1] = 1

@@ -54,6 +54,9 @@ sudo logrotate -f /etc/logrotate.d/flipdot # force log rotation check
 ## Developer workflows
 
 - **Run locally (dev machine):** `PREVIEW=true python3 flipdot.py`
+- **Run tests locally:** `pipenv run pytest` (from repo root).
+  - Current suite covers core state/policy modules, deterministic services, and selected mode/registry behavior under `tests/`.
+  - Tests are designed to run without hardware/network and avoid hard dependency on MediaPipe model files.
 - **Run on device:** `sudo systemctl start flipdot.service`; the service auto-restarts on crash (`Restart=always`).
 - **Deploy:** `./deploy.sh [--debug]` — rsyncs to `flipdot@flipdot:/home/flipdot/flipdot` (with `--delete`, but `models/` and `.env` are excluded), sets `DEBUG` in `.env`, ensures `/var/log/flipdot` exists, installs `ops/systemd/flipdot.service` and `ops/logrotate/flipdot` on the device, then reloads and restarts `flipdot.service`.
   - **Important:** the `models/` directory is excluded from rsync. MediaPipe `.task` model files must be downloaded manually once:
@@ -63,7 +66,6 @@ sudo logrotate -f /etc/logrotate.d/flipdot # force log rotation check
     wget -q https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task
     wget -q https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
     ```
-- **No test suite** for the app; only `flipPyDot/test/test.py` covers the vendored driver.
 
 ## Gotchas
 

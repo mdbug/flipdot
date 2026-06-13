@@ -20,6 +20,7 @@ def build_mode_registry(
     beatmirror,
     tetris_game,
     pong_game,
+    worldcup,
     img_sleep: np.ndarray,
     clock_resolve_time: float,
     clock_disolve_time: float,
@@ -65,5 +66,6 @@ def build_mode_registry(
     registry.register(ModeManager.MODE_BEATMIRROR, lambda c: beatmirror.get_frame(c.pose_results))
     registry.register(ModeManager.MODE_TETRIS, lambda c: tetris_game.get_frame(c.pose_results))
     registry.register(ModeManager.MODE_PONG, lambda c: pong_game.get_frame(c.pose_results))
+    registry.register(ModeManager.MODE_WORLDCUP, lambda c: worldcup.get_frame(c.pose_results))
 
     return registry

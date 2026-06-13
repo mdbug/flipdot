@@ -108,6 +108,7 @@ def main():
     beatmirror = mode_instances["beatmirror"]
     tetris_game = mode_instances["tetris"]
     pong_game = mode_instances["pong"]
+    worldcup = mode_instances["worldcup"]
     img_sleep = image.load('sleep.png')
     mode_registry = build_mode_registry(
         clock=clock,
@@ -119,6 +120,7 @@ def main():
         beatmirror=beatmirror,
         tetris_game=tetris_game,
         pong_game=pong_game,
+        worldcup=worldcup,
         img_sleep=img_sleep,
         clock_resolve_time=CLOCK_RESOLVE_TIME,
         clock_disolve_time=CLOCK_DISOLVE_TIME,

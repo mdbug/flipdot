@@ -3,6 +3,7 @@ from datetime import datetime
 import time
 
 import app.services.human_pose as human_pose
+from app.services.worldcup import get_worldcup_scorecard
 from app.core.mode_manager import ModeManager
 
 
@@ -20,6 +21,8 @@ class TransitionState:
 class TransitionPolicy:
     """Centralized mode transition logic for the main loop."""
 
+    WORLDCUP_LIVE_CHECK_INTERVAL = 30.0
+
     def __init__(
         self,
         *,
@@ -36,6 +39,19 @@ class TransitionPolicy:
         self.face_mesh_submit_interval = 0.0 if face_mesh_max_fps <= 0 else (1.0 / face_mesh_max_fps)
         self._last_face_mesh_submit = 0.0
         self._cached_face_mesh_results = None
+        self._last_worldcup_live_check = 0.0
+        self._cached_worldcup_live = False
+
+    def _is_worldcup_live(self) -> bool:
+        now_mono = time.monotonic()
+        if now_mono - self._last_worldcup_live_check < self.WORLDCUP_LIVE_CHECK_INTERVAL:
+            return self._cached_worldcup_live
+
+        self._last_worldcup_live_check = now_mono
+        payload = get_worldcup_scorecard()
+        events = payload.get("events") or []
+        self._cached_worldcup_live = any(event.get("status_bucket") == "live" for event in events)
+        return self._cached_worldcup_live
 
     def is_sleep_hour(self, now: datetime | None = None) -> bool:
         if now is None:
@@ -63,6 +79,11 @@ class TransitionPolicy:
 
         current_mode = mode_manager.mode
 
+        # Prioritize live World Cup information when idle on clock mode.
+        if current_mode == ModeManager.MODE_CLOCK and self._is_worldcup_live():
+            mode_manager.set_mode(ModeManager.MODE_WORLDCUP)
+            return state
+
         if current_mode in (
             ModeManager.MODE_MENU,
             ModeManager.MODE_PAINT,
@@ -71,6 +92,7 @@ class TransitionPolicy:
             ModeManager.MODE_BEATMIRROR,
             ModeManager.MODE_TETRIS,
             ModeManager.MODE_PONG,
+            ModeManager.MODE_WORLDCUP,
         ):
             if human_pose.is_arms_crossed(pose_results):
                 mode_manager.click_menu()

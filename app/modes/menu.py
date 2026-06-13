@@ -139,18 +139,18 @@ class Menu:
         self.pages = [
             [
                 Button("CLOCK", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_CLOCK)),
-                Button("PAINT", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_PAINT)),
+                Button("WRLDCUP", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_WORLDCUP)),
                 Checkbox("POSE", 2, width, checked=mode_manager.pose_enabled, on_click=mode_manager.toggle_pose_enabled),
             ],
             [
-                Button("CARIC", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_CARICATURE)),
-                Button("DRUM", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_PERCUSSION)),
-                Button("BEATS", 2, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_AUTODRUM)),
+                Button("DRUM", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_PERCUSSION)),
+                Button("BEATS", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_AUTODRUM)),
+                Button("MIRROR", 2, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_BEATMIRROR)),
             ],
             [
                 Button("TETRIS", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_TETRIS)),
-                Button("MIRROR", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_BEATMIRROR)),
-                Button("PONG", 2, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_PONG)),
+                Button("PONG", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_PONG)),
+                Button("PAINT", 2, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_PAINT)),
             ],
         ]
 
