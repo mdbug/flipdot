@@ -1,5 +1,5 @@
 import numpy as np
-import human_pose
+import app.services.human_pose as human_pose
 import cv2
 
 class Paint:

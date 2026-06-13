@@ -1,8 +1,8 @@
 import numpy as np
 import time
-import text
-import human_pose
-from autodrum import AutoDrum
+import app.services.text as text
+import app.services.human_pose as human_pose
+from app.modes.autodrum import AutoDrum
 
 # Index of the TETRIS song in AutoDrum.SONGS, looked up by name so it
 # stays correct if the song list is ever reordered.
@@ -617,8 +617,8 @@ class Tetris(AutoDrum):
         if not self._player['game_over']:
             ui = np.zeros((self.height, 7), dtype=np.uint8)
             score_str = str(min(self._player['lines'], 99))
-            score_w = len(score_str) * 4 - 1
-            text.write(ui, score_str, x=max(0, (7 - score_w) // 2), y=1, size=5)
+            text.write(ui, score_str, x=text.center_x(7, score_str, size=5),
+                       y=1, size=5)
             nxt = self._player['next_rots'][0]
             pw = max(dc for _, dc in nxt) + 1
             px = max(0, (7 - pw) // 2)
@@ -638,18 +638,11 @@ class Tetris(AutoDrum):
             else:
                 # Full-screen static display: "GAME / OVER", lines, high score
                 frame[:, :] = 0
-                # Each word = 4 chars × (3 px + 1 px spacing) − 1 trailing = 15 px
-                word_x = (self.width - 15) // 2
-                text.write(frame, 'GAME', x=word_x, y=2, size=5)
-                text.write(frame, 'OVER', x=word_x, y=9, size=5)
+                text.write_centered(frame, 'GAME', y=2, size=5)
+                text.write_centered(frame, 'OVER', y=9, size=5)
                 score_str = str(self._player['lines'])
-                # size-6 digits: 5 px wide + 1 px spacing per char, minus trailing
-                score_width = len(score_str) * 6 - 1
-                score_x = max(0, (self.width - score_width) // 2)
-                text.write(frame, score_str, x=score_x, y=16, size=6)
+                text.write_centered(frame, score_str, y=16, size=6)
                 hi_str = 'HI ' + str(self._best)
-                hi_w = len(hi_str) * 4 - 1
-                text.write(frame, hi_str,
-                           x=max(0, (self.width - hi_w) // 2), y=23, size=5)
+                text.write_centered(frame, hi_str, y=23, size=5)
 
         return frame

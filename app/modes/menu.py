@@ -1,9 +1,9 @@
 
-from text import write
+from app.services.text import write
 import numpy as np
 import time
-import human_pose
-from mode_manager import ModeManager
+import app.services.human_pose as human_pose
+from app.core.mode_manager import ModeManager
 
 try:
     from mediapipe.python.solutions.pose import PoseLandmark

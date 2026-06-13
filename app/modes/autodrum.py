@@ -1,8 +1,8 @@
 import numpy as np
 import time
 from PIL import Image
-import text
-import human_pose
+import app.services.text as text
+import app.services.human_pose as human_pose
 
 
 class AutoDrum:

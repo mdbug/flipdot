@@ -1,6 +1,6 @@
 from datetime import datetime
-from weather import get_weather_forecast
-from text import write
+from app.services.weather import get_weather_forecast
+from app.services.text import write
 import time
 import numpy as np
 

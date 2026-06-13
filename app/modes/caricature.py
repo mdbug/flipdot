@@ -9,8 +9,8 @@ import numpy as np
 import PIL.Image
 import requests
 
-import text as text_module
-from mode_manager import ModeManager
+import app.services.text as text_module
+from app.core.mode_manager import ModeManager
 
 
 class Caricature:

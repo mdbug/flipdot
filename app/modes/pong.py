@@ -1,8 +1,8 @@
 import numpy as np
 import time
-import text
-import human_pose
-from autodrum import AutoDrum
+import app.services.text as text
+import app.services.human_pose as human_pose
+from app.modes.autodrum import AutoDrum
 
 
 class Pong(AutoDrum):
@@ -386,29 +386,17 @@ class Pong(AutoDrum):
 
         if elapsed >= 1.05:
             msg = self._pong['win_text']
-            msg_w = self._text_width(msg, size=5)
-            text.write(frame, msg, x=max(0, (width - msg_w) // 2),
-                       y=6, size=5)
+            text.write_centered(frame, msg, y=6, size=5)
         if elapsed >= 1.45 and int(elapsed * 12) % 2 == 0:
             frame[:, :] ^= 1
 
     def _draw_big_score(self, frame, scores):
-        width = self.width
         score_str = self._score_text(scores)
-        score_w = self._text_width(score_str, size=6)
-        text.write(frame, score_str, x=max(0, (width - score_w) // 2),
-                   y=10, size=6)
+        text.write_centered(frame, score_str, y=10, size=6)
 
     @staticmethod
     def _score_text(scores):
         return '%d:%d' % (scores[0], scores[1])
-
-    @staticmethod
-    def _text_width(value, size=5, spacing=1):
-        font = text.FONTS[size]
-        if not value:
-            return 0
-        return sum(font[ch].shape[1] for ch in value) + spacing * (len(value) - 1)
 
     # ------------------------------------------------------------------
     # Rendering
@@ -467,8 +455,7 @@ class Pong(AutoDrum):
                 bg[mr - 3:mr + 3, w // 2 - 3:w // 2 + 3] = 1
         # Score digits at the top (drawn last, over the ball — classic)
         score_str = self._score_text(p['score'])
-        score_w = self._text_width(score_str, size=5)
-        text.write(bg, score_str, x=max(0, (w - score_w) // 2), y=1, size=5)
+        text.write_centered(bg, score_str, y=1, size=5)
         return bg
 
     # ------------------------------------------------------------------
@@ -539,12 +526,8 @@ class Pong(AutoDrum):
         if p['winner'] is not None and now - p['win_time'] >= self.WIN_FANFARE_TIME:
             frame[:, :] = 0
             msg = p['win_text']
-            msg_w = self._text_width(msg, size=5)
-            text.write(frame, msg, x=max(0, (self.width - msg_w) // 2),
-                       y=6, size=5)
+            text.write_centered(frame, msg, y=6, size=5)
             score_str = self._score_text(p['score'])
-            score_w = self._text_width(score_str, size=6)
-            text.write(frame, score_str,
-                       x=max(0, (self.width - score_w) // 2), y=15, size=6)
+            text.write_centered(frame, score_str, y=15, size=6)
 
         return frame

@@ -1,6 +1,6 @@
 import numpy as np
 import time
-import human_pose
+import app.services.human_pose as human_pose
 
 
 class Percussion:

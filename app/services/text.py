@@ -442,3 +442,19 @@ def write(frame: np.array, text: str, x=0, y=0, size=6, spacing=1, color=1):
         x = x1+spacing
         if x >= frame.shape[1]:
             break
+
+
+def width(value: str, size=6, spacing=1):
+    font = FONTS[size]
+    if not value:
+        return 0
+    return sum(font[ch].shape[1] for ch in value) + spacing * (len(value) - 1)
+
+
+def center_x(frame_width: int, value: str, size=6, spacing=1):
+    return max(0, (frame_width - width(value, size=size, spacing=spacing)) // 2)
+
+
+def write_centered(frame: np.array, value: str, y=0, size=6, spacing=1, color=1):
+    x = center_x(frame.shape[1], value, size=size, spacing=spacing)
+    write(frame, value, x=x, y=y, size=size, spacing=spacing, color=color)

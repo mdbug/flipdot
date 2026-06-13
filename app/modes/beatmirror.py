@@ -1,8 +1,8 @@
 import numpy as np
 import time
 from PIL import Image
-import text
-from autodrum import AutoDrum
+import app.services.text as text
+from app.modes.autodrum import AutoDrum
 
 
 class BeatMirror(AutoDrum):
@@ -140,8 +140,7 @@ class BeatMirror(AutoDrum):
         # The blink toggles inside this step update, so even the
         # invitation clicks in rhythm.
         if not m['mask'].any() and m['flips'] == 0 and m['beat'] % 4 < 2:
-            text.write(bg, 'DANCE', x=max(0, (w - 19) // 2),
-                       y=h // 2 - 3, size=5)
+            text.write_centered(bg, 'DANCE', y=h // 2 - 3, size=5)
         return bg
 
     # ------------------------------------------------------------------
