@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+import time
 
 import app.services.human_pose as human_pose
 from app.core.mode_manager import ModeManager
@@ -26,11 +27,15 @@ class TransitionPolicy:
         sleep_start_hour: int,
         sleep_end_hour: int,
         pose_distance_threshold: float = 1.3,
+        face_mesh_max_fps: float = 12.0,
     ) -> None:
         self.pose_timeout = pose_timeout
         self.sleep_start_hour = sleep_start_hour
         self.sleep_end_hour = sleep_end_hour
         self.pose_distance_threshold = pose_distance_threshold
+        self.face_mesh_submit_interval = 0.0 if face_mesh_max_fps <= 0 else (1.0 / face_mesh_max_fps)
+        self._last_face_mesh_submit = 0.0
+        self._cached_face_mesh_results = None
 
     def is_sleep_hour(self, now: datetime | None = None) -> bool:
         if now is None:
@@ -80,7 +85,16 @@ class TransitionPolicy:
             state.eyes_visible, state.reason, state.angle = human_pose.eyes_visible_and_facing_camera(pose_results)
             state.estimated_distance, _ = human_pose.estimate_distance(pose_results)
             if human_pose.should_draw_face_features(state.estimated_distance):
-                state.face_mesh_results = human_pose.get_face_mesh(frame)
+                now_mono = time.monotonic()
+                if (
+                    self.face_mesh_submit_interval == 0.0
+                    or now_mono - self._last_face_mesh_submit >= self.face_mesh_submit_interval
+                ):
+                    self._cached_face_mesh_results = human_pose.get_face_mesh(frame)
+                    self._last_face_mesh_submit = now_mono
+                state.face_mesh_results = self._cached_face_mesh_results
+            else:
+                self._cached_face_mesh_results = None
 
             if pose_results and pose_results.pose_landmarks:
                 mode_manager.set_mode(ModeManager.MODE_POSE)

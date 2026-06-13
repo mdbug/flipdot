@@ -34,6 +34,7 @@ def main():
     debug = os.getenv('DEBUG', 'false').lower() == 'true'
     sleep_hour_start = int(os.getenv('SLEEP_HOUR_START', '0'))
     sleep_hour_end = int(os.getenv('SLEEP_HOUR_END', '7'))
+    face_mesh_max_fps = float(os.getenv('FACE_MESH_MAX_FPS', '12'))
 
     logger.info(
         "Starting flipdot app camera_index=%s preview=%s debug=%s sleep_window=%s-%s",
@@ -79,6 +80,7 @@ def main():
         pose_timeout=POSE_TIMEOUT,
         sleep_start_hour=sleep_hour_start,
         sleep_end_hour=sleep_hour_end,
+        face_mesh_max_fps=face_mesh_max_fps,
     )
 
     while True:

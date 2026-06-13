@@ -14,7 +14,8 @@ except ModuleNotFoundError:
 
 class MenuItem:
     CLICK_TIME = 2
-    ROW_HEIGHT = 7  # 4 rows of 7px fit exactly in the 28px panel
+    ROW_HEIGHT = 8
+    TEXT_TOP_OFFSET = 1  # row 0 is a spacer so every item has the same rhythm
 
     def __init__(self, label, row, width, on_click=None):
         self.label = label
@@ -27,10 +28,13 @@ class MenuItem:
 
     @property
     def y(self):
-        return self.row * MenuItem.ROW_HEIGHT
+        return self.row * MenuItem.ROW_HEIGHT + MenuItem.TEXT_TOP_OFFSET
 
     def is_hovered(self, y):
-        return (self.y <= y < self.y + MenuItem.ROW_HEIGHT)
+        # Hover includes spacer+item+spacer (7px); divider line remains non-interactive.
+        hover_top = max(0, self.y - 1)
+        hover_bottom = self.y + 6
+        return hover_top <= y < hover_bottom
 
     def hover(self, hovering):
         if hovering and not self.hovered:
@@ -99,29 +103,52 @@ class Checkbox(MenuItem):
             self.on_click()
 
 class Menu:
+    SWIPE_MIN_DX = 8
+    SWIPE_MAX_DY = 3
+    SWIPE_MAX_DT = 0.30
+    SWIPE_MIN_SPEED_PX_S = 22.0
+    SWIPE_MIN_HORIZONTAL_RATIO = 2.5
+    SWIPE_MIN_FRAME_DX = 2
+    FAST_SWIPE_MIN_DX = 7
+    FAST_SWIPE_MIN_SPEED_PX_S = 32.0
+    FAST_SWIPE_MAX_DY = 6
+    SWIPE_COOLDOWN = 0.35
+    SWIPE_OPPOSITE_GUARD_DT = 0.70
+    SWIPE_RELEASE_MISSING_FRAMES = 2
+    SWIPE_RELEASE_STILL_FRAMES = 3
+    SWIPE_RELEASE_STILL_DX = 1
+    SWIPE_RELEASE_STILL_DY = 1
+    INDICATOR_HOVER_HYSTERESIS_PX = 2
+
     def __init__(self, width, height, mode_manager):
         self.width = width
         self.height = height
         self.mode_manager = mode_manager
         self.page = 0
+        self._swipe_origin = None
+        self._finger_sample = None
+        self._swipe_locked = False
+        self._last_swipe_time = 0.0
+        self._last_swipe_direction = 0
+        self._missing_finger_frames = 0
+        self._still_frames = 0
+        self._indicator_hover_page = None
+        self._indicator_hover_start = None
         self.pages = [
             [
                 Button("CLOCK", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_CLOCK)),
                 Button("PAINT", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_PAINT)),
                 Checkbox("POSE", 2, width, checked=mode_manager.pose_enabled, on_click=mode_manager.toggle_pose_enabled),
-                Button("MORE", 3, width, on_click=self.next_page),
             ],
             [
                 Button("CARIC", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_CARICATURE)),
                 Button("DRUM", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_PERCUSSION)),
                 Button("BEATS", 2, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_AUTODRUM)),
-                Button("MORE", 3, width, on_click=self.next_page),
             ],
             [
                 Button("TETRIS", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_TETRIS)),
                 Button("MIRROR", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_BEATMIRROR)),
                 Button("PONG", 2, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_PONG)),
-                Button("MORE", 3, width, on_click=self.next_page),
             ],
         ]
 
@@ -132,16 +159,273 @@ class Menu:
     def next_page(self):
         self.page = (self.page + 1) % len(self.pages)
 
+    def prev_page(self):
+        self.page = (self.page - 1) % len(self.pages)
+
+    def _reset_swipe_state(self):
+        self._swipe_origin = None
+        self._finger_sample = None
+        self._swipe_locked = False
+        self._missing_finger_frames = 0
+        self._still_frames = 0
+
+    def _get_page_indicator_layout(self):
+        page_count = len(self.pages)
+        item_count = len(self.pages[0]) if self.pages else 0
+        # After final separator: [spacer][item][spacer][separator] ...
+        indicator_y = min(
+            self.height,
+            max(0, ((item_count - 1) * MenuItem.ROW_HEIGHT) + MenuItem.TEXT_TOP_OFFSET + 7),
+        )
+        return page_count, indicator_y
+
+    def _get_indicator_page(self, panel_x, panel_y):
+        if panel_x is None or panel_y is None:
+            return None
+
+        page_count, indicator_y = self._get_page_indicator_layout()
+        if panel_y < indicator_y or panel_y >= self.height:
+            return None
+
+        for idx in range(page_count):
+            x0 = (idx * self.width) // page_count
+            x1 = ((idx + 1) * self.width) // page_count
+            if x0 <= panel_x < x1:
+                return idx
+
+        return None
+
+    def _is_in_indicator_page(self, panel_x, panel_y, page_idx, tolerance=0):
+        if panel_x is None or panel_y is None:
+            return False
+
+        page_count, indicator_y = self._get_page_indicator_layout()
+        if page_idx is None or page_idx < 0 or page_idx >= page_count:
+            return False
+
+        if panel_y < indicator_y or panel_y >= self.height:
+            return False
+
+        x0 = (page_idx * self.width) // page_count
+        x1 = ((page_idx + 1) * self.width) // page_count
+        return (x0 - tolerance) <= panel_x < (x1 + tolerance)
+
+    def _update_indicator_hover(self, panel_x, panel_y, now, hovered_page=None):
+        if hovered_page is None:
+            hovered_page = self._get_indicator_page(panel_x, panel_y)
+
+        # Keep dwell on the same page through minor boundary jitter, similar
+        # to menu-item hover stability within an area.
+        if (
+            self._indicator_hover_page is not None
+            and self._is_in_indicator_page(
+                panel_x,
+                panel_y,
+                self._indicator_hover_page,
+                tolerance=Menu.INDICATOR_HOVER_HYSTERESIS_PX,
+            )
+        ):
+            hovered_page = self._indicator_hover_page
+
+        if hovered_page is None:
+            self._indicator_hover_page = None
+            self._indicator_hover_start = None
+            return
+
+        if hovered_page != self._indicator_hover_page:
+            self._indicator_hover_page = hovered_page
+            self._indicator_hover_start = now
+            return
+
+        if self._indicator_hover_start is None:
+            self._indicator_hover_start = now
+            return
+
+        hover_duration = now - self._indicator_hover_start
+        if hover_duration < MenuItem.CLICK_TIME:
+            return
+
+        if hovered_page != self.page:
+            self.page = hovered_page
+
+            # Avoid stale dwell timers from triggering right after page jump.
+            for item in self.items:
+                item.hover(False)
+
+        # Re-arm indicator dwell so sustained hovering does not repeatedly retrigger.
+        self._indicator_hover_start = now
+
+    def _update_swipe(self, panel_x, panel_y, now):
+        if panel_x is None or panel_y is None:
+            self._missing_finger_frames += 1
+            self._still_frames = 0
+
+            # Unlock only after a brief tracking loss so return motion is not
+            # interpreted as an opposite swipe from the same gesture.
+            if self._swipe_locked and self._missing_finger_frames >= Menu.SWIPE_RELEASE_MISSING_FRAMES:
+                self._swipe_locked = False
+                self._swipe_origin = None
+                self._finger_sample = None
+            elif not self._swipe_locked:
+                self._swipe_origin = None
+                self._finger_sample = None
+
+            return
+
+        self._missing_finger_frames = 0
+
+        if self._finger_sample is None:
+            self._swipe_origin = (panel_x, panel_y, now)
+            self._finger_sample = (panel_x, panel_y, now)
+            return
+
+        previous_x, previous_y, previous_t = self._finger_sample
+        frame_dx = panel_x - previous_x
+        frame_dy = panel_y - previous_y
+        self._finger_sample = (panel_x, panel_y, now)
+
+        if self._swipe_locked:
+            if abs(frame_dx) <= Menu.SWIPE_RELEASE_STILL_DX and abs(frame_dy) <= Menu.SWIPE_RELEASE_STILL_DY:
+                self._still_frames += 1
+            else:
+                self._still_frames = 0
+
+            if self._still_frames >= Menu.SWIPE_RELEASE_STILL_FRAMES:
+                self._swipe_locked = False
+                self._still_frames = 0
+                self._swipe_origin = (panel_x, panel_y, now)
+
+            return
+
+        if self._swipe_origin is None:
+            self._swipe_origin = (panel_x, panel_y, now)
+            return
+
+        origin_x, origin_y, origin_t = self._swipe_origin
+        total_dx = panel_x - origin_x
+        total_dy = panel_y - origin_y
+        total_dt = now - origin_t
+
+        if total_dt <= 0:
+            self._swipe_origin = (panel_x, panel_y, now)
+            return
+
+        if total_dt > Menu.SWIPE_MAX_DT:
+            # Sliding window: keep looking for a fresh swipe start.
+            self._swipe_origin = (panel_x, panel_y, now)
+            return
+
+        if abs(total_dy) > Menu.SWIPE_MAX_DY:
+            # Excess vertical drift likely means this was not a horizontal swipe.
+            self._swipe_origin = (panel_x, panel_y, now)
+            return
+
+        if now - self._last_swipe_time < Menu.SWIPE_COOLDOWN:
+            return
+
+        if abs(total_dx) >= Menu.SWIPE_MIN_DX:
+            swipe_speed = abs(total_dx) / total_dt
+            is_fast_swipe = (
+                abs(total_dx) >= Menu.FAST_SWIPE_MIN_DX
+                and swipe_speed >= Menu.FAST_SWIPE_MIN_SPEED_PX_S
+                and abs(total_dy) <= Menu.FAST_SWIPE_MAX_DY
+            )
+
+            if not is_fast_swipe and abs(frame_dx) < Menu.SWIPE_MIN_FRAME_DX:
+                self._swipe_origin = (panel_x, panel_y, now)
+                return
+
+            if not is_fast_swipe and abs(total_dx) < (abs(total_dy) * Menu.SWIPE_MIN_HORIZONTAL_RATIO):
+                self._swipe_origin = (panel_x, panel_y, now)
+                return
+
+            if not is_fast_swipe and swipe_speed < Menu.SWIPE_MIN_SPEED_PX_S:
+                # Keep this point as a fresh origin to avoid accumulating slow drift.
+                self._swipe_origin = (panel_x, panel_y, now)
+                return
+
+            direction = 1 if total_dx > 0 else -1
+
+            if (
+                self._last_swipe_direction != 0
+                and direction != self._last_swipe_direction
+                and now - self._last_swipe_time < Menu.SWIPE_OPPOSITE_GUARD_DT
+            ):
+                # Ignore immediate return motion after a successful swipe.
+                self._swipe_origin = (panel_x, panel_y, now)
+                return
+
+            if direction > 0:
+                self.next_page()
+            else:
+                self.prev_page()
+
+            self._last_swipe_time = now
+            self._last_swipe_direction = direction
+            self._swipe_locked = True
+            self._still_frames = 0
+            self._swipe_origin = None
+
+            # Clear hover timers so a swipe does not immediately trigger a dwell click.
+            for item in self.items:
+                item.hover(False)
+
+    def _draw_page_indicator(self, frame):
+        page_count, indicator_y = self._get_page_indicator_layout()
+        if page_count <= 0:
+            return
+
+        center_y = indicator_y + ((self.height - indicator_y) // 2)
+
+        for idx in range(page_count):
+            x0 = (idx * self.width) // page_count
+            x1 = ((idx + 1) * self.width) // page_count
+            if idx == self.page:
+                frame[indicator_y:self.height, x0:x1] = 1
+            else:
+                frame[center_y:center_y + 1, x0:x1] = 1
+
+            if idx == self._indicator_hover_page and self._indicator_hover_start is not None:
+                duration = min((time.time() - self._indicator_hover_start) / MenuItem.CLICK_TIME, 1.0)
+                progress = int((x1 - x0) * duration)
+                if progress > 0:
+                    frame[indicator_y:self.height, x0:x0 + progress] = 1
+
     def get_frame(self, pose_results):
         frame = np.zeros((self.height, self.width), dtype=np.uint8)
 
         finger_x, finger_y = human_pose.get_right_index_finger_position(pose_results)
+        now = time.time()
+
+        if finger_x is not None and finger_y is not None:
+            panel_x = int(self.width - (finger_x * self.width))
+            panel_y = int(finger_y * self.height)
+            panel_x = max(0, min(self.width - 1, panel_x))
+            panel_y = max(0, min(self.height - 1, panel_y))
+        else:
+            panel_x = None
+            panel_y = None
+
+        hovered_indicator_page = self._get_indicator_page(panel_x, panel_y)
+        in_indicator_area = hovered_indicator_page is not None
+        if hovered_indicator_page is None:
+            self._update_swipe(panel_x, panel_y, now)
+        else:
+            # While using the indicator, suppress swipe detection entirely.
+            self._reset_swipe_state()
+
+        self._update_indicator_hover(panel_x, panel_y, now, hovered_page=hovered_indicator_page)
 
         for item in self.items:
-            if finger_y is not None:
+            if in_indicator_area:
+                item.hover(False)
+            elif finger_y is not None:
                 item.hover(item.is_hovered(finger_y * self.height))
+            else:
+                item.hover(False)
 
             item.draw(frame)
 
+        self._draw_page_indicator(frame)
         frame = human_pose.draw_right_index_pointer(frame, pose_results)
         return frame

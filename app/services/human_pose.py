@@ -15,7 +15,14 @@ VERY_CLOSE_FACE_DISTANCE = float(os.getenv('VERY_CLOSE_FACE_DISTANCE', '0.5'))
 # ---------------------------------------------------------------------------
 # MediaPipe Tasks API (>= 0.10) with GPU delegate, falling back to legacy API
 # ---------------------------------------------------------------------------
-_MODELS_DIR = os.path.join(os.path.dirname(__file__), 'models')
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+_MODELS_DIR_ENV = os.getenv('MEDIAPIPE_MODELS_DIR')
+_MODELS_DIR_CANDIDATES = [
+    _MODELS_DIR_ENV,
+    os.path.join(_REPO_ROOT, 'models'),
+    os.path.join(os.path.dirname(__file__), 'models'),
+]
+_MODELS_DIR = next((p for p in _MODELS_DIR_CANDIDATES if p and os.path.isdir(p)), _MODELS_DIR_CANDIDATES[1])
 _POSE_MODEL_NAME = os.getenv('POSE_MODEL', 'pose_landmarker_lite')
 _POSE_MODEL   = os.path.join(_MODELS_DIR, f'{_POSE_MODEL_NAME}.task')
 _FACE_MODEL   = os.path.join(_MODELS_DIR, 'face_landmarker.task')
@@ -108,6 +115,13 @@ try:
         PoseLandmarker, PoseLandmarkerOptions,
         FaceLandmarker, FaceLandmarkerOptions,
         RunningMode,
+    )
+
+    logger.info(
+        "MediaPipe model resolution models_dir=%s pose_model=%s face_model=%s",
+        _MODELS_DIR,
+        _POSE_MODEL,
+        _FACE_MODEL,
     )
 
     if not os.path.isfile(_POSE_MODEL):
