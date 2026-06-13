@@ -13,11 +13,22 @@ logger = logging.getLogger(__name__)
 BASE_URL = os.getenv("API_FOOTBALL_BASE_URL", "https://v3.football.api-sports.io").rstrip("/")
 LEAGUE_NAME = "World Cup"
 REQUEST_TIMEOUT_SEC = 4
+FIFA_BASE_URL = os.getenv("FIFA_API_BASE_URL", "https://api.fifa.com/api/v3").rstrip("/")
+FIFA_LANGUAGE = os.getenv("FIFA_API_LANGUAGE", "en")
+FIFA_COMPETITION_ID = "17"
+DEFAULT_FIFA_MATCH_IDS = ["400021447"]
 
 # Keep a safety reserve so request spikes do not exhaust the daily quota.
 DAILY_REQUEST_RESERVE = 5
 MIN_RETRY_SEC = 60
 MAX_RETRY_SEC = 60 * 60
+FIFA_MIN_RETRY_SEC = 20
+FIFA_BASE_INTERVAL_LIVE_SEC = 20
+FIFA_MATCH_DISCOVERY_REFRESH_SEC = 15 * 60
+FIFA_MATCH_DISCOVERY_BACKWARD = 8
+FIFA_MATCH_DISCOVERY_FORWARD = 40
+FIFA_MATCH_DISCOVERY_LOOKBACK_HOURS = 6
+FIFA_MATCH_DISCOVERY_LOOKAHEAD_HOURS = 36
 
 BASE_INTERVAL_LIVE_SEC = 60
 BASE_INTERVAL_FINISHED_SEC = 12 * 60
@@ -36,6 +47,10 @@ _next_fallback_lookup_after_mono = 0.0
 _next_status_probe_after_mono = 0.0
 _next_schedule_refresh_after_mono = 0.0
 _schedule_windows_utc = []
+_cached_fifa_scorecard = None
+_next_fifa_fetch_after_mono = 0.0
+_discovered_fifa_match_ids = None
+_next_fifa_match_discovery_after_mono = 0.0
 _rate_limit_state = {
     "daily_limit": None,
     "daily_remaining": None,
@@ -52,6 +67,298 @@ def _safe_int(value):
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _pick_locale_text(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                description = item.get("Description")
+                if description:
+                    return str(description)
+    return ""
+
+
+def _normalize_fifa_match_time(match_time):
+    text = (match_time or "").strip()
+    if not text:
+        return ""
+
+    # FIFA occasionally returns stoppage formats like 90'+6' or 90 + 6.
+    minute_match = re.search(r"(\d{1,3})(?:\s*'\s*)?(?:\s*\+\s*(\d{1,2}))?", text)
+    if not minute_match:
+        return ""
+
+    minute = minute_match.group(1)
+    extra = minute_match.group(2)
+    if extra:
+        return f"{minute}+{extra}"
+    return minute
+
+
+def _fifa_minute_value(event):
+    minute_text = _normalize_fifa_match_time(event.get("MatchTime"))
+    if not minute_text:
+        return None
+    match = re.match(r"(\d{1,3})", minute_text)
+    if not match:
+        return None
+    return _safe_int(match.group(1))
+
+
+def _fifa_status(event):
+    match_status = _safe_int(event.get("MatchStatus"))
+    period = _safe_int(event.get("Period"))
+    minute_value = _fifa_minute_value(event)
+
+    # FIFA Period enum (from frontend chunk inspection):
+    # 0 unknown/pre-start edge, 1 scheduled, 2 prematch, 3 first half,
+    # 4 half time, 5 second half, 6/7/8/9 extra-time phases,
+    # 10 full time, 11 penalty shootout, 12 post match, 13 abandoned,
+    # 14/15 rare additional phases, 16 pre-penalty, 17 pre-extra-time.
+    if period in {10, 12, 13}:
+        return "FT", "finished"
+    if period in {11, 16}:
+        return "PEN", "live"
+    if period in {6, 7, 8, 9, 17}:
+        return "ET", "live"
+    if period == 4:
+        return "HT", "live"
+    if period in {3, 5, 14, 15}:
+        return "LIVE", "live"
+    if period in {0, 1, 2}:
+        return "NS", "scheduled"
+
+    # Fallback to MatchStatus/ResultType when Period is absent or unfamiliar.
+    if match_status in {0, 4, 5}:
+        return "FT", "finished"
+    if match_status in {2}:
+        return "NS", "scheduled"
+    if match_status in {3}:
+        # Safety net: stale halftime period sometimes arrives during second half.
+        if period == 4 and minute_value is not None and minute_value > 45:
+            return "LIVE", "live"
+        return "LIVE", "live"
+
+    result_type = _safe_int(event.get("ResultType"))
+    if result_type == 0:
+        return "LIVE", "live"
+
+    return "NS", "scheduled"
+
+
+def _normalize_fifa_event(event):
+    home = event.get("HomeTeam") or event.get("Home") or {}
+    away = event.get("AwayTeam") or event.get("Away") or {}
+
+    home_team = _pick_locale_text(home.get("TeamName")).upper()
+    away_team = _pick_locale_text(away.get("TeamName")).upper()
+
+    home_code = (home.get("Abbreviation") or "").upper()
+    away_code = (away.get("Abbreviation") or "").upper()
+    if not home_code:
+        home_code = _team_code(home_team)
+    if not away_code:
+        away_code = _team_code(away_team)
+
+    home_score = _safe_int(event.get("HomeTeamScore"))
+    away_score = _safe_int(event.get("AwayTeamScore"))
+    if home_score is None:
+        home_score = _safe_int(home.get("Score"))
+    if away_score is None:
+        away_score = _safe_int(away.get("Score"))
+
+    status, status_bucket = _fifa_status(event)
+    minute = _normalize_fifa_match_time(event.get("MatchTime"))
+
+    dt_utc = None
+    date_str = event.get("Date")
+    if date_str:
+        try:
+            dt_utc = datetime.fromisoformat(date_str.replace("Z", "+00:00")).astimezone(timezone.utc)
+        except ValueError:
+            dt_utc = None
+
+    return {
+        "event_id": event.get("IdMatch"),
+        "league": _pick_locale_text(event.get("CompetitionName")),
+        "home_team": home_team,
+        "away_team": away_team,
+        "home_code": home_code,
+        "away_code": away_code,
+        "home_score": home_score,
+        "away_score": away_score,
+        "home_penalty_score": _safe_int(event.get("HomeTeamPenaltyScore")),
+        "away_penalty_score": _safe_int(event.get("AwayTeamPenaltyScore")),
+        "status": status,
+        "status_bucket": status_bucket,
+        "minute": minute,
+        "kickoff_utc": dt_utc,
+    }
+
+
+def _default_fifa_match_ids():
+    return list(DEFAULT_FIFA_MATCH_IDS)
+
+
+def _parse_fifa_datetime(date_str):
+    if not date_str:
+        return None
+    try:
+        return datetime.fromisoformat(str(date_str).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _is_fifa_worldcup_event(event):
+    competition_id = str(event.get("IdCompetition") or "").strip()
+    if competition_id == FIFA_COMPETITION_ID:
+        return True
+    competition_name = _pick_locale_text(event.get("CompetitionName")).upper()
+    return "WORLD CUP" in competition_name
+
+
+def _seed_fifa_match_id_ints():
+    values = []
+    for token in _default_fifa_match_ids():
+        if token.isdigit():
+            values.append(int(token))
+    if not values:
+        values.append(400021447)
+    return values
+
+
+def _refresh_fifa_match_ids_if_needed(now_mono, now_utc):
+    global _discovered_fifa_match_ids
+    global _next_fifa_match_discovery_after_mono
+
+    if _discovered_fifa_match_ids and now_mono < _next_fifa_match_discovery_after_mono:
+        return
+
+    seeds = _seed_fifa_match_id_ints()
+    low = max(1, min(seeds) - FIFA_MATCH_DISCOVERY_BACKWARD)
+    high = max(seeds) + FIFA_MATCH_DISCOVERY_FORWARD
+    earliest = now_utc - timedelta(hours=FIFA_MATCH_DISCOVERY_LOOKBACK_HOURS)
+    latest = now_utc + timedelta(hours=FIFA_MATCH_DISCOVERY_LOOKAHEAD_HOURS)
+
+    discovered = []
+    for match_id in range(low, high + 1):
+        try:
+            event = _fetch_fifa_json(f"calendar/{match_id}", params={"language": FIFA_LANGUAGE})
+        except requests.RequestException:
+            continue
+
+        if not isinstance(event, dict) or not event.get("IdMatch"):
+            continue
+        if not _is_fifa_worldcup_event(event):
+            continue
+
+        kickoff = _parse_fifa_datetime(event.get("Date"))
+        status, status_bucket = _fifa_status(event)
+        del status  # status_bucket drives discovery filtering.
+
+        is_recent_or_upcoming = kickoff is None or (earliest <= kickoff <= latest)
+        if status_bucket != "live" and not is_recent_or_upcoming:
+            continue
+
+        discovered.append((kickoff or datetime.max.replace(tzinfo=timezone.utc), str(event.get("IdMatch"))))
+
+    if discovered:
+        discovered.sort(key=lambda item: item[0])
+        _discovered_fifa_match_ids = list(dict.fromkeys(match_id for _, match_id in discovered))
+    else:
+        _discovered_fifa_match_ids = _default_fifa_match_ids()
+
+    _next_fifa_match_discovery_after_mono = now_mono + FIFA_MATCH_DISCOVERY_REFRESH_SEC
+
+
+def _effective_fifa_match_ids(now_mono, now_utc):
+    _refresh_fifa_match_ids_if_needed(now_mono, now_utc)
+    return _discovered_fifa_match_ids or _default_fifa_match_ids()
+
+
+def _fetch_fifa_json(path, params=None):
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://www.fifa.com",
+    }
+    url = f"{FIFA_BASE_URL}/{path.lstrip('/')}"
+    response = requests.get(url, params=params, headers=headers, timeout=REQUEST_TIMEOUT_SEC)
+    response.raise_for_status()
+    return response.json()
+
+
+def _get_fifa_scorecard():
+    global _cached_fifa_scorecard
+    global _next_fifa_fetch_after_mono
+
+    now_mono = time.monotonic()
+    now_utc = datetime.now(timezone.utc)
+    if _cached_fifa_scorecard is not None and now_mono < _next_fifa_fetch_after_mono:
+        return _with_rate_limit(_cached_fifa_scorecard)
+
+    events = []
+    seen_event_ids = set()
+    for match_id in _effective_fifa_match_ids(now_mono, now_utc):
+        live_event = _fetch_fifa_json(f"live/football/{match_id}", params={"language": FIFA_LANGUAGE})
+        if not isinstance(live_event, dict) or not live_event.get("IdMatch"):
+            continue
+
+        normalized = _normalize_fifa_event(live_event)
+        event_id = normalized.get("event_id")
+        if event_id and event_id in seen_event_ids:
+            continue
+        if event_id:
+            seen_event_ids.add(event_id)
+        events.append(normalized)
+
+    selected_live = _choose_live(events)
+    if selected_live is not None:
+        _cached_fifa_scorecard = {
+            "selected": selected_live,
+            "selection": "live",
+            "events": events,
+        }
+        _next_fifa_fetch_after_mono = now_mono + _adaptive_interval_sec(
+            "live",
+            now_utc=now_utc,
+            min_interval_sec=FIFA_MIN_RETRY_SEC,
+            base_interval_sec=FIFA_BASE_INTERVAL_LIVE_SEC,
+        )
+        return _with_rate_limit(_cached_fifa_scorecard)
+
+    selected_finished = _choose_latest_finished(events)
+    if selected_finished is not None:
+        _cached_fifa_scorecard = {
+            "selected": selected_finished,
+            "selection": "latest_finished",
+            "events": events,
+        }
+        _next_fifa_fetch_after_mono = now_mono + _adaptive_interval_sec(
+            "latest_finished",
+            now_utc=now_utc,
+            min_interval_sec=FIFA_MIN_RETRY_SEC,
+        )
+        return _with_rate_limit(_cached_fifa_scorecard)
+
+    if events:
+        _cached_fifa_scorecard = {
+            "selected": None,
+            "selection": "none",
+            "events": events,
+        }
+        _next_fifa_fetch_after_mono = now_mono + _adaptive_interval_sec(
+            "none",
+            now_utc=now_utc,
+            min_interval_sec=FIFA_MIN_RETRY_SEC,
+        )
+        return _with_rate_limit(_cached_fifa_scorecard)
+
+    _next_fifa_fetch_after_mono = now_mono + FIFA_MIN_RETRY_SEC
+    return None
 
 
 def _header_int(headers, *names):
@@ -152,12 +459,15 @@ def _choose_base_interval(selection, in_active_window=False):
     return BASE_INTERVAL_NONE_SEC
 
 
-def _adaptive_interval_sec(selection, now_utc=None):
+def _adaptive_interval_sec(selection, now_utc=None, min_interval_sec=MIN_RETRY_SEC, base_interval_sec=None):
     if now_utc is None:
         now_utc = datetime.now(timezone.utc)
 
     in_active_window = _is_in_active_match_window(now_utc)
-    interval = float(_choose_base_interval(selection, in_active_window=in_active_window))
+    if base_interval_sec is None:
+        interval = float(_choose_base_interval(selection, in_active_window=in_active_window))
+    else:
+        interval = float(base_interval_sec)
 
     daily_remaining = _rate_limit_state.get("daily_remaining")
     if daily_remaining is not None:
@@ -188,7 +498,7 @@ def _adaptive_interval_sec(selection, now_utc=None):
             minute_budget_interval = 60.0 / max(1, minute_remaining - 1)
             interval = max(interval, minute_budget_interval)
 
-    return max(MIN_RETRY_SEC, min(MAX_RETRY_SEC, interval))
+    return max(min_interval_sec, min(MAX_RETRY_SEC, interval))
 
 
 def _rate_limit_payload():
@@ -456,7 +766,7 @@ def _choose_live(events):
     return max(live, key=key)
 
 
-def get_worldcup_scorecard():
+def _get_api_football_scorecard():
     """Fetch live FIFA World Cup score data.
 
     Returns a dict:
@@ -476,7 +786,6 @@ def get_worldcup_scorecard():
     now_utc = datetime.now(timezone.utc)
     if _cached_scorecard is not None and now_mono < _next_fetch_after_mono:
         return _with_rate_limit(_cached_scorecard)
-
     try:
         events = []
         seen_event_ids = set()
@@ -601,3 +910,18 @@ def get_worldcup_scorecard():
         }
         _next_fetch_after_mono = now_mono + MIN_RETRY_SEC
         return _with_rate_limit(_cached_scorecard)
+
+
+def get_worldcup_scorecard():
+    """Fetch World Cup score data with FIFA internal API first, API-Football fallback."""
+
+    try:
+        fifa_payload = _get_fifa_scorecard()
+        if fifa_payload is not None and (fifa_payload.get("events") or fifa_payload.get("selected") is not None):
+            return fifa_payload
+    except requests.RequestException as exc:
+        logger.warning("FIFA internal API request failed: %s", exc)
+    except Exception:  # pragma: no cover - defensive runtime safeguard
+        logger.exception("Unexpected FIFA internal API failure")
+
+    return _get_api_football_scorecard()

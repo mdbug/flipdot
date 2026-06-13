@@ -8,7 +8,7 @@ from app.services.worldcup import get_worldcup_scorecard
 
 
 class WorldCup:
-    REFRESH_INTERVAL = 30
+    REFRESH_INTERVAL = 20
     GOAL_ANIMATION_SEC = 1.2
     GOAL_FLASH_HZ = 6
     SCORE_FLASH_SEC = 2.0
@@ -59,6 +59,8 @@ class WorldCup:
             return "PEN"
 
         if selection == "live":
+            if status == "HT":
+                return "HT"
             if status == "ET":
                 if minute_text:
                     # During extra time stoppage, minute alone carries the phase.

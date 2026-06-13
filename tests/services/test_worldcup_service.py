@@ -60,6 +60,7 @@ def test_normalize_event_maps_fields_and_helpers():
 
 
 def test_get_worldcup_scorecard_prefers_live(monkeypatch):
+    monkeypatch.setattr(worldcup_module, "_get_fifa_scorecard", lambda: None)
     monkeypatch.setattr(
         worldcup_module,
         "_get_worldcup_context",
@@ -133,6 +134,7 @@ def test_update_rate_limit_state_parses_expected_headers():
 
 
 def test_get_worldcup_scorecard_uses_cache(monkeypatch):
+    monkeypatch.setattr(worldcup_module, "_get_fifa_scorecard", lambda: None)
     calls = {"count": 0}
 
     def fake_fetch(path, params=None):
@@ -172,6 +174,175 @@ def test_get_worldcup_scorecard_uses_cache(monkeypatch):
     second = worldcup_module.get_worldcup_scorecard()
     assert second["selection"] == "none"
     assert calls["count"] == first_call_count
+
+
+def test_get_worldcup_scorecard_prefers_fifa_source(monkeypatch):
+    fifa_payload = {
+        "selected": {"event_id": "fifa-1"},
+        "selection": "live",
+        "events": [{"event_id": "fifa-1", "status_bucket": "live"}],
+        "rate_limit": {},
+    }
+    monkeypatch.setattr(worldcup_module, "_get_fifa_scorecard", lambda: fifa_payload)
+    monkeypatch.setattr(
+        worldcup_module,
+        "_get_api_football_scorecard",
+        lambda: {"selected": None, "selection": "none", "events": []},
+    )
+
+    scorecard = worldcup_module.get_worldcup_scorecard()
+    assert scorecard is fifa_payload
+
+
+def test_normalize_fifa_event_maps_expected_fields():
+    raw = {
+        "IdMatch": "400021447",
+        "CompetitionName": [{"Locale": "en-GB", "Description": "FIFA World Cup"}],
+        "Date": "2026-06-13T19:00:00Z",
+        "MatchTime": "45+3'",
+        "MatchStatus": 3,
+        "Period": 4,
+        "HomeTeamPenaltyScore": None,
+        "AwayTeamPenaltyScore": None,
+        "HomeTeam": {
+            "TeamName": [{"Locale": "en-GB", "Description": "Qatar"}],
+            "Abbreviation": "QAT",
+            "Score": 0,
+        },
+        "AwayTeam": {
+            "TeamName": [{"Locale": "en-GB", "Description": "Switzerland"}],
+            "Abbreviation": "SUI",
+            "Score": 1,
+        },
+    }
+
+    event = worldcup_module._normalize_fifa_event(raw)
+    assert event["event_id"] == "400021447"
+    assert event["league"] == "FIFA World Cup"
+    assert event["home_team"] == "QATAR"
+    assert event["away_team"] == "SWITZERLAND"
+    assert event["home_code"] == "QAT"
+    assert event["away_code"] == "SUI"
+    assert event["home_score"] == 0
+    assert event["away_score"] == 1
+    assert event["status"] == "HT"
+    assert event["status_bucket"] == "live"
+    assert event["minute"] == "45+3"
+
+
+def test_normalize_fifa_event_ignores_stale_halftime_period():
+    raw = {
+        "IdMatch": "400021447",
+        "CompetitionName": [{"Locale": "en-GB", "Description": "FIFA World Cup"}],
+        "Date": "2026-06-13T19:00:00Z",
+        "MatchTime": "61'",
+        "MatchStatus": 3,
+        "Period": 5,
+        "HomeTeam": {
+            "TeamName": [{"Locale": "en-GB", "Description": "Qatar"}],
+            "Abbreviation": "QAT",
+            "Score": 0,
+        },
+        "AwayTeam": {
+            "TeamName": [{"Locale": "en-GB", "Description": "Switzerland"}],
+            "Abbreviation": "SUI",
+            "Score": 1,
+        },
+    }
+
+    event = worldcup_module._normalize_fifa_event(raw)
+    assert event["status"] == "LIVE"
+    assert event["status_bucket"] == "live"
+    assert event["minute"] == "61"
+
+
+def test_normalize_fifa_event_period_zero_maps_to_scheduled():
+    raw = {
+        "IdMatch": "400021448",
+        "CompetitionName": [{"Locale": "en-GB", "Description": "FIFA World Cup"}],
+        "Date": "2026-06-14T19:00:00Z",
+        "MatchTime": "",
+        "MatchStatus": 2,
+        "Period": 0,
+        "HomeTeam": {
+            "TeamName": [{"Locale": "en-GB", "Description": "Team A"}],
+            "Abbreviation": "AAA",
+            "Score": None,
+        },
+        "AwayTeam": {
+            "TeamName": [{"Locale": "en-GB", "Description": "Team B"}],
+            "Abbreviation": "BBB",
+            "Score": None,
+        },
+    }
+
+    event = worldcup_module._normalize_fifa_event(raw)
+    assert event["status"] == "NS"
+    assert event["status_bucket"] == "scheduled"
+
+
+def test_normalize_fifa_event_parses_stoppage_time_with_apostrophe_plus():
+    raw = {
+        "IdMatch": "400021447",
+        "CompetitionName": [{"Locale": "en-GB", "Description": "FIFA World Cup"}],
+        "Date": "2026-06-13T19:00:00Z",
+        "MatchTime": "90'+6'",
+        "MatchStatus": 3,
+        "Period": 7,
+        "HomeTeam": {
+            "TeamName": [{"Locale": "en-GB", "Description": "Qatar"}],
+            "Abbreviation": "QAT",
+            "Score": 0,
+        },
+        "AwayTeam": {
+            "TeamName": [{"Locale": "en-GB", "Description": "Switzerland"}],
+            "Abbreviation": "SUI",
+            "Score": 1,
+        },
+    }
+
+    event = worldcup_module._normalize_fifa_event(raw)
+    assert event["minute"] == "90+6"
+
+
+def test_effective_fifa_match_ids_discovers_recent_upcoming_matches(monkeypatch):
+    now_utc = datetime(2026, 6, 13, 20, 0, 0, tzinfo=timezone.utc)
+    now_mono = 123.0
+
+    monkeypatch.setattr(worldcup_module, "_default_fifa_match_ids", lambda: ["400021447"])
+
+    def fake_fetch(path, params=None):
+        if not path.startswith("calendar/"):
+            raise AssertionError(path)
+        mid = int(path.split("/")[-1])
+        if mid == 400021447:
+            return {
+                "IdMatch": "400021447",
+                "IdCompetition": "17",
+                "Date": "2026-06-13T19:00:00Z",
+                "Period": 10,
+                "MatchStatus": 0,
+                "CompetitionName": [{"Locale": "en-GB", "Description": "FIFA World Cup"}],
+            }
+        if mid == 400021456:
+            return {
+                "IdMatch": "400021456",
+                "IdCompetition": "17",
+                "Date": "2026-06-13T22:00:00Z",
+                "Period": 0,
+                "MatchStatus": 1,
+                "CompetitionName": [{"Locale": "en-GB", "Description": "FIFA World Cup"}],
+            }
+        return {"IdMatch": str(mid), "IdCompetition": "520", "Date": "2026-06-10T12:00:00Z"}
+
+    monkeypatch.setattr(worldcup_module, "_fetch_fifa_json", fake_fetch)
+
+    worldcup_module._discovered_fifa_match_ids = None
+    worldcup_module._next_fifa_match_discovery_after_mono = 0.0
+
+    out = worldcup_module._effective_fifa_match_ids(now_mono, now_utc)
+    assert out[0] == "400021447"
+    assert "400021456" in out
 
 
 def test_choose_live_and_latest_finished():

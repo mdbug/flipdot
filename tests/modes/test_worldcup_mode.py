@@ -46,6 +46,9 @@ def test_short_status_for_penalties_and_extra_time():
     pen_match = {"status": "PEN", "home_penalty_score": 4, "away_penalty_score": 3}
     assert mode._short_status(pen_match, "live") == "PEN 4:3"
 
+    ht_match = {"status": "HT", "minute": "45+6"}
+    assert mode._short_status(ht_match, "live") == "HT"
+
     et_match = {"status": "ET", "minute": "105+1"}
     assert mode._short_status(et_match, "live") == "105+1"
 
