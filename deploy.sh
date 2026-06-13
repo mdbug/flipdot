@@ -14,6 +14,7 @@ rsync -avz --delete \
   --exclude='.git' \
   --exclude='__pycache__' \
   --exclude='.env' \
+  --exclude='.tetris_highscore' \
   --exclude='models/' \
   ./ "${REMOTE_HOST}:${REMOTE_DIR}"
 

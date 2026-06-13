@@ -1,8 +1,14 @@
 import numpy as np
 import time
+import logging
+import os
+from pathlib import Path
 import app.services.text as text
 import app.services.human_pose as human_pose
 from app.modes.autodrum import AutoDrum
+
+
+logger = logging.getLogger(__name__)
 
 # Index of the TETRIS song in AutoDrum.SONGS, looked up by name so it
 # stays correct if the song list is ever reordered.
@@ -50,13 +56,19 @@ class Tetris(AutoDrum):
     AI's fixed input cadence, so even the attract mode dies in the end.
     """
 
-    AI_TAKEOVER_DELAY = 5.0   # seconds of absence before AI takes over
+    AI_TAKEOVER_DELAY = 5.0    # seconds of absence before AI takes over
+    AI_HARD_DROP_DELAY = 0.9   # min visible time before AI may hard drop
+    AI_HARD_DROP_MIN_ROW = 3   # avoid instant top-of-board hard drops
+
+    # Optional override for deployments that want score data elsewhere.
+    _BEST_FILE_ENV = 'TETRIS_HIGHSCORE_FILE'
 
     def __init__(self, width, height, mode_manager):
+        self._best_file = self._resolve_best_file()
         # These must exist before super().__init__: the init chain
         # (_load_song → _tetris_background → … → _player_spawn) can in
         # principle reach _trigger_game_over, which uses them.
-        self._best = 0                  # high score — survives restarts
+        self._best = self._load_best()  # high score — survives restarts
         self._jingle_events = []        # (due_time, note_name) death-jingle queue
         # super().__init__ → _load_song(0) → our override → super()._load_song(idx)
         # which calls _tetris_background() → _init_player_state() → _player_spawn().
@@ -65,7 +77,43 @@ class Tetris(AutoDrum):
         # Gesture edge-detection state (set after super so init chain is clean)
         self._left_raise_armed = True   # True = ready to trigger on next raise
         self._last_move_time = 0.0      # timestamp of last horizontal step
-        self._pending = {'move': 0, 'rotate': False}  # buffered per-step intent
+        self._pending = {
+            'move': 0,
+            'rotate': False,
+            'hard_drop': False,
+        }  # buffered per-step intent
+
+    def _resolve_best_file(self):
+        override = os.getenv(self._BEST_FILE_ENV)
+        if override:
+            return Path(override)
+        return Path(__file__).resolve().parents[2] / '.tetris_highscore'
+
+    def _load_best(self):
+        try:
+            if not self._best_file.exists():
+                return 0
+            raw = self._best_file.read_text(encoding='ascii').strip()
+            value = int(raw) if raw else 0
+            return max(0, value)
+        except Exception as exc:
+            logger.warning(
+                'Failed to load Tetris high score from %s: %s',
+                self._best_file,
+                exc,
+            )
+            return 0
+
+    def _save_best(self):
+        try:
+            self._best_file.parent.mkdir(parents=True, exist_ok=True)
+            self._best_file.write_text(str(int(self._best)), encoding='ascii')
+        except Exception as exc:
+            logger.warning(
+                'Failed to persist Tetris high score to %s: %s',
+                self._best_file,
+                exc,
+            )
 
     # ------------------------------------------------------------------
     # _load_song override — always loads TETRIS song, then re-pins the
@@ -127,6 +175,8 @@ class Tetris(AutoDrum):
             'game_over':      False,
             'game_over_time': None,
         }
+        # Latches true for the current round once AI takeover begins.
+        self._ai_played_this_game = False
         self._ai_target = None          # (target_col, target_rot_idx)
         self._ai_piece_id = None        # piece_seq when _ai_target was computed
         self._last_person_time = None   # timestamp of last detected person
@@ -149,7 +199,11 @@ class Tetris(AutoDrum):
         """Set game-over state and schedule the descending death jingle."""
         self._player['game_over'] = True
         self._player['game_over_time'] = now
-        self._best = max(self._best, self._player['lines'])
+        if not self._ai_played_this_game:
+            prev_best = self._best
+            self._best = max(self._best, self._player['lines'])
+            if self._best != prev_best:
+                self._save_best()
         notes = ['a5', 'g5', 'f5', 'e5', 'd5', 'c5', 'b4', 'a4']
         self._jingle_events = [
             (now + i * 0.08, note) for i, note in enumerate(notes)
@@ -180,10 +234,11 @@ class Tetris(AutoDrum):
             'all_rots': all_rots,
             'rot_idx':  0,
             'seq':      self._player['piece_seq'],
+            'spawn_time': now,
         }
         self._player['piece'] = piece
         # A fresh piece must not inherit input buffered for the old one.
-        self._pending = {'move': 0, 'rotate': False}
+        self._pending = {'move': 0, 'rotate': False, 'hard_drop': False}
         # Game over when spawn position is already blocked
         if not self._player_tet_fits(cells, row, col):
             self._trigger_game_over(now)
@@ -230,22 +285,21 @@ class Tetris(AutoDrum):
         else:
             self._player_spawn(now)
 
-    def _player_hard_drop(self):
-        """Drop the piece to the lowest valid row and lock it. (Unused —
-        kept in case a safe gesture for it is found later.)"""
+    def _player_hard_drop(self, now):
+        """Drop the piece to the lowest valid row and lock it."""
         p = self._player['piece']
         if p is None:
             return
         while self._player_tet_fits(p['cells'], p['row'] + 1, p['col']):
             p['row'] += 1
-        self._player_lock(time.time())
+        self._player_lock(now)
         self._bg_frame = self._render_player_board()
 
     def _restart_game(self):
         """Start a fresh game AND the song from the top of the theme."""
         self._jingle_events = []
         self._left_raise_armed = False
-        self._pending = {'move': 0, 'rotate': False}
+        self._pending = {'move': 0, 'rotate': False, 'hard_drop': False}
         # _load_song resets the sequencer to bar 1, silences the melody
         # column, and — via the 'bg' hook — rebuilds the board
         # (_init_player_state + first spawn).  self._best survives.
@@ -310,7 +364,12 @@ class Tetris(AutoDrum):
                 self._player_spawn(now)
         elif self._player['piece'] is not None:
             p = self._player['piece']
-            if self._player_tet_fits(p['cells'], p['row'] + 1, p['col']):
+            if self._pending['hard_drop']:
+                # Hard drop is consumed on sequencer steps so lock timing
+                # stays in the same musical grid as gravity.
+                self._pending['hard_drop'] = False
+                self._player_hard_drop(now)
+            elif self._player_tet_fits(p['cells'], p['row'] + 1, p['col']):
                 p['row'] += 1
             else:
                 self._player_lock(now)
@@ -508,6 +567,15 @@ class Tetris(AutoDrum):
         if p['col'] != target_col and now - self._last_move_time >= 0.15:
             self._pending['move'] = 1 if target_col > p['col'] else -1
             self._last_move_time = now
+        # AI-only hard drop: wait until the piece has been visible long enough
+        # to keep the demo readable, then lock it on the next sequencer step.
+        if (p['row'] >= self.AI_HARD_DROP_MIN_ROW
+                and now - p.get('spawn_time', now) >= self.AI_HARD_DROP_DELAY
+                and p['rot_idx'] == target_rot
+                and p['col'] == target_col):
+            can_fall = self._player_tet_fits(p['cells'], p['row'] + 1, p['col'])
+            if can_fall:
+                self._pending['hard_drop'] = True
 
     # ------------------------------------------------------------------
     # Gesture handling
@@ -534,12 +602,14 @@ class Tetris(AutoDrum):
         )
         if person_present:
             self._last_person_time = now
+            self._pending['hard_drop'] = False
         else:
             delay_expired = (
                 self._last_person_time is None
                 or now - self._last_person_time >= self.AI_TAKEOVER_DELAY
             )
             if delay_expired:
+                self._ai_played_this_game = True
                 self._handle_ai(now)
             return
 
@@ -616,15 +686,31 @@ class Tetris(AutoDrum):
         # note stripe passes under them), so they always stay readable.
         if not self._player['game_over']:
             ui = np.zeros((self.height, 7), dtype=np.uint8)
-            score_str = str(min(self._player['lines'], 99))
+            score_str = str(self._player['lines'] % 100)
             text.write(ui, score_str, x=text.center_x(7, score_str, size=5),
-                       y=1, size=5)
+                       y=3, size=5)
             nxt = self._player['next_rots'][0]
             pw = max(dc for _, dc in nxt) + 1
-            px = max(0, (7 - pw) // 2)
+            # Center against cols 0..7 (melody band + separator line),
+            # then plot only the drawable melody-band columns in ui.
+            px = max(0, (8 - pw) // 2)
             for dr, dc in nxt:           # 1 px per cell, under the score
-                ui[9 + dr, px + dc] = 1
+                x = px + dc
+                if 0 <= x < ui.shape[1]:
+                    ui[11 + dr, x] = 1
             frame[:, :7] ^= ui
+
+            # Hundreds indicator in row 1 (0-indexed), spanning cols 0..7.
+            # Keep row lit, then carve dark markers at cols 1, 3, 5 for
+            # 100, 200, 300 respectively.
+            hundreds = min(3, self._player['lines'] // 100)
+            frame[1, :8] = 1
+            if hundreds >= 1:
+                frame[1, 1] = 0
+            if hundreds >= 2:
+                frame[1, 3] = 0
+            if hundreds >= 3:
+                frame[1, 5] = 0
 
         # Game-over overlay: jingle first, then flash, then static screen
         if self._player['game_over'] and self._player['game_over_time'] is not None:
