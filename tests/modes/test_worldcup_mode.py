@@ -84,7 +84,7 @@ def test_update_goal_animation_only_triggers_on_score_increase(monkeypatch):
 
 
 def test_score_visibility_flashes_only_changed_side(monkeypatch):
-    now = {"value": 10.375}
+    now = {"value": 10.25}
 
     def fake_time():
         return now["value"]
@@ -97,6 +97,27 @@ def test_score_visibility_flashes_only_changed_side(monkeypatch):
 
     show_home, show_away = mode._score_visibility("m1")
     assert show_home is False
+    assert show_away is True
+
+
+def test_score_visibility_ends_on_visible_phase(monkeypatch):
+    now = {"value": 0.0}
+
+    def fake_time():
+        return now["value"]
+
+    monkeypatch.setattr(worldcup_mode_module.time, "time", fake_time)
+    mode = worldcup_mode_module.WorldCup(28, 28, SimpleNamespace())
+    mode.goal_animation_until = 0.0
+    mode.score_flash_until = 20.0
+    mode.flashing_score_sides = {"m1": (True, False)}
+
+    # Sample the final half-period of the flash window; the changed side must
+    # never be hidden right before the score returns to steady display.
+    half_period = 1.0 / (2 * mode.SCORE_FLASH_HZ)
+    now["value"] = mode.score_flash_until - half_period / 2
+    show_home, show_away = mode._score_visibility("m1")
+    assert show_home is True
     assert show_away is True
 
 
@@ -121,7 +142,7 @@ def test_render_match_no_data_path(monkeypatch):
     assert frame.sum() > 0
 
 
-def test_apply_goal_animation_on_phase_draws_goal_frame(monkeypatch):
+def test_apply_goal_animation_draws_banner_over_shockwave(monkeypatch):
     now = {"value": 10.0}
     monkeypatch.setattr(worldcup_mode_module.time, "time", lambda: now["value"])
     mode = worldcup_mode_module.WorldCup(28, 28, SimpleNamespace())
@@ -129,19 +150,20 @@ def test_apply_goal_animation_on_phase_draws_goal_frame(monkeypatch):
     frame = np.zeros((28, 28), dtype=np.uint8)
 
     mode._apply_goal_animation(frame)
-    assert frame[0, :].sum() > 0
-    assert frame[-1, :].sum() > 0
-    assert frame[:, 0].sum() > 0
-    assert frame[:, -1].sum() > 0
+    # Banner rules above/below the GOAL text are always lit.
+    assert frame[9, :].all()
+    assert frame[18, :].all()
+    # GOAL glyphs render in the cleared band.
+    assert frame[10:18, :].sum() > 0
     assert frame.sum() > 0
 
 
-def test_apply_goal_animation_checkerboard_branch(monkeypatch):
-    now = {"value": 10.2}
+def test_apply_goal_animation_noop_after_window(monkeypatch):
+    now = {"value": 12.0}
     monkeypatch.setattr(worldcup_mode_module.time, "time", lambda: now["value"])
     mode = worldcup_mode_module.WorldCup(28, 28, SimpleNamespace())
     mode.goal_animation_until = 11.0
     frame = np.zeros((28, 28), dtype=np.uint8)
 
     mode._apply_goal_animation(frame)
-    assert frame.sum() > 0
+    assert frame.sum() == 0

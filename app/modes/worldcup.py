@@ -10,9 +10,8 @@ from app.services.worldcup import get_worldcup_scorecard
 class WorldCup:
     REFRESH_INTERVAL = 20
     GOAL_ANIMATION_SEC = 5.0
-    GOAL_FLASH_HZ = 6
     SCORE_FLASH_SEC = 5.0
-    SCORE_FLASH_HZ = 4
+    SCORE_FLASH_HZ = 1
 
     def __init__(self, width, height, mode_manager):
         self.width = width
@@ -180,7 +179,10 @@ class WorldCup:
         if not event_id or flash_sides is None:
             return True, True
 
-        phase_on = int(now * self.SCORE_FLASH_HZ) % 2 == 0
+        # Anchor the phase to time remaining so the flash always finishes on a
+        # visible half-period; otherwise it can end with the score hidden.
+        remaining = self.score_flash_until - now
+        phase_on = int(remaining * self.SCORE_FLASH_HZ) % 2 == 0
         home_changed, away_changed = flash_sides
         show_home = phase_on if home_changed else True
         show_away = phase_on if away_changed else True
@@ -258,28 +260,34 @@ class WorldCup:
             self.flashing_score_sides = scored_event_sides
 
     def _apply_goal_animation(self, frame):
-        if time.time() >= self.goal_animation_until:
+        now = time.time()
+        if now >= self.goal_animation_until:
             return
 
-        phase_on = int(time.time() * self.GOAL_FLASH_HZ) % 2 == 0
-        if phase_on:
-            frame[0, :] = 1
-            frame[-1, :] = 1
-            frame[:, 0] = 1
-            frame[:, -1] = 1
-            frame[9:19, :] = 0
-            write(
-                frame,
-                "GOAL",
-                x=center_x(self.width, "GOAL", size=6, style="regular"),
-                y=11,
-                size=6,
-                style="regular",
-            )
-            return
+        elapsed = max(0.0, self.GOAL_ANIMATION_SEC - (self.goal_animation_until - now))
 
-        checker = (np.indices(frame.shape).sum(axis=0) % 2).astype(np.uint8)
-        frame ^= checker
+        # Concentric shockwave rings radiating outward from the centre.
+        center_y = (self.height - 1) / 2.0
+        center_x_px = (self.width - 1) / 2.0
+        rows = np.arange(self.height).reshape(-1, 1)
+        cols = np.arange(self.width).reshape(1, -1)
+        distance = np.sqrt((rows - center_y) ** 2 + (cols - center_x_px) ** 2)
+
+        wave = np.sin(distance * 1.3 - elapsed * 12.0)
+        frame[:] = (wave > 0.35).astype(np.uint8)
+
+        # Steady banner keeps "GOAL" readable while the rings sweep behind it.
+        frame[9:19, :] = 0
+        frame[9, :] = 1
+        frame[18, :] = 1
+        write(
+            frame,
+            "GOAL",
+            x=center_x(self.width, "GOAL", size=6, style="regular"),
+            y=11,
+            size=6,
+            style="regular",
+        )
 
     def _refresh_if_needed(self):
         now = time.time()
