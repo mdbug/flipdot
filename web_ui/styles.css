@@ -108,6 +108,14 @@ body {
   color: var(--muted);
 }
 
+#sleepSettingsStatus.error {
+  color: #ef8e7d;
+}
+
+#sleepSettingsStatus.ok {
+  color: #9dd9b1;
+}
+
 .board-editor h2 {
   margin: 0;
   font-family: "Bricolage Grotesque", sans-serif;

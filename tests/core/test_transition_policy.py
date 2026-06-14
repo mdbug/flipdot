@@ -5,6 +5,8 @@ import types
 
 
 def _load_transition_policy_module(monkeypatch):
+    importlib.import_module("app.services")
+
     human_pose_stub = types.SimpleNamespace(
         is_arms_crossed=lambda pose_results: False,
         eyes_visible_and_facing_camera=lambda pose_results: (False, "", None),
@@ -12,7 +14,9 @@ def _load_transition_policy_module(monkeypatch):
         should_draw_face_features=lambda distance: False,
         get_face_mesh=lambda frame: None,
     )
+    worldcup_stub = types.SimpleNamespace(get_worldcup_scorecard=lambda: {"events": []})
     monkeypatch.setitem(sys.modules, "app.services.human_pose", human_pose_stub)
+    monkeypatch.setitem(sys.modules, "app.services.worldcup", worldcup_stub)
     sys.modules.pop("app.core.transition_policy", None)
     return importlib.import_module("app.core.transition_policy")
 
@@ -37,6 +41,38 @@ def test_is_sleep_hour_boundaries(monkeypatch):
     assert policy2.is_sleep_hour(datetime(2026, 6, 13, 1, 0, 0)) is True
     assert policy2.is_sleep_hour(datetime(2026, 6, 13, 6, 59, 0)) is True
     assert policy2.is_sleep_hour(datetime(2026, 6, 13, 7, 0, 0)) is False
+
+
+def test_sleep_settings_can_disable_sleep_mode(monkeypatch):
+    transition_policy_module = _load_transition_policy_module(monkeypatch)
+    policy = transition_policy_module.TransitionPolicy(
+        pose_timeout=3,
+        sleep_start_hour=1,
+        sleep_end_hour=7,
+    )
+
+    assert policy.is_sleep_hour(datetime(2026, 6, 13, 2, 0, 0)) is True
+
+    policy.set_sleep_settings(enabled=False, start_hour=1, end_hour=7)
+    assert policy.is_sleep_hour(datetime(2026, 6, 13, 2, 0, 0)) is False
+
+
+def test_sleep_settings_getter_returns_updated_values(monkeypatch):
+    transition_policy_module = _load_transition_policy_module(monkeypatch)
+    policy = transition_policy_module.TransitionPolicy(
+        pose_timeout=3,
+        sleep_start_hour=0,
+        sleep_end_hour=7,
+    )
+
+    settings = policy.set_sleep_settings(enabled=True, start_hour=23, end_hour=99)
+
+    assert settings == {
+        "enabled": True,
+        "start_hour": 23,
+        "end_hour": 23,
+    }
+    assert policy.get_sleep_settings() == settings
 
 
 def test_worldcup_live_check_uses_cache_interval(monkeypatch):

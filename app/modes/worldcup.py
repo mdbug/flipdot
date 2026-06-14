@@ -9,9 +9,9 @@ from app.services.worldcup import get_worldcup_scorecard
 
 class WorldCup:
     REFRESH_INTERVAL = 20
-    GOAL_ANIMATION_SEC = 1.2
+    GOAL_ANIMATION_SEC = 5.0
     GOAL_FLASH_HZ = 6
-    SCORE_FLASH_SEC = 2.0
+    SCORE_FLASH_SEC = 5.0
     SCORE_FLASH_HZ = 4
 
     def __init__(self, width, height, mode_manager):

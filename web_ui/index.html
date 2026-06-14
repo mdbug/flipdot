@@ -22,6 +22,21 @@
 
       <section class="controls">
         <div id="modeControls"></div>
+        <button id="settingsToggle" type="button" class="secondary">Settings</button>
+        <div id="sleepSettings" class="board-section hidden" aria-live="polite">
+          <h3>Sleep Mode</h3>
+          <label class="toggle-row" for="sleepEnabled">
+            <input id="sleepEnabled" type="checkbox" checked />
+            Enable sleep mode
+          </label>
+          <div class="board-grid">
+            <label for="sleepStartHour">Start hour</label>
+            <input id="sleepStartHour" type="number" min="0" max="23" step="1" value="0" />
+            <label for="sleepEndHour">End hour</label>
+            <input id="sleepEndHour" type="number" min="0" max="23" step="1" value="7" />
+          </div>
+          <p id="sleepSettingsStatus" class="board-summary">Sleep settings not loaded yet.</p>
+        </div>
         <div id="boardEditor" class="board-editor hidden" aria-live="polite">
           <h2>Board Editor</h2>
 

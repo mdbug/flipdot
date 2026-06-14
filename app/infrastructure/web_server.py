@@ -12,6 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import uvicorn
 
+from app.services.settings_store import RuntimeSettingsStore
+
 
 class PointerEventPayload(BaseModel):
     x: float = Field(ge=0.0, le=1.0)
@@ -98,13 +100,22 @@ class BoardRenamePayload(BaseModel):
     new_name: str
 
 
+class SleepSettingsPayload(BaseModel):
+    enabled: bool
+    start_hour: int = Field(ge=0, le=23)
+    end_hour: int = Field(ge=0, le=23)
+
+
 class WebServer:
     """Built-in FastAPI server for frame mirroring and browser input."""
 
-    def __init__(self, *, input_hub, host: str, port: int) -> None:
+    def __init__(self, *, input_hub, host: str, port: int, settings_path: Path | None = None) -> None:
         self._input_hub = input_hub
         self._host = host
         self._port = port
+        self._settings_store = RuntimeSettingsStore(
+            settings_path or (Path(__file__).resolve().parents[2] / "state" / "settings.json")
+        )
         self._app = FastAPI()
         self._app.add_middleware(
             CORSMiddleware,
@@ -121,6 +132,7 @@ class WebServer:
         self._current_mode = ""
         self._controls = []
         self._board = None
+        self._transition_policy = None
 
         self._server: Optional[uvicorn.Server] = None
         self._thread: Optional[threading.Thread] = None
@@ -398,6 +410,26 @@ class WebServer:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             return {"status": "ok", "renamed": renamed}
 
+        @self._app.get("/api/settings/sleep")
+        def get_sleep_settings() -> JSONResponse:
+            transition_policy = self._require_transition_policy()
+            return JSONResponse(transition_policy.get_sleep_settings())
+
+        @self._app.post("/api/settings/sleep")
+        def post_sleep_settings(payload: SleepSettingsPayload) -> JSONResponse:
+            transition_policy = self._require_transition_policy()
+            settings = transition_policy.set_sleep_settings(
+                enabled=payload.enabled,
+                start_hour=payload.start_hour,
+                end_hour=payload.end_hour,
+            )
+            self._settings_store.save_sleep_settings(
+                enabled=bool(settings["enabled"]),
+                start_hour=int(settings["start_hour"]),
+                end_hour=int(settings["end_hour"]),
+            )
+            return JSONResponse({"status": "ok", **settings})
+
         @self._app.get("/api/ping")
         def ping() -> dict[str, str]:
             return {"status": "ok"}
@@ -460,7 +492,22 @@ class WebServer:
     def attach_board(self, board) -> None:
         self._board = board
 
+    def attach_transition_policy(self, transition_policy) -> None:
+        self._transition_policy = transition_policy
+        persisted = self._settings_store.load_sleep_settings()
+        if persisted is not None:
+            transition_policy.set_sleep_settings(
+                enabled=bool(persisted["enabled"]),
+                start_hour=int(persisted["start_hour"]),
+                end_hour=int(persisted["end_hour"]),
+            )
+
     def _require_board(self):
         if self._board is None:
             raise HTTPException(status_code=409, detail="board mode is not attached")
         return self._board
+
+    def _require_transition_policy(self):
+        if self._transition_policy is None:
+            raise HTTPException(status_code=409, detail="transition policy is not attached")
+        return self._transition_policy

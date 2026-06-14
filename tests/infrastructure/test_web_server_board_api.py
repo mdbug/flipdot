@@ -20,6 +20,26 @@ class DummyInputHub:
         pass
 
 
+class DummyTransitionPolicy:
+    def __init__(self):
+        self._settings = {
+            "enabled": True,
+            "start_hour": 0,
+            "end_hour": 7,
+        }
+
+    def get_sleep_settings(self):
+        return dict(self._settings)
+
+    def set_sleep_settings(self, *, enabled, start_hour, end_hour):
+        self._settings = {
+            "enabled": bool(enabled),
+            "start_hour": int(start_hour),
+            "end_hour": int(end_hour),
+        }
+        return dict(self._settings)
+
+
 class DummyBoard:
     def __init__(self):
         self.text = ""
@@ -167,6 +187,10 @@ def test_board_endpoints_require_attachment():
 
     assert response.status_code == 409
 
+    response = client.get("/api/settings/sleep")
+
+    assert response.status_code == 409
+
 
 def test_board_endpoints_mutate_attached_board():
     server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8124)
@@ -194,6 +218,76 @@ def test_board_endpoints_mutate_attached_board():
     response = client.get("/api/board/state")
     assert response.status_code == 200
     assert response.json()["text"] == "HELLO"
+
+
+def test_sleep_settings_endpoints_with_attached_transition_policy():
+    server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8130)
+    server.attach_transition_policy(DummyTransitionPolicy())
+    client = TestClient(server._app)
+
+    response = client.get("/api/settings/sleep")
+    assert response.status_code == 200
+    assert response.json() == {"enabled": True, "start_hour": 0, "end_hour": 7}
+
+    response = client.post(
+        "/api/settings/sleep",
+        json={"enabled": False, "start_hour": 22, "end_hour": 6},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    assert response.json()["enabled"] is False
+    assert response.json()["start_hour"] == 22
+    assert response.json()["end_hour"] == 6
+
+    response = client.get("/api/settings/sleep")
+    assert response.status_code == 200
+    assert response.json() == {"enabled": False, "start_hour": 22, "end_hour": 6}
+
+
+def test_sleep_settings_persist_to_json_file(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    server = WebServer(
+        input_hub=DummyInputHub(),
+        host="127.0.0.1",
+        port=8131,
+        settings_path=settings_path,
+    )
+    server.attach_transition_policy(DummyTransitionPolicy())
+    client = TestClient(server._app)
+
+    response = client.post(
+        "/api/settings/sleep",
+        json={"enabled": False, "start_hour": 21, "end_hour": 5},
+    )
+    assert response.status_code == 200
+    assert settings_path.exists()
+    raw = settings_path.read_text(encoding="utf-8")
+    assert '"sleep"' in raw
+    assert '"enabled": false' in raw
+    assert '"start_hour": 21' in raw
+    assert '"end_hour": 5' in raw
+
+
+def test_sleep_settings_load_from_json_file_on_attach(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        '{\n  "sleep": {\n    "enabled": false,\n    "start_hour": 20,\n    "end_hour": 6\n  }\n}\n',
+        encoding="utf-8",
+    )
+
+    policy = DummyTransitionPolicy()
+    server = WebServer(
+        input_hub=DummyInputHub(),
+        host="127.0.0.1",
+        port=8132,
+        settings_path=settings_path,
+    )
+    server.attach_transition_policy(policy)
+    client = TestClient(server._app)
+
+    response = client.get("/api/settings/sleep")
+    assert response.status_code == 200
+    assert response.json() == {"enabled": False, "start_hour": 20, "end_hour": 6}
 
 
 def test_board_new_endpoints_work_with_attached_board():

@@ -4,6 +4,12 @@ const statusText = document.getElementById("statusText");
 const sourceText = document.getElementById("sourceText");
 const modeControls = document.getElementById("modeControls");
 const boardEditor = document.getElementById("boardEditor");
+const settingsToggle = document.getElementById("settingsToggle");
+const sleepSettings = document.getElementById("sleepSettings");
+const sleepEnabled = document.getElementById("sleepEnabled");
+const sleepStartHour = document.getElementById("sleepStartHour");
+const sleepEndHour = document.getElementById("sleepEndHour");
+const sleepSettingsStatus = document.getElementById("sleepSettingsStatus");
 
 const boardText = document.getElementById("boardText");
 const boardApplyText = document.getElementById("boardApplyText");
@@ -62,6 +68,7 @@ let dragQueuedPosition = null;
 let latestFramePixels = Array.from({ length: GRID }, () => Array(GRID).fill(0));
 let activeBoardTool = "select";
 let previousDrawTool = "freehand";
+let sleepStatusTimer = null;
 
 function clonePixels(pixels) {
   const out = Array.from({ length: GRID }, () => Array(GRID).fill(0));
@@ -306,6 +313,96 @@ function toInt(value, fallback) {
 function toFloat(value, fallback) {
   const parsed = Number.parseFloat(String(value));
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function clampHour(value, fallback) {
+  return Math.max(0, Math.min(23, toInt(value, fallback)));
+}
+
+function setSleepInputsEnabled(enabled) {
+  const disabled = !enabled;
+  sleepStartHour.disabled = disabled;
+  sleepEndHour.disabled = disabled;
+}
+
+function setSleepSettingsStatus(message, kind = "") {
+  sleepSettingsStatus.textContent = message;
+  sleepSettingsStatus.classList.remove("error", "ok");
+  if (kind === "error" || kind === "ok") {
+    sleepSettingsStatus.classList.add(kind);
+  }
+}
+
+function formatRelativeTimestamp(since) {
+  const seconds = Math.max(0, Math.floor((Date.now() - since) / 1000));
+  if (seconds <= 1) {
+    return "just now";
+  }
+  if (seconds < 60) {
+    return `${seconds}s ago`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ago`;
+}
+
+function setSleepStatusWithTimestamp(prefix, kind) {
+  if (sleepStatusTimer !== null) {
+    window.clearInterval(sleepStatusTimer);
+    sleepStatusTimer = null;
+  }
+
+  const startedAt = Date.now();
+  const refresh = () => {
+    setSleepSettingsStatus(`${prefix} (${formatRelativeTimestamp(startedAt)})`, kind);
+  };
+
+  refresh();
+  sleepStatusTimer = window.setInterval(refresh, 1000);
+}
+
+async function loadSleepSettings() {
+  try {
+    const payload = await getJson("/api/settings/sleep");
+    sleepEnabled.checked = Boolean(payload.enabled);
+    sleepStartHour.value = String(clampHour(payload.start_hour, 0));
+    sleepEndHour.value = String(clampHour(payload.end_hour, 7));
+    setSleepInputsEnabled(sleepEnabled.checked);
+    setSleepStatusWithTimestamp("Sleep settings loaded", "ok");
+  } catch (_err) {
+    setSleepSettingsStatus("Sleep settings unavailable.", "error");
+  }
+}
+
+async function saveSleepSettings() {
+  const payload = {
+    enabled: sleepEnabled.checked,
+    start_hour: clampHour(sleepStartHour.value, 0),
+    end_hour: clampHour(sleepEndHour.value, 7),
+  };
+
+  sleepStartHour.value = String(payload.start_hour);
+  sleepEndHour.value = String(payload.end_hour);
+
+  const response = await postJson("/api/settings/sleep", payload);
+  if (!response || !response.ok) {
+    setSleepSettingsStatus("Failed to save sleep settings.", "error");
+    return;
+  }
+
+  try {
+    const saved = await response.json();
+    sleepEnabled.checked = Boolean(saved.enabled);
+    sleepStartHour.value = String(clampHour(saved.start_hour, payload.start_hour));
+    sleepEndHour.value = String(clampHour(saved.end_hour, payload.end_hour));
+    setSleepInputsEnabled(sleepEnabled.checked);
+    setSleepStatusWithTimestamp("Sleep settings saved", "ok");
+  } catch (_err) {
+    setSleepStatusWithTimestamp("Sleep settings saved", "ok");
+  }
 }
 
 function selectedTextObject() {
@@ -1019,6 +1116,23 @@ function renderControls(controls) {
   }
 }
 
+sleepEnabled.addEventListener("change", () => {
+  setSleepInputsEnabled(sleepEnabled.checked);
+  saveSleepSettings();
+});
+
+sleepStartHour.addEventListener("change", () => {
+  saveSleepSettings();
+});
+
+sleepEndHour.addEventListener("change", () => {
+  saveSleepSettings();
+});
+
+settingsToggle.addEventListener("click", () => {
+  sleepSettings.classList.toggle("hidden");
+});
+
 canvas.addEventListener("pointermove", (event) => {
   const pos = normPosFromEvent(event);
   sourceText.textContent = "Source: web";
@@ -1509,4 +1623,5 @@ document.addEventListener("keydown", (event) => {
 });
 
 setBoardTool("select");
+loadSleepSettings();
 startWebSocket();

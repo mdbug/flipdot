@@ -149,6 +149,8 @@ def main():
         sleep_end_hour=sleep_hour_end,
         face_mesh_max_fps=face_mesh_max_fps,
     )
+    if web_server is not None:
+        web_server.attach_transition_policy(transition_policy)
 
     try:
         while True:

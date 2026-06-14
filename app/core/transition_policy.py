@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+import threading
 import time
 
 import app.services.human_pose as human_pose
@@ -32,7 +33,9 @@ class TransitionPolicy:
         pose_distance_threshold: float = 1.3,
         face_mesh_max_fps: float = 12.0,
     ) -> None:
+        self._sleep_lock = threading.Lock()
         self.pose_timeout = pose_timeout
+        self.sleep_enabled = True
         self.sleep_start_hour = sleep_start_hour
         self.sleep_end_hour = sleep_end_hour
         self.pose_distance_threshold = pose_distance_threshold
@@ -41,6 +44,25 @@ class TransitionPolicy:
         self._cached_face_mesh_results = None
         self._last_worldcup_live_check = 0.0
         self._cached_worldcup_live = False
+
+    def get_sleep_settings(self) -> dict[str, int | bool]:
+        with self._sleep_lock:
+            return {
+                "enabled": self.sleep_enabled,
+                "start_hour": self.sleep_start_hour,
+                "end_hour": self.sleep_end_hour,
+            }
+
+    def set_sleep_settings(self, *, enabled: bool, start_hour: int, end_hour: int) -> dict[str, int | bool]:
+        with self._sleep_lock:
+            self.sleep_enabled = bool(enabled)
+            self.sleep_start_hour = max(0, min(23, int(start_hour)))
+            self.sleep_end_hour = max(0, min(23, int(end_hour)))
+            return {
+                "enabled": self.sleep_enabled,
+                "start_hour": self.sleep_start_hour,
+                "end_hour": self.sleep_end_hour,
+            }
 
     def _is_worldcup_live(self) -> bool:
         now_mono = time.monotonic()
@@ -54,13 +76,21 @@ class TransitionPolicy:
         return self._cached_worldcup_live
 
     def is_sleep_hour(self, now: datetime | None = None) -> bool:
+        with self._sleep_lock:
+            sleep_enabled = self.sleep_enabled
+            sleep_start_hour = self.sleep_start_hour
+            sleep_end_hour = self.sleep_end_hour
+
+        if not sleep_enabled:
+            return False
+
         if now is None:
             now = datetime.now()
 
         # Preserve existing behavior: only support non-wrapping ranges.
         return (
-            self.sleep_end_hour > self.sleep_start_hour
-            and self.sleep_start_hour <= now.hour < self.sleep_end_hour
+            sleep_end_hour > sleep_start_hour
+            and sleep_start_hour <= now.hour < sleep_end_hour
         )
 
     def apply(self, *, frame, pose_results, mode_manager: ModeManager, paint_mode) -> TransitionState:
