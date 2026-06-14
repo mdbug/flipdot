@@ -21,6 +21,7 @@ def _load_factory_module(monkeypatch):
         "app.modes.pong": "Pong",
         "app.modes.worldcup": "WorldCup",
         "app.modes.board": "Board",
+        "app.modes.font_preview": "FontPreview",
     }
 
     for module_name, symbol in stubs.items():
@@ -48,6 +49,7 @@ def test_create_mode_instances_returns_expected_keys(monkeypatch):
         "pong",
         "worldcup",
         "board",
+        "font_preview",
     }
 
 

@@ -141,6 +141,50 @@ def test_board_draw_shape_writes_pixels(monkeypatch, tmp_path):
     assert int(frame.sum()) > 0
 
 
+def test_board_draw_shape_line_width_changes_more_pixels(monkeypatch, tmp_path):
+    board_module = _load_board_module(monkeypatch, tmp_path)
+
+    thin = board_module.Board(28, 28, DummyModeManager())
+    thin.draw_shape(
+        "line",
+        {"x": 0.1, "y": 0.1},
+        {"x": 0.9, "y": 0.1},
+        line_width=1,
+        color="on",
+    )
+
+    thick = board_module.Board(28, 28, DummyModeManager())
+    thick.draw_shape(
+        "line",
+        {"x": 0.1, "y": 0.1},
+        {"x": 0.9, "y": 0.1},
+        line_width=4,
+        color="on",
+    )
+
+    assert int(thick.get_frame(None).sum()) > int(thin.get_frame(None).sum())
+
+
+def test_board_apply_stroke_off_color_erases_pixels(monkeypatch, tmp_path):
+    board_module = _load_board_module(monkeypatch, tmp_path)
+    board = board_module.Board(28, 28, DummyModeManager())
+
+    board.apply_stroke([
+        {"x": 0.5, "y": 0.5},
+    ])
+    before_erase = int(board.get_frame(None).sum())
+    assert before_erase > 0
+
+    board.apply_stroke(
+        [{"x": 0.5, "y": 0.5}],
+        line_width=1,
+        color="off",
+    )
+
+    after_erase = int(board.get_frame(None).sum())
+    assert after_erase < before_erase
+
+
 def test_board_save_and_load_named_board(monkeypatch, tmp_path):
     board_module = _load_board_module(monkeypatch, tmp_path)
     board = board_module.Board(28, 28, DummyModeManager())

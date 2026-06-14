@@ -1,0 +1,266 @@
+:root {
+  color-scheme: dark;
+  --bg: #101114;
+  --surface: #191b20;
+  --surface-raised: #22252b;
+  --surface-soft: #15171b;
+  --line: #343841;
+  --line-strong: #4c535f;
+  --text: #f3efe6;
+  --muted: #a8adb7;
+  --dim: #747b88;
+  --dot-on: #ffffff;
+  --dot-off: #39404b;
+  --teal: #2ab7a9;
+  --teal-dark: #15766f;
+  --ink: #0b0d10;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 10% 0%, rgba(42, 183, 169, 0.17) 0, transparent 34%),
+    radial-gradient(circle at 100% 20%, rgba(239, 107, 85, 0.1) 0, transparent 28%),
+    var(--bg);
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+.grid-shell {
+  width: min(100%, 1600px);
+  margin: 0 auto;
+  padding: 1rem;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  gap: 1rem;
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.eyebrow {
+  margin: 0;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+h1 {
+  margin: 0.2rem 0;
+  font-size: clamp(1.5rem, 3vw, 2.6rem);
+}
+
+.subhead {
+  margin: 0;
+  color: var(--dim);
+}
+
+.back-link {
+  text-decoration: none;
+  color: #f7fffb;
+  background: var(--teal-dark);
+  padding: 0.55rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  font-weight: 700;
+}
+
+.back-link:hover {
+  background: var(--teal);
+  color: var(--ink);
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.7rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.4rem 0.55rem;
+}
+
+.controls label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.74rem;
+  color: var(--muted);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.controls select {
+  min-height: 1.85rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.controls input[type="range"] {
+  width: 8rem;
+  min-height: 1.85rem;
+  accent-color: var(--teal);
+}
+
+.zoom-value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.status {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.table-wrap {
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+}
+
+.glyph-table {
+  width: max-content;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.glyph-table th,
+.glyph-table td {
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 0.08rem 0.04rem;
+  vertical-align: top;
+  background: var(--surface-soft);
+}
+
+.glyph-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--surface-raised);
+}
+
+.glyph-table th:first-child,
+.glyph-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: #182127;
+  min-width: 3.7rem;
+}
+
+.glyph-table thead th:first-child {
+  z-index: 4;
+}
+
+.char-cell {
+  font-family: "JetBrains Mono", "Consolas", monospace;
+  font-weight: 700;
+  display: flex;
+  flex-direction: column;
+  gap: 0.14rem;
+}
+
+.char-code {
+  color: var(--muted);
+  font-size: 0.62rem;
+}
+
+.variant-head {
+  min-width: 0;
+  line-height: 1.2;
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.glyph-table thead th {
+  vertical-align: bottom;
+}
+
+.variant-head-label {
+  color: var(--text);
+  line-height: 1.1;
+}
+
+.variant-head-preview {
+  margin-top: 0.08rem;
+  display: grid;
+  place-items: end center;
+  min-height: 18px;
+}
+
+.variant-meta {
+  color: var(--muted);
+  font-size: 0.62rem;
+}
+
+.glyph-head-main {
+  line-height: 1;
+}
+
+.glyph-head-current {
+  margin-top: 0.1rem;
+  color: var(--muted);
+  font-size: 0.58rem;
+  line-height: 1.1;
+}
+
+.glyph-canvas {
+  display: block;
+  margin: 0 auto;
+  background: #0d1015;
+  border: 1px solid #25303b;
+  border-radius: 4px;
+}
+
+.density-comfortable .glyph-table th,
+.density-comfortable .glyph-table td {
+  padding: 0.12rem 0.08rem;
+}
+
+.density-comfortable .glyph-canvas {
+  background: #12171f;
+  border-color: #34414f;
+}
+
+.glyph-row-active td {
+  background: #1f2832;
+}
+
+.glyph-row-active td:first-child {
+  background: #21353e;
+}
+
+#tableWrap:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+@media (max-width: 900px) {
+  .grid-shell {
+    grid-template-rows: auto auto auto minmax(22rem, 1fr);
+  }
+}

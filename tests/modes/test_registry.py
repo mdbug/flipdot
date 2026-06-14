@@ -57,6 +57,7 @@ def test_build_mode_registry_maps_core_renderers(monkeypatch):
     pong = _FakeMode(np.full((28, 28), 9, dtype=np.uint8))
     worldcup = _FakeMode(np.full((28, 28), 10, dtype=np.uint8))
     board = _FakeMode(np.full((28, 28), 11, dtype=np.uint8))
+    font_preview = _FakeMode(np.full((28, 28), 12, dtype=np.uint8))
     sleep = np.zeros((28, 28), dtype=np.uint8)
 
     registry = registry_module.build_mode_registry(
@@ -71,6 +72,7 @@ def test_build_mode_registry_maps_core_renderers(monkeypatch):
         pong_game=pong,
         worldcup=worldcup,
         board=board,
+        font_preview=font_preview,
         img_sleep=sleep,
         clock_resolve_time=0.5,
         clock_disolve_time=0.5,
@@ -82,6 +84,7 @@ def test_build_mode_registry_maps_core_renderers(monkeypatch):
     assert registry.render(mm.ModeManager.MODE_PAINT, c)[0, 0] == 3
     assert registry.render(mm.ModeManager.MODE_WORLDCUP, c)[0, 0] == 10
     assert registry.render(mm.ModeManager.MODE_BOARD, c)[0, 0] == 11
+    assert registry.render(mm.ModeManager.MODE_FONT_PREVIEW, c)[0, 0] == 12
 
 
 def test_pose_and_clock_transition_paths(monkeypatch):
@@ -102,6 +105,7 @@ def test_pose_and_clock_transition_paths(monkeypatch):
         pong_game=blank,
         worldcup=blank,
         board=blank,
+        font_preview=blank,
         img_sleep=np.zeros((28, 28), dtype=np.uint8),
         clock_resolve_time=1.0,
         clock_disolve_time=1.0,

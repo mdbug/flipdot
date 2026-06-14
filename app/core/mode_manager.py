@@ -18,6 +18,7 @@ class ModeManager:
     MODE_PONG = 'pong'
     MODE_WORLDCUP = 'worldcup'
     MODE_BOARD = 'board'
+    MODE_FONT_PREVIEW = 'font_preview'
     MODE_DEFAULT = MODE_CLOCK
     MAX_FPS = {
         MODE_SLEEP: 1,
@@ -33,6 +34,7 @@ class ModeManager:
         MODE_PONG: 30,
         MODE_WORLDCUP: 4,
         MODE_BOARD: 30,
+        MODE_FONT_PREVIEW: 30,
     }
 
     def __init__(self, mode=MODE_DEFAULT):

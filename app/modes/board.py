@@ -334,7 +334,36 @@ class Board:
     def _clip_pixel(self, x, y):
         return max(0, min(self.width - 1, int(x))), max(0, min(self.height - 1, int(y)))
 
-    def _draw_line(self, p0, p1):
+    def _normalize_line_width(self, line_width):
+        try:
+            width = int(line_width)
+        except Exception:
+            width = 1
+        return max(1, min(8, width))
+
+    def _normalize_color(self, color):
+        value = str(color or "on").strip().lower()
+        if value in {"off", "erase", "0", "false", "black"}:
+            return 0
+        return 1
+
+    def _paint_point(self, x, y, *, line_width=1, color=1):
+        width = self._normalize_line_width(line_width)
+        value = 0 if int(color) == 0 else 1
+        start_x = int(x) - (width // 2)
+        start_y = int(y) - (width // 2)
+        end_x = start_x + width
+        end_y = start_y + width
+
+        for py in range(start_y, end_y):
+            if py < 0 or py >= self.height:
+                continue
+            for px in range(start_x, end_x):
+                if px < 0 or px >= self.width:
+                    continue
+                self._draw_layer[py, px] = value
+
+    def _draw_line(self, p0, p1, *, line_width=1, color=1):
         x0, y0 = p0
         x1, y1 = p1
         dx = x1 - x0
@@ -345,21 +374,21 @@ class Board:
             x = int(round(x0 + (dx * t)))
             y = int(round(y0 + (dy * t)))
             if 0 <= x < self.width and 0 <= y < self.height:
-                self._draw_layer[y, x] = 1
+                self._paint_point(x, y, line_width=line_width, color=color)
 
-    def _draw_rect(self, p0, p1):
+    def _draw_rect(self, p0, p1, *, line_width=1, color=1):
         x0, y0 = p0
         x1, y1 = p1
         min_x = min(x0, x1)
         max_x = max(x0, x1)
         min_y = min(y0, y1)
         max_y = max(y0, y1)
-        self._draw_line((min_x, min_y), (max_x, min_y))
-        self._draw_line((max_x, min_y), (max_x, max_y))
-        self._draw_line((max_x, max_y), (min_x, max_y))
-        self._draw_line((min_x, max_y), (min_x, min_y))
+        self._draw_line((min_x, min_y), (max_x, min_y), line_width=line_width, color=color)
+        self._draw_line((max_x, min_y), (max_x, max_y), line_width=line_width, color=color)
+        self._draw_line((max_x, max_y), (min_x, max_y), line_width=line_width, color=color)
+        self._draw_line((min_x, max_y), (min_x, min_y), line_width=line_width, color=color)
 
-    def _draw_circle(self, p0, p1):
+    def _draw_circle(self, p0, p1, *, line_width=1, color=1):
         cx = int(round((p0[0] + p1[0]) / 2.0))
         cy = int(round((p0[1] + p1[1]) / 2.0))
         radius = max(1, int(round(max(abs(p1[0] - p0[0]), abs(p1[1] - p0[1])) / 2.0)))
@@ -368,7 +397,7 @@ class Board:
             x = int(round(cx + radius * math.cos(rad)))
             y = int(round(cy + radius * math.sin(rad)))
             if 0 <= x < self.width and 0 <= y < self.height:
-                self._draw_layer[y, x] = 1
+                self._paint_point(x, y, line_width=line_width, color=color)
 
     def _blit(self, frame, pixels, x, y):
         height, width = pixels.shape
@@ -788,7 +817,7 @@ class Board:
             "height": int(matrix.shape[0]),
         }
 
-    def draw_shape(self, tool, start, end):
+    def draw_shape(self, tool, start, end, *, line_width=1, color="on"):
         tool_name = str(tool or "line").strip().lower()
         if tool_name not in {"line", "rectangle", "circle"}:
             raise ValueError("unsupported shape tool")
@@ -796,12 +825,14 @@ class Board:
             self._push_undo()
             p0 = self._to_pixel(start["x"], start["y"])
             p1 = self._to_pixel(end["x"], end["y"])
+            width = self._normalize_line_width(line_width)
+            draw_color = self._normalize_color(color)
             if tool_name == "line":
-                self._draw_line(p0, p1)
+                self._draw_line(p0, p1, line_width=width, color=draw_color)
             elif tool_name == "rectangle":
-                self._draw_rect(p0, p1)
+                self._draw_rect(p0, p1, line_width=width, color=draw_color)
             elif tool_name == "circle":
-                self._draw_circle(p0, p1)
+                self._draw_circle(p0, p1, line_width=width, color=draw_color)
             self._save_state()
 
     def set_text(self, value):
@@ -852,13 +883,15 @@ class Board:
                     self._text_objects[index] = item
             self._save_state()
 
-    def apply_stroke(self, points):
+    def apply_stroke(self, points, *, line_width=1, color="on"):
         normalized_points = list(points or [])
         if not normalized_points:
             return
 
         with self._lock:
             self._push_undo()
+            width = self._normalize_line_width(line_width)
+            draw_color = self._normalize_color(color)
             pixel_points = []
             for point in normalized_points:
                 px, py = self._to_pixel(point["x"], point["y"])
@@ -866,10 +899,10 @@ class Board:
 
             if len(pixel_points) == 1:
                 x, y = pixel_points[0]
-                self._draw_layer[y, x] = 1
+                self._paint_point(x, y, line_width=width, color=draw_color)
             else:
                 for idx in range(1, len(pixel_points)):
-                    self._draw_line(pixel_points[idx - 1], pixel_points[idx])
+                    self._draw_line(pixel_points[idx - 1], pixel_points[idx], line_width=width, color=draw_color)
 
             self._save_state()
 

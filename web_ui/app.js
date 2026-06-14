@@ -6,10 +6,15 @@ const modeControls = document.getElementById("modeControls");
 const boardEditor = document.getElementById("boardEditor");
 const settingsToggle = document.getElementById("settingsToggle");
 const sleepSettings = document.getElementById("sleepSettings");
+const fontPreviewSettings = document.getElementById("fontPreviewSettings");
 const sleepEnabled = document.getElementById("sleepEnabled");
 const sleepStartHour = document.getElementById("sleepStartHour");
 const sleepEndHour = document.getElementById("sleepEndHour");
 const sleepSettingsStatus = document.getElementById("sleepSettingsStatus");
+const fontPreviewPhrase = document.getElementById("fontPreviewPhrase");
+const fontPreviewSpacing = document.getElementById("fontPreviewSpacing");
+const fontPreviewStatus = document.getElementById("fontPreviewStatus");
+const fontPreviewSlots = document.getElementById("fontPreviewSlots");
 
 const boardText = document.getElementById("boardText");
 const boardApplyText = document.getElementById("boardApplyText");
@@ -30,6 +35,8 @@ const boardClear = document.getElementById("boardClear");
 const boardUndo = document.getElementById("boardUndo");
 const boardDrawToggle = document.getElementById("boardDrawToggle");
 const boardTool = document.getElementById("boardTool");
+const boardDrawLineWidth = document.getElementById("boardDrawLineWidth");
+const boardDrawColor = document.getElementById("boardDrawColor");
 const toolbarButtons = Array.from(document.querySelectorAll(".tool-btn[data-tool]"));
 const shapeButtons = Array.from(document.querySelectorAll(".shape-btn[data-shape]"));
 const boardContext = document.getElementById("boardContext");
@@ -53,6 +60,7 @@ const boardDeleteNamed = document.getElementById("boardDeleteNamed");
 const GRID = 28;
 const HAS_POINTER_EVENTS = "PointerEvent" in window;
 const DRAW_TOOLS = new Set(["freehand", "line", "rectangle", "circle"]);
+const THEME = window.getComputedStyle(document.documentElement);
 
 let lastVersion = -1;
 let pollingTimer = null;
@@ -74,6 +82,67 @@ let latestFramePixels = Array.from({ length: GRID }, () => Array(GRID).fill(0));
 let activeBoardTool = "select";
 let previousDrawTool = "freehand";
 let sleepStatusTimer = null;
+let fontPreviewCatalog = {};
+let fontPreviewVariants = [null, null, null, null];
+
+function activeSettingsPanel() {
+  if (currentMode === "font_preview") {
+    return fontPreviewSettings;
+  }
+  return sleepSettings;
+}
+
+function hideAllSettingsPanels() {
+  if (sleepSettings) {
+    sleepSettings.classList.add("hidden");
+  }
+  if (fontPreviewSettings) {
+    fontPreviewSettings.classList.add("hidden");
+  }
+}
+
+function cleanPhrase(value) {
+  const compact = String(value || "").replace(/\s+/g, " ").trim();
+  if (!compact) {
+    return "FLIPDOT";
+  }
+  return compact.slice(0, 32);
+}
+
+function clampFontPreviewSpacing(value) {
+  const parsed = toInt(value, 0);
+  return Math.max(0, Math.min(6, parsed));
+}
+
+function snapToGridMultiple(value) {
+  const n = Math.max(GRID, Number.isFinite(value) ? Math.floor(value) : GRID);
+  return Math.max(GRID, Math.floor(n / GRID) * GRID);
+}
+
+function syncCanvasResolution() {
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) {
+    return;
+  }
+
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const cssSize = snapToGridMultiple(rect.width);
+  const deviceSize = snapToGridMultiple(cssSize * dpr);
+
+  const cssSizePx = `${cssSize}px`;
+  if (canvas.style.width !== cssSizePx) {
+    canvas.style.width = cssSizePx;
+    canvas.style.height = cssSizePx;
+  }
+
+  if (canvas.width === deviceSize && canvas.height === deviceSize) {
+    return;
+  }
+
+  canvas.width = deviceSize;
+  canvas.height = deviceSize;
+  drawGrid(latestFramePixels);
+}
 
 function clonePixels(pixels) {
   const out = Array.from({ length: GRID }, () => Array(GRID).fill(0));
@@ -85,10 +154,20 @@ function clonePixels(pixels) {
   return out;
 }
 
+function themeColor(name, fallback) {
+  const value = THEME.getPropertyValue(name).trim();
+  return value || fallback;
+}
+
 function drawGrid(pixels) {
+  ctx.imageSmoothingEnabled = false;
   const cell = canvas.width / GRID;
+  const panelBack = themeColor("--surface-soft", "#15171b");
+  const dotBack = themeColor("--ink", "#0b0d10");
+  const dotOn = themeColor("--dot-on", "#f7d15c");
+  const dotOff = themeColor("--dot-off", "#39404b");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "#141d2a";
+  ctx.fillStyle = panelBack;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   for (let y = 0; y < GRID; y += 1) {
@@ -100,12 +179,12 @@ function drawGrid(pixels) {
 
       ctx.beginPath();
       ctx.arc(cx, cy, radius + cell * 0.04, 0, Math.PI * 2);
-      ctx.fillStyle = "#0d1420";
+      ctx.fillStyle = dotBack;
       ctx.fill();
 
       ctx.beginPath();
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-      ctx.fillStyle = on ? "#f2e8ba" : "#253346";
+      ctx.fillStyle = on ? dotOn : dotOff;
       ctx.fill();
 
       ctx.beginPath();
@@ -167,11 +246,26 @@ function drawSelectionOverlay(cell) {
   }
 }
 
-function setPreviewPixel(pixels, x, y) {
+function setPreviewPixel(pixels, x, y, drawValue = 1, lineWidth = 1) {
   if (x < 0 || x >= GRID || y < 0 || y >= GRID) {
     return;
   }
-  pixels[y][x] = 1;
+  const width = Math.max(1, Math.min(8, toInt(lineWidth, 1)));
+  const value = drawValue === 0 ? 0 : 1;
+  const x0 = x - Math.floor(width / 2);
+  const y0 = y - Math.floor(width / 2);
+
+  for (let row = y0; row < y0 + width; row += 1) {
+    if (row < 0 || row >= GRID) {
+      continue;
+    }
+    for (let col = x0; col < x0 + width; col += 1) {
+      if (col < 0 || col >= GRID) {
+        continue;
+      }
+      pixels[row][col] = value;
+    }
+  }
 }
 
 function pixelPointFromNorm(pos) {
@@ -181,7 +275,9 @@ function pixelPointFromNorm(pos) {
   };
 }
 
-function rasterLine(pixels, p0, p1) {
+function rasterLine(pixels, p0, p1, options = {}) {
+  const drawValue = options.drawValue === 0 ? 0 : 1;
+  const lineWidth = options.lineWidth;
   const dx = p1.x - p0.x;
   const dy = p1.y - p0.y;
   const steps = Math.max(Math.abs(dx), Math.abs(dy), 1);
@@ -189,22 +285,24 @@ function rasterLine(pixels, p0, p1) {
     const t = i / steps;
     const x = Math.round(p0.x + dx * t);
     const y = Math.round(p0.y + dy * t);
-    setPreviewPixel(pixels, x, y);
+    setPreviewPixel(pixels, x, y, drawValue, lineWidth);
   }
 }
 
-function rasterRect(pixels, p0, p1) {
+function rasterRect(pixels, p0, p1, options = {}) {
   const minX = Math.min(p0.x, p1.x);
   const maxX = Math.max(p0.x, p1.x);
   const minY = Math.min(p0.y, p1.y);
   const maxY = Math.max(p0.y, p1.y);
-  rasterLine(pixels, { x: minX, y: minY }, { x: maxX, y: minY });
-  rasterLine(pixels, { x: maxX, y: minY }, { x: maxX, y: maxY });
-  rasterLine(pixels, { x: maxX, y: maxY }, { x: minX, y: maxY });
-  rasterLine(pixels, { x: minX, y: maxY }, { x: minX, y: minY });
+  rasterLine(pixels, { x: minX, y: minY }, { x: maxX, y: minY }, options);
+  rasterLine(pixels, { x: maxX, y: minY }, { x: maxX, y: maxY }, options);
+  rasterLine(pixels, { x: maxX, y: maxY }, { x: minX, y: maxY }, options);
+  rasterLine(pixels, { x: minX, y: maxY }, { x: minX, y: minY }, options);
 }
 
-function rasterCircle(pixels, p0, p1) {
+function rasterCircle(pixels, p0, p1, options = {}) {
+  const drawValue = options.drawValue === 0 ? 0 : 1;
+  const lineWidth = options.lineWidth;
   const cx = Math.round((p0.x + p1.x) / 2);
   const cy = Math.round((p0.y + p1.y) / 2);
   const radius = Math.max(1, Math.round(Math.max(Math.abs(p1.x - p0.x), Math.abs(p1.y - p0.y)) / 2));
@@ -212,8 +310,21 @@ function rasterCircle(pixels, p0, p1) {
     const rad = (angle * Math.PI) / 180;
     const x = Math.round(cx + radius * Math.cos(rad));
     const y = Math.round(cy + radius * Math.sin(rad));
-    setPreviewPixel(pixels, x, y);
+    setPreviewPixel(pixels, x, y, drawValue, lineWidth);
   }
+}
+
+function getDrawLineWidth() {
+  const width = toInt(boardDrawLineWidth && boardDrawLineWidth.value, 1);
+  return Math.max(1, Math.min(8, width));
+}
+
+function getDrawColor() {
+  return boardDrawColor && boardDrawColor.value === "off" ? "off" : "on";
+}
+
+function getDrawValue() {
+  return getDrawColor() === "off" ? 0 : 1;
 }
 
 function renderShapePreview(currentPos) {
@@ -228,13 +339,17 @@ function renderShapePreview(currentPos) {
   const previewPixels = clonePixels(latestFramePixels);
   const p0 = pixelPointFromNorm(boardShapeStart);
   const p1 = pixelPointFromNorm(currentPos || boardShapeStart);
+  const options = {
+    lineWidth: getDrawLineWidth(),
+    drawValue: getDrawValue(),
+  };
 
   if (tool === "line") {
-    rasterLine(previewPixels, p0, p1);
+    rasterLine(previewPixels, p0, p1, options);
   } else if (tool === "rectangle") {
-    rasterRect(previewPixels, p0, p1);
+    rasterRect(previewPixels, p0, p1, options);
   } else if (tool === "circle") {
-    rasterCircle(previewPixels, p0, p1);
+    rasterCircle(previewPixels, p0, p1, options);
   }
 
   drawGrid(previewPixels);
@@ -369,6 +484,220 @@ function setSleepStatusWithTimestamp(prefix, kind) {
   sleepStatusTimer = window.setInterval(refresh, 1000);
 }
 
+function setFontPreviewStatus(message, kind = "") {
+  if (!fontPreviewStatus) {
+    return;
+  }
+  fontPreviewStatus.textContent = message;
+  fontPreviewStatus.classList.remove("error", "ok");
+  if (kind === "error" || kind === "ok") {
+    fontPreviewStatus.classList.add(kind);
+  }
+}
+
+function fontPreviewFamilyNames() {
+  return Object.keys(fontPreviewCatalog || {}).sort();
+}
+
+function fontPreviewSizeKeys(family) {
+  if (!family || !fontPreviewCatalog || !fontPreviewCatalog[family]) {
+    return [];
+  }
+  return Object.keys(fontPreviewCatalog[family]).sort((a, b) => Number(a) - Number(b));
+}
+
+function fontPreviewStyleNames(family, sizeKey) {
+  if (!family || !sizeKey || !fontPreviewCatalog || !fontPreviewCatalog[family]) {
+    return [];
+  }
+  const styles = fontPreviewCatalog[family][sizeKey];
+  return Array.isArray(styles) ? styles : [];
+}
+
+function normalizeFontPreviewVariant(entry) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const family = typeof entry.family === "string" ? entry.family : "";
+  const families = fontPreviewFamilyNames();
+  if (!families.includes(family)) {
+    return null;
+  }
+
+  const sizeKeys = fontPreviewSizeKeys(family);
+  if (sizeKeys.length === 0) {
+    return null;
+  }
+
+  const requestedSize = toInt(entry.size, Number(sizeKeys[0]));
+  const sizeKey = sizeKeys.includes(String(requestedSize)) ? String(requestedSize) : sizeKeys[0];
+
+  const styles = fontPreviewStyleNames(family, sizeKey);
+  if (styles.length === 0) {
+    return null;
+  }
+
+  const style = typeof entry.style === "string" && styles.includes(entry.style) ? entry.style : styles[0];
+  return { family, size: Number(sizeKey), style };
+}
+
+function defaultFontPreviewVariantForFamily(family) {
+  const sizeKeys = fontPreviewSizeKeys(family);
+  if (sizeKeys.length === 0) {
+    return null;
+  }
+  const styles = fontPreviewStyleNames(family, sizeKeys[0]);
+  if (styles.length === 0) {
+    return null;
+  }
+  return { family, size: Number(sizeKeys[0]), style: styles[0] };
+}
+
+function setFontPreviewVariantsFromPayload(variants) {
+  fontPreviewVariants = [null, null, null, null];
+  if (!Array.isArray(variants)) {
+    return;
+  }
+  for (let i = 0; i < Math.min(4, variants.length); i += 1) {
+    const normalized = normalizeFontPreviewVariant(variants[i]);
+    if (normalized) {
+      fontPreviewVariants[i] = normalized;
+    }
+  }
+}
+
+function collectFontPreviewVariantsPayload() {
+  const payload = [];
+  const seen = new Set();
+  for (const entry of fontPreviewVariants) {
+    const normalized = normalizeFontPreviewVariant(entry);
+    if (!normalized) {
+      continue;
+    }
+    const key = `${normalized.family}:${normalized.size}:${normalized.style}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    payload.push(normalized);
+  }
+  return payload.slice(0, 4);
+}
+
+function renderFontPreviewSlots() {
+  if (!fontPreviewSlots) {
+    return;
+  }
+
+  fontPreviewSlots.innerHTML = "";
+  const families = fontPreviewFamilyNames();
+  if (families.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "context-hint";
+    empty.textContent = "No font catalog available.";
+    fontPreviewSlots.appendChild(empty);
+    return;
+  }
+
+  for (let slotIndex = 0; slotIndex < 4; slotIndex += 1) {
+    const slot = fontPreviewVariants[slotIndex];
+    const row = document.createElement("div");
+    row.className = "font-preview-slot-row";
+
+    const slotLabel = document.createElement("span");
+    slotLabel.className = "font-preview-slot-label";
+    slotLabel.textContent = `Slot ${slotIndex + 1}`;
+    row.appendChild(slotLabel);
+
+    const familySelect = document.createElement("select");
+    const noneOption = document.createElement("option");
+    noneOption.value = "";
+    noneOption.textContent = "(none)";
+    familySelect.appendChild(noneOption);
+    for (const family of families) {
+      const option = document.createElement("option");
+      option.value = family;
+      option.textContent = family;
+      familySelect.appendChild(option);
+    }
+    familySelect.value = slot ? slot.family : "";
+
+    const sizeSelect = document.createElement("select");
+    const activeFamily = slot ? slot.family : "";
+    const sizeKeys = fontPreviewSizeKeys(activeFamily);
+    for (const sizeKey of sizeKeys) {
+      const option = document.createElement("option");
+      option.value = sizeKey;
+      option.textContent = sizeKey;
+      sizeSelect.appendChild(option);
+    }
+    if (slot && sizeKeys.includes(String(slot.size))) {
+      sizeSelect.value = String(slot.size);
+    }
+    sizeSelect.disabled = !slot;
+
+    const styleSelect = document.createElement("select");
+    const styleNames = slot ? fontPreviewStyleNames(slot.family, String(slot.size)) : [];
+    for (const styleName of styleNames) {
+      const option = document.createElement("option");
+      option.value = styleName;
+      option.textContent = styleName;
+      styleSelect.appendChild(option);
+    }
+    if (slot && styleNames.includes(slot.style)) {
+      styleSelect.value = slot.style;
+    }
+    styleSelect.disabled = !slot;
+
+    familySelect.addEventListener("change", () => {
+      const family = familySelect.value;
+      if (!family) {
+        fontPreviewVariants[slotIndex] = null;
+      } else {
+        fontPreviewVariants[slotIndex] = defaultFontPreviewVariantForFamily(family);
+      }
+      renderFontPreviewSlots();
+      saveFontPreviewSettings();
+    });
+
+    sizeSelect.addEventListener("change", () => {
+      const current = fontPreviewVariants[slotIndex];
+      if (!current) {
+        return;
+      }
+      const nextSize = toInt(sizeSelect.value, current.size);
+      const styles = fontPreviewStyleNames(current.family, String(nextSize));
+      const nextStyle = styles.includes(current.style) ? current.style : styles[0] || "regular";
+      fontPreviewVariants[slotIndex] = {
+        family: current.family,
+        size: nextSize,
+        style: nextStyle,
+      };
+      renderFontPreviewSlots();
+      saveFontPreviewSettings();
+    });
+
+    styleSelect.addEventListener("change", () => {
+      const current = fontPreviewVariants[slotIndex];
+      if (!current) {
+        return;
+      }
+      fontPreviewVariants[slotIndex] = {
+        family: current.family,
+        size: current.size,
+        style: styleSelect.value,
+      };
+      saveFontPreviewSettings();
+    });
+
+    row.appendChild(familySelect);
+    row.appendChild(sizeSelect);
+    row.appendChild(styleSelect);
+    fontPreviewSlots.appendChild(row);
+  }
+}
+
 async function loadSleepSettings() {
   try {
     const payload = await getJson("/api/settings/sleep");
@@ -407,6 +736,56 @@ async function saveSleepSettings() {
     setSleepStatusWithTimestamp("Sleep settings saved", "ok");
   } catch (_err) {
     setSleepStatusWithTimestamp("Sleep settings saved", "ok");
+  }
+}
+
+async function loadFontPreviewSettings() {
+  if (!fontPreviewPhrase || !fontPreviewSlots || !fontPreviewSpacing) {
+    return;
+  }
+  try {
+    const [payload, catalog] = await Promise.all([
+      getJson("/api/settings/font-preview"),
+      getJson("/api/font-preview/variants"),
+    ]);
+    fontPreviewCatalog = catalog && typeof catalog === "object" ? catalog : {};
+    fontPreviewPhrase.value = cleanPhrase(payload.phrase);
+    fontPreviewSpacing.value = String(clampFontPreviewSpacing(payload.spacing));
+    setFontPreviewVariantsFromPayload(payload.variants);
+    renderFontPreviewSlots();
+    setFontPreviewStatus("Font preview settings loaded.", "ok");
+  } catch (_err) {
+    setFontPreviewStatus("Font preview settings unavailable.", "error");
+  }
+}
+
+async function saveFontPreviewSettings() {
+  if (!fontPreviewPhrase || !fontPreviewSpacing) {
+    return;
+  }
+  const payload = {
+    phrase: cleanPhrase(fontPreviewPhrase.value),
+    spacing: clampFontPreviewSpacing(fontPreviewSpacing.value),
+    variants: collectFontPreviewVariantsPayload(),
+  };
+  fontPreviewPhrase.value = payload.phrase;
+  fontPreviewSpacing.value = String(payload.spacing);
+
+  const response = await postJson("/api/settings/font-preview", payload);
+  if (!response || !response.ok) {
+    setFontPreviewStatus("Failed to save font preview settings.", "error");
+    return;
+  }
+
+  try {
+    const saved = await response.json();
+    fontPreviewPhrase.value = cleanPhrase(saved.phrase);
+    fontPreviewSpacing.value = String(clampFontPreviewSpacing(saved.spacing));
+    setFontPreviewVariantsFromPayload(saved.variants);
+    renderFontPreviewSlots();
+    setFontPreviewStatus("Font preview settings saved.", "ok");
+  } catch (_err) {
+    setFontPreviewStatus("Font preview settings saved.", "ok");
   }
 }
 
@@ -848,7 +1227,11 @@ async function sendBoardStroke(points) {
   if (!Array.isArray(points) || points.length === 0) {
     return;
   }
-  await postJson("/api/board/draw", { points });
+  await postJson("/api/board/draw", {
+    points,
+    line_width: getDrawLineWidth(),
+    color: getDrawColor(),
+  });
 }
 
 async function boardHitTest(pos, options = {}) {
@@ -1129,9 +1512,13 @@ async function uploadImageAt(x, y) {
 function setMode(nextMode) {
   const previousMode = currentMode;
   currentMode = typeof nextMode === "string" ? nextMode : "";
+  const modeChanged = previousMode !== currentMode;
+  if (modeChanged) {
+    hideAllSettingsPanels();
+  }
   const boardVisible = isBoardMode();
   boardEditor.classList.toggle("hidden", !boardVisible);
-  if (boardVisible && previousMode !== currentMode) {
+  if (boardVisible && modeChanged) {
     syncBoardState();
     setBoardTool("select");
   }
@@ -1147,6 +1534,23 @@ function setMode(nextMode) {
     selectedTextId = "";
     setBoardsMenuOpen(false);
   }
+
+  if (modeChanged && currentMode === "font_preview" && fontPreviewSettings) {
+    fontPreviewSettings.classList.remove("hidden");
+  }
+}
+
+function getControlGlyph(action) {
+  const glyphs = {
+    toggle_menu: "=",
+    paint_clear: "x",
+    autodrum_next_song: ">",
+    board_clear: "x",
+    board_undo: "<",
+    font_preview_prev: "<",
+    font_preview_next: ">",
+  };
+  return glyphs[action] || "o";
 }
 
 function renderControls(controls) {
@@ -1175,7 +1579,13 @@ function renderControls(controls) {
     }
     button.title = control.label;
     button.setAttribute("aria-label", control.label);
-    button.textContent = control.label;
+    const glyph = document.createElement("span");
+    glyph.className = "mode-control-glyph";
+    glyph.setAttribute("aria-hidden", "true");
+    glyph.textContent = getControlGlyph(control.action);
+    const label = document.createElement("span");
+    label.textContent = control.label;
+    button.append(glyph, label);
     button.addEventListener("click", () => {
       postJson("/api/input/action", { action: control.action });
     });
@@ -1197,8 +1607,30 @@ sleepEndHour.addEventListener("change", () => {
 });
 
 settingsToggle.addEventListener("click", () => {
-  sleepSettings.classList.toggle("hidden");
+  if (currentMode === "font_preview" && fontPreviewSettings) {
+    fontPreviewSettings.classList.remove("hidden");
+    return;
+  }
+  const panel = activeSettingsPanel();
+  if (!panel) {
+    return;
+  }
+  const shouldOpen = panel.classList.contains("hidden");
+  hideAllSettingsPanels();
+  panel.classList.toggle("hidden", !shouldOpen);
 });
+
+if (fontPreviewPhrase) {
+  fontPreviewPhrase.addEventListener("change", () => {
+    saveFontPreviewSettings();
+  });
+}
+
+if (fontPreviewSpacing) {
+  fontPreviewSpacing.addEventListener("change", () => {
+    saveFontPreviewSettings();
+  });
+}
 
 canvas.addEventListener("pointermove", (event) => {
   const pos = normPosFromEvent(event);
@@ -1269,6 +1701,8 @@ canvas.addEventListener("pointerup", (event) => {
         tool: boardTool.value,
         start: boardShapeStart,
         end: pos,
+        line_width: getDrawLineWidth(),
+        color: getDrawColor(),
       }).then(() => syncBoardState());
     }
     boardStrokeActive = false;
@@ -1370,6 +1804,8 @@ canvas.addEventListener(
           tool: boardTool.value,
           start: boardShapeStart,
           end: lastTouchPos || boardShapeStart,
+          line_width: getDrawLineWidth(),
+          color: getDrawColor(),
         }).then(() => syncBoardState());
       }
       boardStrokeActive = false;
@@ -1635,6 +2071,10 @@ boardClear.addEventListener("click", async () => {
   if (!isBoardMode()) {
     return;
   }
+  const approved = window.confirm("Clear the board and remove all objects? This can be undone once.");
+  if (!approved) {
+    return;
+  }
   const response = await postJson("/api/board/clear", {});
   if (response && response.ok) {
     await syncBoardState();
@@ -1725,5 +2165,8 @@ document.addEventListener("keydown", (event) => {
 });
 
 setBoardTool("select");
+syncCanvasResolution();
+window.addEventListener("resize", syncCanvasResolution, { passive: true });
 loadSleepSettings();
+loadFontPreviewSettings();
 startWebSocket();

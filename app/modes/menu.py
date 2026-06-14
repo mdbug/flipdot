@@ -157,6 +157,11 @@ class Menu:
                 Button("PAINT", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_PAINT)),
                 Button("CLOCK", 2, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_CLOCK)),
             ],
+            [
+                Button("FONTS", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_FONT_PREVIEW)),
+                Button("CLOCK", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_CLOCK)),
+                Button("MENU", 2, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_MENU)),
+            ],
         ]
 
     @property

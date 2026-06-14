@@ -22,6 +22,7 @@ def build_mode_registry(
     pong_game,
     worldcup,
     board,
+    font_preview,
     img_sleep: np.ndarray,
     clock_resolve_time: float,
     clock_disolve_time: float,
@@ -69,5 +70,6 @@ def build_mode_registry(
     registry.register(ModeManager.MODE_PONG, lambda c: pong_game.get_frame(c.pose_results))
     registry.register(ModeManager.MODE_WORLDCUP, lambda c: worldcup.get_frame(c.pose_results))
     registry.register(ModeManager.MODE_BOARD, lambda c: board.get_frame(c.pose_results, input_hub=c.input_hub))
+    registry.register(ModeManager.MODE_FONT_PREVIEW, lambda c: font_preview.get_frame(c.pose_results, input_hub=c.input_hub))
 
     return registry

@@ -143,5 +143,15 @@ def test_indicator_click_changes_page_without_item_click(monkeypatch):
 
     menu.get_frame(pose_results=None, input_hub=hub)
 
-    assert menu.page == 2
+    assert menu.page == 4
     assert manager.modes == []
+
+
+def test_fonts_button_is_on_new_page(monkeypatch):
+    menu_module = _load_menu_module(monkeypatch)
+    manager = DummyModeManager()
+    menu = menu_module.Menu(width=28, height=28, mode_manager=manager)
+
+    assert len(menu.pages) >= 5
+    labels = [item.label for item in menu.pages[4]]
+    assert "FONTS" in labels

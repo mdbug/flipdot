@@ -72,6 +72,20 @@ def get_web_controls(mode: str) -> list[dict[str, str]]:
                 "action": "board_undo",
             },
         ],
+        ModeManager.MODE_FONT_PREVIEW: [
+            {
+                "id": "font_prev",
+                "label": "Prev",
+                "variant": "secondary",
+                "action": "font_preview_prev",
+            },
+            {
+                "id": "font_next",
+                "label": "Next",
+                "variant": "secondary",
+                "action": "font_preview_next",
+            },
+        ],
     }
     controls.extend(mode_controls.get(mode, []))
     return controls
@@ -101,12 +115,7 @@ def main():
     fps_tracker = FPSTracker()
     input_hub = InputHub()
     web_server = None
-    if enable_web_ui:
-        from app.infrastructure.web_server import WebServer
-
-        web_server = WebServer(input_hub=input_hub, host=web_ui_host, port=web_ui_port)
-        web_server.start()
-        logger.info("Web UI enabled on http://%s:%s", web_ui_host, web_ui_port)
+    web_server_start_pending = enable_web_ui
 
     last_log_time = time.time()
     paint_clear_gesture_start = None
@@ -124,8 +133,7 @@ def main():
     pong_game = mode_instances["pong"]
     worldcup = mode_instances["worldcup"]
     board = mode_instances["board"]
-    if web_server is not None:
-        web_server.attach_board(board)
+    font_preview = mode_instances["font_preview"]
     img_sleep = image.load('sleep.png')
     mode_registry = build_mode_registry(
         clock=clock,
@@ -139,6 +147,7 @@ def main():
         pong_game=pong_game,
         worldcup=worldcup,
         board=board,
+        font_preview=font_preview,
         img_sleep=img_sleep,
         clock_resolve_time=CLOCK_RESOLVE_TIME,
         clock_disolve_time=CLOCK_DISOLVE_TIME,
@@ -149,8 +158,6 @@ def main():
         sleep_end_hour=sleep_hour_end,
         face_mesh_max_fps=face_mesh_max_fps,
     )
-    if web_server is not None:
-        web_server.attach_transition_policy(transition_policy)
 
     try:
         while True:
@@ -195,6 +202,10 @@ def main():
                     board.clear()
                 elif action.action == 'board_undo' and mode_manager.mode == ModeManager.MODE_BOARD:
                     board.undo()
+                elif action.action == 'font_preview_prev' and mode_manager.mode == ModeManager.MODE_FONT_PREVIEW:
+                    font_preview.previous_variant()
+                elif action.action == 'font_preview_next' and mode_manager.mode == ModeManager.MODE_FONT_PREVIEW:
+                    font_preview.next_variant()
 
             transition_state = transition_policy.apply(
                 frame=frame,
@@ -241,6 +252,19 @@ def main():
             t_panel_start = time.time()
             panel.update(dots)
             panel_time = time.time() - t_panel_start
+
+            if web_server_start_pending:
+                # Defer FastAPI/uvicorn import/start until after the first panel
+                # update so cold web stack startup never delays first pixels.
+                from app.infrastructure.web_server import WebServer
+
+                web_server = WebServer(input_hub=input_hub, host=web_ui_host, port=web_ui_port)
+                web_server.attach_board(board)
+                web_server.attach_font_preview(font_preview)
+                web_server.attach_transition_policy(transition_policy)
+                web_server.start()
+                web_server_start_pending = False
+                logger.info("Web UI enabled on http://%s:%s", web_ui_host, web_ui_port)
 
             if web_server is not None:
                 web_server.publish_frame(

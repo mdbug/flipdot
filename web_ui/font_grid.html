@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>Flipdot Font Grid</title>
+    <link rel="stylesheet" href="/static/styles.css?v=2" />
+    <link rel="stylesheet" href="/static/font_grid.css?v=2" />
+    <script src="/static/font_grid.js?v=2" defer></script>
+  </head>
+  <body>
+    <main class="grid-shell">
+      <header class="page-head">
+        <div>
+          <p class="eyebrow">Typography lab</p>
+          <h1>Flipdot Font Grid</h1>
+          <p class="subhead">Compare every glyph across every available font variant.</p>
+        </div>
+        <a class="back-link" href="/">Back to console</a>
+      </header>
+
+      <section class="controls" aria-label="Font grid controls">
+        <label>
+          Family
+          <select id="filterFamily"></select>
+        </label>
+        <label>
+          Size
+          <select id="filterSize"></select>
+        </label>
+        <label>
+          Style
+          <select id="filterStyle"></select>
+        </label>
+        <label>
+          Density
+          <select id="viewDensity">
+            <option value="compact">Compact</option>
+            <option value="comfortable">Comfortable</option>
+          </select>
+        </label>
+        <label>
+          Zoom <span id="zoomValue" class="zoom-value">100%</span>
+          <input id="zoomLevel" type="range" min="50" max="300" step="10" value="100" />
+        </label>
+      </section>
+
+      <p id="statusText" class="status" aria-live="polite">Loading glyph catalog...</p>
+
+      <section
+        class="table-wrap"
+        id="tableWrap"
+        aria-label="Font glyph comparison table"
+        tabindex="0"
+      >
+        <table id="glyphTable" class="glyph-table">
+          <colgroup id="glyphColGroup"></colgroup>
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </main>
+  </body>
+</html>

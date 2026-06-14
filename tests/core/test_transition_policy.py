@@ -94,10 +94,19 @@ def test_worldcup_live_check_uses_cache_interval(monkeypatch):
     def fake_monotonic():
         return now["value"]
 
+    class _ImmediateThread:
+        def __init__(self, target, daemon=None):
+            self._target = target
+
+        def start(self):
+            self._target()
+
     monkeypatch.setattr(transition_policy_module, "get_worldcup_scorecard", fake_scorecard)
     monkeypatch.setattr(transition_policy_module.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(transition_policy_module.threading, "Thread", _ImmediateThread)
 
-    assert policy._is_worldcup_live() is True
+    # First call starts refresh in the background and returns cached value.
+    assert policy._is_worldcup_live() is False
     assert calls["count"] == 1
 
     now["value"] = 40.0

@@ -31,6 +31,62 @@ class DummyTransitionPolicy:
     def get_sleep_settings(self):
         return dict(self._settings)
 
+
+class DummyFontPreview:
+    def __init__(self):
+        self._settings = {"phrase": "FLIPDOT", "spacing": 0, "variants": []}
+
+    def get_settings(self):
+        return dict(self._settings)
+
+    def get_variant_catalog(self):
+        return {"classic": {"5": ["regular"], "6": ["regular", "monospace"]}}
+
+    def get_glyph_grid(self):
+        return {
+            "variants": [
+                {
+                    "family": "classic",
+                    "size": 5,
+                    "style": "regular",
+                    "cell_width": None,
+                    "glyphs": {
+                        "A": [[1, 0, 1], [1, 1, 1]],
+                        "B": [[1, 1], [1, 1]],
+                    },
+                }
+            ],
+            "characters": ["A", "B"],
+        }
+
+    def update_settings(self, *, phrase, variants=None, spacing=0):
+        cleaned = " ".join(str(phrase).split())
+        if not cleaned:
+            cleaned = "FLIPDOT"
+        normalized_variants = []
+        if isinstance(variants, list):
+            for item in variants:
+                if not isinstance(item, dict):
+                    continue
+                family = item.get("family")
+                size = item.get("size")
+                style = item.get("style")
+                if not isinstance(family, str) or not isinstance(style, str):
+                    continue
+                normalized_variants.append(
+                    {
+                        "family": family,
+                        "size": int(size),
+                        "style": style,
+                    }
+                )
+        self._settings = {
+            "phrase": cleaned[:32],
+            "spacing": max(0, min(6, int(spacing))),
+            "variants": normalized_variants[:4],
+        }
+        return dict(self._settings)
+
     def set_sleep_settings(self, *, enabled, start_hour, end_hour):
         self._settings = {
             "enabled": bool(enabled),
@@ -67,10 +123,10 @@ class DummyBoard:
     def set_text(self, value):
         self.text = value
 
-    def apply_stroke(self, points):
+    def apply_stroke(self, points, *, line_width=1, color="on"):
         self.draw_calls += 1
 
-    def draw_shape(self, tool, start, end):
+    def draw_shape(self, tool, start, end, *, line_width=1, color="on"):
         self.draw_calls += 1
 
     def clear(self):
@@ -191,6 +247,14 @@ def test_board_endpoints_require_attachment():
 
     assert response.status_code == 409
 
+    response = client.get("/api/settings/font-preview")
+
+    assert response.status_code == 409
+
+    response = client.get("/api/font-preview/glyph-grid")
+
+    assert response.status_code == 409
+
 
 def test_board_endpoints_mutate_attached_board():
     server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8124)
@@ -206,6 +270,17 @@ def test_board_endpoints_mutate_attached_board():
     assert response.status_code == 200
     assert board.draw_calls == 1
 
+    response = client.post(
+        "/api/board/draw",
+        json={
+            "points": [{"x": 0.3, "y": 0.4}],
+            "line_width": 3,
+            "color": "off",
+        },
+    )
+    assert response.status_code == 200
+    assert board.draw_calls == 2
+
     response = client.post("/api/board/clear", json={})
     assert response.status_code == 200
     assert board.clear_calls == 1
@@ -218,6 +293,16 @@ def test_board_endpoints_mutate_attached_board():
     response = client.get("/api/board/state")
     assert response.status_code == 200
     assert response.json()["text"] == "HELLO"
+
+
+def test_font_grid_page_route_serves_html():
+    server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8126)
+    client = TestClient(server._app)
+
+    response = client.get("/font-grid")
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers.get("content-type", "")
 
 
 def test_sleep_settings_endpoints_with_attached_transition_policy():
@@ -244,6 +329,47 @@ def test_sleep_settings_endpoints_with_attached_transition_policy():
     assert response.json() == {"enabled": False, "start_hour": 22, "end_hour": 6}
 
 
+def test_font_preview_settings_endpoints_with_attached_mode():
+    server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8133)
+    server.attach_font_preview(DummyFontPreview())
+    client = TestClient(server._app)
+
+    response = client.get("/api/settings/font-preview")
+    assert response.status_code == 200
+    assert response.json() == {"phrase": "FLIPDOT", "spacing": 0, "variants": []}
+
+    response = client.get("/api/font-preview/variants")
+    assert response.status_code == 200
+    assert "classic" in response.json()
+
+    response = client.get("/api/font-preview/glyph-grid")
+    assert response.status_code == 200
+    assert response.json()["characters"] == ["A", "B"]
+    assert response.json()["variants"][0]["family"] == "classic"
+
+    response = client.post(
+        "/api/settings/font-preview",
+        json={
+            "phrase": "   HELLO   WORLD   ",
+            "spacing": 3,
+            "variants": [{"family": "classic", "size": 6, "style": "monospace"}],
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    assert response.json()["phrase"] == "HELLO WORLD"
+    assert response.json()["spacing"] == 3
+    assert response.json()["variants"] == [{"family": "classic", "size": 6, "style": "monospace"}]
+
+    response = client.get("/api/settings/font-preview")
+    assert response.status_code == 200
+    assert response.json() == {
+        "phrase": "HELLO WORLD",
+        "spacing": 3,
+        "variants": [{"family": "classic", "size": 6, "style": "monospace"}],
+    }
+
+
 def test_sleep_settings_persist_to_json_file(tmp_path):
     settings_path = tmp_path / "settings.json"
     server = WebServer(
@@ -268,6 +394,30 @@ def test_sleep_settings_persist_to_json_file(tmp_path):
     assert '"end_hour": 5' in raw
 
 
+def test_font_preview_settings_persist_to_json_file(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    server = WebServer(
+        input_hub=DummyInputHub(),
+        host="127.0.0.1",
+        port=8134,
+        settings_path=settings_path,
+    )
+    server.attach_font_preview(DummyFontPreview())
+    client = TestClient(server._app)
+
+    response = client.post(
+        "/api/settings/font-preview",
+        json={"phrase": "FONT LAB"},
+    )
+    assert response.status_code == 200
+    assert settings_path.exists()
+    raw = settings_path.read_text(encoding="utf-8")
+    assert '"font_preview"' in raw
+    assert '"phrase": "FONT LAB"' in raw
+    assert '"spacing": 0' in raw
+    assert '"variants": []' in raw
+
+
 def test_sleep_settings_load_from_json_file_on_attach(tmp_path):
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(
@@ -288,6 +438,36 @@ def test_sleep_settings_load_from_json_file_on_attach(tmp_path):
     response = client.get("/api/settings/sleep")
     assert response.status_code == 200
     assert response.json() == {"enabled": False, "start_hour": 20, "end_hour": 6}
+
+
+def test_font_preview_settings_load_from_json_file_on_attach(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        (
+            '{\n  "font_preview": {\n    "phrase": "LAB MODE",\n'
+            '    "spacing": 2,\n'
+            '    "variants": [{"family": "classic", "size": 5, "style": "regular"}]\n  }\n}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    preview = DummyFontPreview()
+    server = WebServer(
+        input_hub=DummyInputHub(),
+        host="127.0.0.1",
+        port=8135,
+        settings_path=settings_path,
+    )
+    server.attach_font_preview(preview)
+    client = TestClient(server._app)
+
+    response = client.get("/api/settings/font-preview")
+    assert response.status_code == 200
+    assert response.json() == {
+        "phrase": "LAB MODE",
+        "spacing": 2,
+        "variants": [{"family": "classic", "size": 5, "style": "regular"}],
+    }
 
 
 def test_board_new_endpoints_work_with_attached_board():

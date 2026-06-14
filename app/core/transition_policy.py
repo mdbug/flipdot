@@ -44,6 +44,25 @@ class TransitionPolicy:
         self._cached_face_mesh_results = None
         self._last_worldcup_live_check = 0.0
         self._cached_worldcup_live = False
+        self._worldcup_lock = threading.Lock()
+        self._worldcup_refresh_in_flight = False
+
+    def _refresh_worldcup_live_cache(self) -> None:
+        """Refresh World Cup live state off the main render thread."""
+        live = None
+        try:
+            payload = get_worldcup_scorecard()
+            events = payload.get("events") or []
+            live = any(event.get("status_bucket") == "live" for event in events)
+        except Exception:
+            # Keep the previous cached value on transient API/network errors.
+            live = None
+
+        with self._worldcup_lock:
+            if live is not None:
+                self._cached_worldcup_live = live
+            self._last_worldcup_live_check = time.monotonic()
+            self._worldcup_refresh_in_flight = False
 
     def get_sleep_settings(self) -> dict[str, int | bool]:
         with self._sleep_lock:
@@ -66,14 +85,24 @@ class TransitionPolicy:
 
     def _is_worldcup_live(self) -> bool:
         now_mono = time.monotonic()
-        if now_mono - self._last_worldcup_live_check < self.WORLDCUP_LIVE_CHECK_INTERVAL:
-            return self._cached_worldcup_live
+        should_refresh = False
+        with self._worldcup_lock:
+            cached_live = self._cached_worldcup_live
+            if now_mono - self._last_worldcup_live_check >= self.WORLDCUP_LIVE_CHECK_INTERVAL:
+                if not self._worldcup_refresh_in_flight:
+                    self._worldcup_refresh_in_flight = True
+                    # Throttle refresh attempts even before the worker returns.
+                    self._last_worldcup_live_check = now_mono
+                    should_refresh = True
 
-        self._last_worldcup_live_check = now_mono
-        payload = get_worldcup_scorecard()
-        events = payload.get("events") or []
-        self._cached_worldcup_live = any(event.get("status_bucket") == "live" for event in events)
-        return self._cached_worldcup_live
+        if should_refresh:
+            try:
+                threading.Thread(target=self._refresh_worldcup_live_cache, daemon=True).start()
+            except Exception:
+                with self._worldcup_lock:
+                    self._worldcup_refresh_in_flight = False
+
+        return cached_live
 
     def is_sleep_hour(self, now: datetime | None = None) -> bool:
         with self._sleep_lock:
@@ -123,6 +152,7 @@ class TransitionPolicy:
             ModeManager.MODE_TETRIS,
             ModeManager.MODE_PONG,
             ModeManager.MODE_WORLDCUP,
+            ModeManager.MODE_FONT_PREVIEW,
         ):
             if human_pose.is_arms_crossed(pose_results):
                 mode_manager.click_menu()

@@ -41,12 +41,16 @@ class BoardPointPayload(BaseModel):
 
 class BoardDrawPayload(BaseModel):
     points: list[BoardPointPayload]
+    line_width: int = Field(default=1, ge=1, le=8)
+    color: str = Field(default="on")
 
 
 class BoardShapePayload(BaseModel):
     tool: str
     start: BoardPointPayload
     end: BoardPointPayload
+    line_width: int = Field(default=1, ge=1, le=8)
+    color: str = Field(default="on")
 
 
 class BoardTextObjectCreatePayload(BaseModel):
@@ -106,6 +110,18 @@ class SleepSettingsPayload(BaseModel):
     end_hour: int = Field(ge=0, le=23)
 
 
+class FontPreviewVariantPayload(BaseModel):
+    family: str
+    size: int
+    style: str
+
+
+class FontPreviewSettingsPayload(BaseModel):
+    phrase: str = Field(default="FLIPDOT", max_length=32)
+    spacing: int = Field(default=0, ge=0, le=6)
+    variants: list[FontPreviewVariantPayload] | None = None
+
+
 class WebServer:
     """Built-in FastAPI server for frame mirroring and browser input."""
 
@@ -133,6 +149,7 @@ class WebServer:
         self._controls = []
         self._board = None
         self._transition_policy = None
+        self._font_preview = None
 
         self._server: Optional[uvicorn.Server] = None
         self._thread: Optional[threading.Thread] = None
@@ -145,6 +162,10 @@ class WebServer:
         @self._app.get("/")
         def ui_root() -> FileResponse:
             return FileResponse(static_dir / "index.html")
+
+        @self._app.get("/font-grid")
+        def font_grid_page() -> FileResponse:
+            return FileResponse(static_dir / "font_grid.html")
 
         @self._app.get("/favicon.ico")
         def favicon() -> JSONResponse:
@@ -203,7 +224,11 @@ class WebServer:
             board = self._require_board()
             if not payload.points:
                 raise HTTPException(status_code=400, detail="points are required")
-            board.apply_stroke([{"x": p.x, "y": p.y} for p in payload.points])
+            board.apply_stroke(
+                [{"x": p.x, "y": p.y} for p in payload.points],
+                line_width=payload.line_width,
+                color=payload.color,
+            )
             return {"status": "ok"}
 
         @self._app.post("/api/board/clear")
@@ -276,6 +301,8 @@ class WebServer:
                 payload.tool,
                 {"x": payload.start.x, "y": payload.start.y},
                 {"x": payload.end.x, "y": payload.end.y},
+                line_width=payload.line_width,
+                color=payload.color,
             )
             return {"status": "ok"}
 
@@ -430,6 +457,39 @@ class WebServer:
             )
             return JSONResponse({"status": "ok", **settings})
 
+        @self._app.get("/api/settings/font-preview")
+        def get_font_preview_settings() -> JSONResponse:
+            font_preview = self._require_font_preview()
+            return JSONResponse(font_preview.get_settings())
+
+        @self._app.get("/api/font-preview/variants")
+        def get_font_preview_variants() -> JSONResponse:
+            font_preview = self._require_font_preview()
+            return JSONResponse(font_preview.get_variant_catalog())
+
+        @self._app.get("/api/font-preview/glyph-grid")
+        def get_font_preview_glyph_grid() -> JSONResponse:
+            font_preview = self._require_font_preview()
+            return JSONResponse(font_preview.get_glyph_grid())
+
+        @self._app.post("/api/settings/font-preview")
+        def post_font_preview_settings(payload: FontPreviewSettingsPayload) -> JSONResponse:
+            font_preview = self._require_font_preview()
+            variants_payload = None
+            if payload.variants is not None:
+                variants_payload = [item.model_dump() for item in payload.variants]
+            settings = font_preview.update_settings(
+                phrase=payload.phrase,
+                variants=variants_payload,
+                spacing=payload.spacing,
+            )
+            self._settings_store.save_font_preview_settings(
+                phrase=str(settings["phrase"]),
+                spacing=int(settings.get("spacing", 0)),
+                variants=list(settings.get("variants", [])),
+            )
+            return JSONResponse({"status": "ok", **settings})
+
         @self._app.get("/api/ping")
         def ping() -> dict[str, str]:
             return {"status": "ok"}
@@ -502,6 +562,16 @@ class WebServer:
                 end_hour=int(persisted["end_hour"]),
             )
 
+    def attach_font_preview(self, font_preview) -> None:
+        self._font_preview = font_preview
+        persisted = self._settings_store.load_font_preview_settings()
+        if persisted is not None:
+            font_preview.update_settings(
+                phrase=str(persisted["phrase"]),
+                spacing=int(persisted.get("spacing", 0)),
+                variants=list(persisted.get("variants", [])),
+            )
+
     def _require_board(self):
         if self._board is None:
             raise HTTPException(status_code=409, detail="board mode is not attached")
@@ -511,3 +581,8 @@ class WebServer:
         if self._transition_policy is None:
             raise HTTPException(status_code=409, detail="transition policy is not attached")
         return self._transition_policy
+
+    def _require_font_preview(self):
+        if self._font_preview is None:
+            raise HTTPException(status_code=409, detail="font preview mode is not attached")
+        return self._font_preview
