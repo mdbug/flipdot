@@ -23,13 +23,13 @@
       <section class="controls">
         <div id="modeControls"></div>
         <button id="settingsToggle" type="button" class="secondary">Settings</button>
-        <div id="sleepSettings" class="board-section hidden" aria-live="polite">
+        <div id="sleepSettings" class="settings-panel hidden" aria-live="polite">
           <h3>Sleep Mode</h3>
           <label class="toggle-row" for="sleepEnabled">
             <input id="sleepEnabled" type="checkbox" checked />
             Enable sleep mode
           </label>
-          <div class="board-grid">
+          <div class="field-grid">
             <label for="sleepStartHour">Start hour</label>
             <input id="sleepStartHour" type="number" min="0" max="23" step="1" value="0" />
             <label for="sleepEndHour">End hour</label>
@@ -38,112 +38,117 @@
           <p id="sleepSettingsStatus" class="board-summary">Sleep settings not loaded yet.</p>
         </div>
         <div id="boardEditor" class="board-editor hidden" aria-live="polite">
-          <h2>Board Editor</h2>
-
-          <div class="board-section">
-            <h3>Toolbar</h3>
-            <div class="board-toolbar" role="toolbar" aria-label="Board tools">
+          <div class="board-toolbar" role="toolbar" aria-label="Board tools">
+            <div class="tool-group" role="group" aria-label="Tools">
               <button type="button" class="tool-btn" data-tool="select" title="Select and move" aria-label="Select and move">↔</button>
-              <button type="button" class="tool-btn" data-tool="freehand" title="Freehand draw" aria-label="Freehand draw">✎</button>
-              <button type="button" class="tool-btn" data-tool="line" title="Line" aria-label="Line">／</button>
-              <button type="button" class="tool-btn" data-tool="rectangle" title="Rectangle" aria-label="Rectangle">▭</button>
-              <button type="button" class="tool-btn" data-tool="circle" title="Circle" aria-label="Circle">◯</button>
+              <button type="button" class="tool-btn" data-tool="draw" title="Draw" aria-label="Draw">✎</button>
               <button type="button" class="tool-btn" data-tool="text" title="Text tool" aria-label="Text tool">T</button>
               <button type="button" class="tool-btn" data-tool="image" title="Image tool" aria-label="Image tool">▦</button>
-              <button id="boardUndo" type="button" class="tool-btn tool-action" title="Undo" aria-label="Undo">↺</button>
-              <button id="boardDeleteSelection" type="button" class="tool-btn tool-action" title="Delete selected" aria-label="Delete selected">⌫</button>
+            </div>
+            <div class="tool-group tool-actions" role="group" aria-label="Actions">
+              <button id="boardUndo" type="button" class="tool-btn tool-action" title="Undo (Ctrl+Z)" aria-label="Undo">↺</button>
+              <button id="boardDeleteSelection" type="button" class="tool-btn tool-action" title="Delete selected (Del)" aria-label="Delete selected">⌫</button>
               <button id="boardClear" type="button" class="tool-btn tool-action" title="Clear board" aria-label="Clear board">✕</button>
             </div>
-            <p id="boardSelectionSummary" class="board-summary">No object selected</p>
-            <div class="legacy-controls" aria-hidden="true">
-              <label for="boardTool">Draw tool</label>
-              <select id="boardTool">
-                <option value="freehand">Freehand</option>
-                <option value="line">Line</option>
-                <option value="rectangle">Rectangle</option>
-                <option value="circle">Circle</option>
-              </select>
-              <label class="toggle-row" for="boardDrawToggle">
-                <input id="boardDrawToggle" type="checkbox" checked />
-                Draw on canvas
-              </label>
+            <div class="tool-group tool-boards" role="group" aria-label="Boards">
+              <button id="boardsMenuToggle" type="button" class="tool-btn tool-action" title="Boards" aria-label="Boards" aria-expanded="false">☰</button>
             </div>
           </div>
 
-          <div class="board-section">
-            <h3>Properties</h3>
-            <label for="boardTextObjectSelect">Text object</label>
-            <select id="boardTextObjectSelect"></select>
-            <div class="board-row compact">
-              <button id="boardTextAdd" type="button" class="accent">Add</button>
-              <button id="boardTextDelete" type="button" class="secondary">Delete</button>
+          <p id="boardSelectionSummary" class="board-summary">Pick a tool to start</p>
+
+          <!-- Hidden backing inputs preserved for pointer/draw logic -->
+          <div class="legacy-controls" aria-hidden="true">
+            <select id="boardTool">
+              <option value="freehand">Freehand</option>
+              <option value="line">Line</option>
+              <option value="rectangle">Rectangle</option>
+              <option value="circle">Circle</option>
+            </select>
+            <input id="boardDrawToggle" type="checkbox" checked />
+          </div>
+
+          <div id="boardContext" class="board-context">
+            <!-- Empty / hint context -->
+            <div class="context-block" data-context="empty">
+              <p class="context-hint">Select an object on the canvas to edit it, or choose a tool above.</p>
             </div>
 
-            <label for="boardText">Text</label>
-          <div class="board-row">
-            <input id="boardText" type="text" maxlength="64" placeholder="Type text" />
-              <button id="boardApplyText" type="button" class="accent">Update</button>
+            <!-- Draw context -->
+            <div class="context-block" data-context="draw" hidden>
+              <div class="shape-picker" role="group" aria-label="Draw shape">
+                <button type="button" class="shape-btn" data-shape="freehand" title="Freehand" aria-label="Freehand">✎</button>
+                <button type="button" class="shape-btn" data-shape="line" title="Line" aria-label="Line">／</button>
+                <button type="button" class="shape-btn" data-shape="rectangle" title="Rectangle" aria-label="Rectangle">▭</button>
+                <button type="button" class="shape-btn" data-shape="circle" title="Circle" aria-label="Circle">◯</button>
+              </div>
+              <p class="context-hint">Drag on the canvas to draw.</p>
             </div>
 
-            <div class="board-grid">
-              <label for="boardFontFamily">Font</label>
-              <select id="boardFontFamily"></select>
-              <label for="boardFontSize">Size</label>
-              <select id="boardFontSize"></select>
-            </div>
-            <div class="board-grid">
-              <label for="boardFontStyle">Style</label>
-              <select id="boardFontStyle"></select>
-              <label for="boardScrollSpeed">Scroll speed</label>
-              <input id="boardScrollSpeed" type="number" min="1" max="40" step="1" value="7" />
-            </div>
-            <label class="toggle-row" for="boardTextScroll">
-              <input id="boardTextScroll" type="checkbox" />
-              Scroll when too wide
-            </label>
-            <details class="advanced-panel">
-              <summary>Advanced position</summary>
-              <div class="board-grid">
-                <label for="boardTextX">Text X</label>
+            <!-- Text context (text tool placing, or text object selected) -->
+            <div class="context-block" data-context="text" hidden>
+              <div class="board-row text-object-row">
+                <select id="boardTextObjectSelect" aria-label="Text object"></select>
+                <button id="boardTextAdd" type="button" class="accent" title="Add text object">＋</button>
+                <button id="boardTextDelete" type="button" class="secondary" title="Delete text object">⌫</button>
+              </div>
+              <div class="board-row">
+                <input id="boardText" type="text" maxlength="64" placeholder="Type text" />
+                <button id="boardApplyText" type="button" class="accent">Apply</button>
+              </div>
+              <div class="field-grid">
+                <label for="boardFontFamily">Font</label>
+                <select id="boardFontFamily"></select>
+                <label for="boardFontSize">Size</label>
+                <select id="boardFontSize"></select>
+                <label for="boardFontStyle">Style</label>
+                <select id="boardFontStyle"></select>
+                <label for="boardScrollSpeed">Speed</label>
+                <input id="boardScrollSpeed" type="number" min="1" max="40" step="1" value="7" />
+                <label for="boardTextX">X</label>
                 <input id="boardTextX" type="number" value="0" min="-28" max="28" />
-                <label for="boardTextY">Text Y</label>
+                <label for="boardTextY">Y</label>
                 <input id="boardTextY" type="number" value="11" min="-28" max="28" />
               </div>
-              <div class="board-grid">
-                <label for="boardImageX">Image X</label>
+              <label class="toggle-row" for="boardTextScroll">
+                <input id="boardTextScroll" type="checkbox" />
+                Scroll when too wide
+              </label>
+              <p class="context-hint" data-context-hint="text-place">Tap the canvas to place text.</p>
+            </div>
+
+            <!-- Image context -->
+            <div class="context-block" data-context="image" hidden>
+              <input id="boardImageFile" type="file" accept="image/*" />
+              <div class="field-grid">
+                <label for="boardImageMode">Mode</label>
+                <select id="boardImageMode">
+                  <option value="stamp">Stamp to pixels</option>
+                  <option value="object">Image object</option>
+                </select>
+                <label for="boardImageThreshold">Threshold</label>
+                <input id="boardImageThreshold" type="number" min="0" max="255" value="128" />
+                <label for="boardImageX">X</label>
                 <input id="boardImageX" type="number" value="0" min="-28" max="28" />
-                <label for="boardImageY">Image Y</label>
+                <label for="boardImageY">Y</label>
                 <input id="boardImageY" type="number" value="0" min="-28" max="28" />
               </div>
-            </details>
-          </div>
-
-          <div class="board-section">
-            <h3>Image Tool</h3>
-            <input id="boardImageFile" type="file" accept="image/*" />
-            <div class="board-grid">
-              <label for="boardImageMode">Mode</label>
-              <select id="boardImageMode">
-                <option value="stamp">Stamp to pixels</option>
-                <option value="object">Create image object</option>
-              </select>
-              <label for="boardImageThreshold">Threshold</label>
-              <input id="boardImageThreshold" type="number" min="0" max="255" value="128" />
+              <button id="boardUploadImage" type="button" class="accent">Place at X/Y</button>
+              <p class="context-hint" data-context-hint="image-place">Or tap the canvas to place the image.</p>
             </div>
-            <button id="boardUploadImage" type="button" class="accent">Place At Advanced X/Y</button>
           </div>
 
-          <div class="board-section">
-            <h3>Boards</h3>
-            <label for="boardNameInput">Board name</label>
-            <input id="boardNameInput" type="text" maxlength="64" placeholder="default" />
-            <label for="boardList">Saved boards</label>
-            <select id="boardList"></select>
-            <div class="board-row compact">
+          <!-- Boards popover -->
+          <div id="boardsMenu" class="boards-menu hidden">
+            <div class="board-row">
+              <input id="boardNameInput" type="text" maxlength="64" placeholder="default" aria-label="Board name" />
               <button id="boardSaveNamed" type="button" class="accent">Save</button>
-              <button id="boardLoadNamed" type="button" class="secondary">Load</button>
             </div>
-            <button id="boardDeleteNamed" type="button" class="secondary">Delete</button>
+            <select id="boardList" aria-label="Saved boards"></select>
+            <div class="board-row compact">
+              <button id="boardLoadNamed" type="button" class="secondary">Load</button>
+              <button id="boardDeleteNamed" type="button" class="secondary">Delete</button>
+            </div>
           </div>
 
         </div>

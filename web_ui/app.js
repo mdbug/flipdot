@@ -31,6 +31,11 @@ const boardUndo = document.getElementById("boardUndo");
 const boardDrawToggle = document.getElementById("boardDrawToggle");
 const boardTool = document.getElementById("boardTool");
 const toolbarButtons = Array.from(document.querySelectorAll(".tool-btn[data-tool]"));
+const shapeButtons = Array.from(document.querySelectorAll(".shape-btn[data-shape]"));
+const boardContext = document.getElementById("boardContext");
+const contextBlocks = Array.from(document.querySelectorAll("#boardContext .context-block"));
+const boardsMenuToggle = document.getElementById("boardsMenuToggle");
+const boardsMenu = document.getElementById("boardsMenu");
 
 const boardImageFile = document.getElementById("boardImageFile");
 const boardImageMode = document.getElementById("boardImageMode");
@@ -513,6 +518,7 @@ function replaceSelection(nextTextIds, nextImageIds) {
   }
 
   syncSelectionFields();
+  renderBoardContext();
   drawGrid(latestFramePixels);
 }
 
@@ -686,7 +692,7 @@ function updateCanvasToolClass() {
   canvas.classList.remove("tool-select", "tool-draw", "tool-text", "tool-image", "dragging");
   if (activeBoardTool === "select") {
     canvas.classList.add("tool-select");
-  } else if (DRAW_TOOLS.has(activeBoardTool)) {
+  } else if (activeBoardTool === "draw") {
     canvas.classList.add("tool-draw");
   } else if (activeBoardTool === "text") {
     canvas.classList.add("tool-text");
@@ -699,16 +705,55 @@ function renderToolbarState() {
   for (const button of toolbarButtons) {
     button.classList.toggle("is-active", button.dataset.tool === activeBoardTool);
   }
+  for (const button of shapeButtons) {
+    button.classList.toggle("is-active", button.dataset.shape === previousDrawTool);
+  }
   updateCanvasToolClass();
+}
+
+// Show only the context block relevant to the active tool / selection.
+function renderBoardContext() {
+  let context = "empty";
+  if (activeBoardTool === "draw") {
+    context = "draw";
+  } else if (activeBoardTool === "text") {
+    context = "text";
+  } else if (activeBoardTool === "image") {
+    context = "image";
+  } else if (activeBoardTool === "select") {
+    if (selectedTextIds.size > 0) {
+      context = "text";
+    } else if (selectedImageIds.size > 0) {
+      context = "image";
+    } else {
+      context = "empty";
+    }
+  }
+
+  for (const block of contextBlocks) {
+    block.hidden = block.dataset.context !== context;
+  }
+
+  // Placement hints only make sense for the active placing tools.
+  const textPlaceHint = document.querySelector('[data-context-hint="text-place"]');
+  if (textPlaceHint) {
+    textPlaceHint.hidden = activeBoardTool !== "text";
+  }
+  const imagePlaceHint = document.querySelector('[data-context-hint="image-place"]');
+  if (imagePlaceHint) {
+    imagePlaceHint.hidden = activeBoardTool !== "image";
+  }
 }
 
 function setBoardTool(nextTool) {
   const tool = typeof nextTool === "string" ? nextTool : "select";
   activeBoardTool = tool;
 
-  if (DRAW_TOOLS.has(tool)) {
-    previousDrawTool = tool;
-    boardTool.value = tool;
+  if (tool === "draw") {
+    if (!DRAW_TOOLS.has(previousDrawTool)) {
+      previousDrawTool = "freehand";
+    }
+    boardTool.value = previousDrawTool;
     boardDrawToggle.checked = true;
   } else {
     boardDrawToggle.checked = false;
@@ -717,6 +762,17 @@ function setBoardTool(nextTool) {
     }
   }
 
+  renderToolbarState();
+  renderBoardContext();
+}
+
+function setDrawShape(shape) {
+  if (!DRAW_TOOLS.has(shape)) {
+    return;
+  }
+  previousDrawTool = shape;
+  boardTool.value = shape;
+  boardDrawToggle.checked = true;
   renderToolbarState();
 }
 
@@ -1089,6 +1145,7 @@ function setMode(nextMode) {
     selectedTextIds = new Set();
     selectedImageIds = new Set();
     selectedTextId = "";
+    setBoardsMenuOpen(false);
   }
 }
 
@@ -1105,9 +1162,19 @@ function renderControls(controls) {
     if (!control || !control.action || !control.label) {
       continue;
     }
+    if (isBoardMode() && (control.action === "board_clear" || control.action === "board_undo")) {
+      // Board clear/undo are handled by icon actions in the board toolbar.
+      continue;
+    }
     const button = document.createElement("button");
     button.type = "button";
     button.className = control.variant === "secondary" ? "secondary" : "accent";
+    button.classList.add("mode-control-btn");
+    if (control.action === "toggle_menu") {
+      button.classList.add("mode-control-menu");
+    }
+    button.title = control.label;
+    button.setAttribute("aria-label", control.label);
     button.textContent = control.label;
     button.addEventListener("click", () => {
       postJson("/api/input/action", { action: control.action });
@@ -1534,6 +1601,7 @@ boardSaveNamed.addEventListener("click", async () => {
   const response = await postJson("/api/boards/save", { name });
   if (response && response.ok) {
     await syncBoardState();
+    setBoardsMenuOpen(false);
   }
 });
 
@@ -1545,6 +1613,7 @@ boardLoadNamed.addEventListener("click", async () => {
   const response = await postJson("/api/boards/load", { name });
   if (response && response.ok) {
     await syncBoardState();
+    setBoardsMenuOpen(false);
   }
 });
 
@@ -1588,6 +1657,38 @@ for (const button of toolbarButtons) {
   });
 }
 
+for (const button of shapeButtons) {
+  button.addEventListener("click", () => {
+    setDrawShape(button.dataset.shape || "freehand");
+  });
+}
+
+function setBoardsMenuOpen(open) {
+  if (!boardsMenu || !boardsMenuToggle) {
+    return;
+  }
+  boardsMenu.classList.toggle("hidden", !open);
+  boardsMenuToggle.setAttribute("aria-expanded", open ? "true" : "false");
+  boardsMenuToggle.classList.toggle("is-active", open);
+}
+
+if (boardsMenuToggle) {
+  boardsMenuToggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setBoardsMenuOpen(boardsMenu.classList.contains("hidden"));
+  });
+}
+
+document.addEventListener("click", (event) => {
+  if (!boardsMenu || boardsMenu.classList.contains("hidden")) {
+    return;
+  }
+  if (boardsMenu.contains(event.target) || boardsMenuToggle.contains(event.target)) {
+    return;
+  }
+  setBoardsMenuOpen(false);
+});
+
 function isTextInputTarget(target) {
   if (!(target instanceof HTMLElement)) {
     return false;
@@ -1617,6 +1718,7 @@ document.addEventListener("keydown", (event) => {
 
   if (event.key === "Escape") {
     event.preventDefault();
+    setBoardsMenuOpen(false);
     clearSelection();
     setBoardTool("select");
   }
