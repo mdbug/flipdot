@@ -60,6 +60,7 @@ class BoardTextObjectCreatePayload(BaseModel):
     font: str = "classic"
     size: int = 5
     style: str = "regular"
+    spacing: int = Field(default=1, ge=0, le=6)
     scroll: bool = False
     scroll_speed: float = 7.0
 
@@ -71,6 +72,7 @@ class BoardTextObjectUpdatePayload(BaseModel):
     font: str | None = None
     size: int | None = None
     style: str | None = None
+    spacing: int | None = Field(default=None, ge=0, le=6)
     scroll: bool | None = None
     scroll_speed: float | None = None
 

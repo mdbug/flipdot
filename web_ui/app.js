@@ -26,6 +26,7 @@ const boardTextY = document.getElementById("boardTextY");
 const boardFontFamily = document.getElementById("boardFontFamily");
 const boardFontSize = document.getElementById("boardFontSize");
 const boardFontStyle = document.getElementById("boardFontStyle");
+const boardGlyphSpacing = document.getElementById("boardGlyphSpacing");
 const boardTextScroll = document.getElementById("boardTextScroll");
 const boardScrollSpeed = document.getElementById("boardScrollSpeed");
 const boardSelectionSummary = document.getElementById("boardSelectionSummary");
@@ -112,6 +113,10 @@ function cleanPhrase(value) {
 function clampFontPreviewSpacing(value) {
   const parsed = toInt(value, 0);
   return Math.max(0, Math.min(6, parsed));
+}
+
+function clampBoardGlyphSpacing(value) {
+  return Math.max(0, Math.min(6, toInt(value, 1)));
 }
 
 function snapToGridMultiple(value) {
@@ -1003,6 +1008,7 @@ function applyTextObjectToFields(item) {
     boardText.value = "";
     boardTextX.value = "0";
     boardTextY.value = "11";
+    boardGlyphSpacing.value = "1";
     boardTextScroll.checked = false;
     boardScrollSpeed.value = "7";
     return;
@@ -1011,6 +1017,7 @@ function applyTextObjectToFields(item) {
   boardText.value = item.text || "";
   boardTextX.value = String(item.x ?? 0);
   boardTextY.value = String(item.y ?? 11);
+  boardGlyphSpacing.value = String(clampBoardGlyphSpacing(item.spacing));
   boardTextScroll.checked = Boolean(item.scroll);
   boardScrollSpeed.value = String(item.scroll_speed ?? 7);
 
@@ -1475,6 +1482,7 @@ async function placeTextAt(pos) {
     font: boardFontFamily.value || "classic",
     size: toInt(boardFontSize.value, 5),
     style: boardFontStyle.value || "regular",
+    spacing: clampBoardGlyphSpacing(boardGlyphSpacing && boardGlyphSpacing.value),
     scroll: boardTextScroll.checked,
     scroll_speed: toFloat(boardScrollSpeed.value, 7),
   });
@@ -1932,6 +1940,7 @@ boardTextAdd.addEventListener("click", async () => {
     font: boardFontFamily.value || "classic",
     size: toInt(boardFontSize.value, 5),
     style: boardFontStyle.value || "regular",
+    spacing: clampBoardGlyphSpacing(boardGlyphSpacing && boardGlyphSpacing.value),
     scroll: boardTextScroll.checked,
     scroll_speed: toFloat(boardScrollSpeed.value, 7),
   });
@@ -1960,6 +1969,7 @@ boardApplyText.addEventListener("click", async () => {
     font: boardFontFamily.value || "classic",
     size: toInt(boardFontSize.value, 5),
     style: boardFontStyle.value || "regular",
+    spacing: clampBoardGlyphSpacing(boardGlyphSpacing && boardGlyphSpacing.value),
     scroll: boardTextScroll.checked,
     scroll_speed: toFloat(boardScrollSpeed.value, 7),
   });

@@ -103,23 +103,27 @@ def test_board_text_object_crud(monkeypatch, tmp_path):
             "font": "classic",
             "size": 5,
             "style": "regular",
+            "spacing": 2,
             "scroll": True,
             "scroll_speed": 9,
         }
     )
     assert created["text"] == "HELLO"
+    assert created["spacing"] == 2
 
     updated = board.update_text_object(
         created["id"],
         {
             "text": "WORLD",
             "x": 4,
+            "spacing": 0,
             "scroll": False,
         },
     )
     assert updated is not None
     assert updated["text"] == "WORLD"
     assert updated["x"] == 4
+    assert updated["spacing"] == 0
     assert updated["scroll"] is False
 
     deleted = board.delete_text_object(created["id"])
@@ -335,3 +339,24 @@ def test_board_frame_render_skips_offscreen_text_without_crash(monkeypatch, tmp_
     frame = board.get_frame(None)
     assert frame.shape == (28, 28)
     assert frame.dtype == np.uint8
+
+
+def test_board_text_spacing_changes_bounds(monkeypatch, tmp_path):
+    board_module = _load_board_module(monkeypatch, tmp_path)
+    board = board_module.Board(28, 28, DummyModeManager())
+
+    narrow = board.add_text_object(
+        {
+            "text": "AA",
+            "x": 0,
+            "y": 0,
+            "font": "classic",
+            "size": 5,
+            "style": "regular",
+            "spacing": 0,
+        }
+    )
+    wide = board.update_text_object(narrow["id"], {"spacing": 3})
+
+    assert wide is not None
+    assert wide["bounds"]["width"] > narrow["bounds"]["width"]

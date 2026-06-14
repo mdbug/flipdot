@@ -21,6 +21,8 @@ class Board:
     TEXT_SIZE = 5
     TEXT_STYLE = "regular"
     TEXT_FONT = "classic"
+    TEXT_SPACING = 1
+    MAX_TEXT_SPACING = 6
     MAX_TEXT_LENGTH = 64
     NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -94,6 +96,11 @@ class Board:
 
     def _normalize_text_object(self, data, *, object_id=None):
         family, size, style = self._normalize_text_spec(data)
+        try:
+            spacing = int(data.get("spacing", Board.TEXT_SPACING))
+        except Exception:
+            spacing = Board.TEXT_SPACING
+        spacing = max(0, min(Board.MAX_TEXT_SPACING, spacing))
         content = self._sanitize_text(
             data.get("text", ""),
             font=family,
@@ -109,6 +116,7 @@ class Board:
             "font": family,
             "size": size,
             "style": style,
+            "spacing": spacing,
             "scroll": bool(data.get("scroll", False)),
             "scroll_speed": float(data.get("scroll_speed", 7.0)),
         }
@@ -435,6 +443,7 @@ class Board:
             font=item["font"],
             size=item["size"],
             style=item["style"],
+            spacing=int(item.get("spacing", Board.TEXT_SPACING)),
         )
         return {
             "x": int(item["x"]),
@@ -966,6 +975,7 @@ class Board:
                     font=item["font"],
                     size=item["size"],
                     style=item["style"],
+                    spacing=int(item.get("spacing", Board.TEXT_SPACING)),
                 )
                 render_x = int(item["x"])
                 if item.get("scroll", False) and text_width > self.width:
@@ -991,6 +1001,7 @@ class Board:
                     font=item["font"],
                     size=item["size"],
                     style=item["style"],
+                    spacing=int(item.get("spacing", Board.TEXT_SPACING)),
                 )
             frame[:, :] = np.where(frame > 0, 1, 0).astype(np.uint8)
             return frame
