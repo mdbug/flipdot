@@ -13,6 +13,7 @@ python-dotenv = "*"
 fastapi = "*"
 uvicorn = "*"
 python-multipart = "*"
+evdev = "*"
 flippydot = {editable = true, path = "./flipPyDot"}
 
 [dev-packages]

@@ -116,11 +116,16 @@ class TransitionPolicy:
         if now is None:
             now = datetime.now()
 
-        # Preserve existing behavior: only support non-wrapping ranges.
-        return (
-            sleep_end_hour > sleep_start_hour
-            and sleep_start_hour <= now.hour < sleep_end_hour
-        )
+        # Equal bounds mean an empty sleep window.
+        if sleep_start_hour == sleep_end_hour:
+            return False
+
+        # Non-wrapping window, e.g. 01 -> 07.
+        if sleep_start_hour < sleep_end_hour:
+            return sleep_start_hour <= now.hour < sleep_end_hour
+
+        # Wrapping window, e.g. 23 -> 07.
+        return now.hour >= sleep_start_hour or now.hour < sleep_end_hour
 
     def apply(self, *, frame, pose_results, mode_manager: ModeManager, paint_mode) -> TransitionState:
         state = TransitionState(
@@ -137,6 +142,12 @@ class TransitionPolicy:
             return state
 
         current_mode = mode_manager.mode
+
+        # Sleep mode is policy-driven, so leave it as soon as the window no
+        # longer applies (for example after runtime settings changes via Web UI).
+        if current_mode == ModeManager.MODE_SLEEP:
+            mode_manager.set_mode(ModeManager.MODE_CLOCK)
+            current_mode = mode_manager.mode
 
         # Prioritize live World Cup information when idle on clock mode.
         if current_mode == ModeManager.MODE_CLOCK and self._is_worldcup_live():

@@ -10,6 +10,7 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 from app.services.fps import FPSTracker
+from app.services.controller import ControllerHub
 from app.infrastructure.camera import Camera
 from app.infrastructure.panel import Panel
 from app.core.input_source import InputHub
@@ -114,6 +115,7 @@ def main():
     panel = Panel(preview=preview)
     fps_tracker = FPSTracker()
     input_hub = InputHub()
+    controller_hub = ControllerHub()
     web_server = None
     web_server_start_pending = enable_web_ui
 
@@ -262,6 +264,7 @@ def main():
                 web_server.attach_board(board)
                 web_server.attach_font_preview(font_preview)
                 web_server.attach_transition_policy(transition_policy)
+                web_server.attach_controller_status_provider(controller_hub.get_status_snapshot)
                 web_server.start()
                 web_server_start_pending = False
                 logger.info("Web UI enabled on http://%s:%s", web_ui_host, web_ui_port)

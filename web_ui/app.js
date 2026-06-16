@@ -2,6 +2,8 @@ const canvas = document.getElementById("matrix");
 const ctx = canvas.getContext("2d");
 const statusText = document.getElementById("statusText");
 const sourceText = document.getElementById("sourceText");
+const controllerText = document.getElementById("controllerText");
+const controllerButtons = document.getElementById("controllerButtons");
 const modeControls = document.getElementById("modeControls");
 const boardEditor = document.getElementById("boardEditor");
 const settingsToggle = document.getElementById("settingsToggle");
@@ -65,6 +67,7 @@ const THEME = window.getComputedStyle(document.documentElement);
 
 let lastVersion = -1;
 let pollingTimer = null;
+let controllerPollingTimer = null;
 let lastTouchPos = null;
 let controlsSignature = "";
 let currentMode = "";
@@ -85,6 +88,68 @@ let previousDrawTool = "freehand";
 let sleepStatusTimer = null;
 let fontPreviewCatalog = {};
 let fontPreviewVariants = [null, null, null, null];
+
+function normalizeControllerStatus(raw) {
+  if (!raw || typeof raw !== "object") {
+    return {
+      enabled: false,
+      connected: false,
+      pressed_buttons: [],
+    };
+  }
+
+  const pressed = Array.isArray(raw.pressed_buttons)
+    ? raw.pressed_buttons.map((label) => String(label || "").trim()).filter((label) => label.length > 0)
+    : [];
+
+  return {
+    enabled: Boolean(raw.enabled),
+    connected: Boolean(raw.connected),
+    pressed_buttons: pressed,
+  };
+}
+
+function renderControllerStatus(rawStatus) {
+  if (!controllerText || !controllerButtons) {
+    return;
+  }
+
+  const status = normalizeControllerStatus(rawStatus);
+  const hasSignal = status.enabled;
+  const isConnected = status.connected;
+  controllerText.classList.toggle("muted", !isConnected);
+  if (!hasSignal) {
+    controllerText.textContent = "Controller: unavailable";
+  } else if (isConnected) {
+    controllerText.textContent = "Controller: connected";
+  } else {
+    controllerText.textContent = "Controller: disconnected";
+  }
+
+  controllerButtons.innerHTML = "";
+  if (!hasSignal || !isConnected) {
+    const chip = document.createElement("span");
+    chip.className = "controller-chip";
+    chip.textContent = "-";
+    controllerButtons.appendChild(chip);
+    return;
+  }
+
+  if (status.pressed_buttons.length === 0) {
+    const chip = document.createElement("span");
+    chip.className = "controller-chip";
+    chip.textContent = "idle";
+    controllerButtons.appendChild(chip);
+    return;
+  }
+
+  for (const button of status.pressed_buttons) {
+    const chip = document.createElement("span");
+    chip.className = "controller-chip active";
+    chip.textContent = button;
+    controllerButtons.appendChild(chip);
+  }
+}
 
 function activeSettingsPanel() {
   if (currentMode === "font_preview") {
@@ -1863,6 +1928,7 @@ function startWebSocket() {
 
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
+    renderControllerStatus(data.controller_status);
     if (data.version === lastVersion) {
       return;
     }
@@ -1886,6 +1952,7 @@ function startWebSocket() {
             return;
           }
           const data = await response.json();
+          renderControllerStatus(data.controller_status);
           if (data.version === lastVersion) {
             return;
           }
@@ -1909,6 +1976,47 @@ function startWebSocket() {
     ws.close();
   };
 }
+
+function startControllerWebSocket() {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new WebSocket(`${protocol}//${window.location.host}/ws/controller-status`);
+
+  ws.onopen = () => {
+    if (controllerPollingTimer !== null) {
+      window.clearInterval(controllerPollingTimer);
+      controllerPollingTimer = null;
+    }
+  };
+
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    renderControllerStatus(data.controller_status);
+  };
+
+  ws.onclose = () => {
+    if (controllerPollingTimer === null) {
+      controllerPollingTimer = window.setInterval(async () => {
+        try {
+          const response = await fetch("/api/controller/status", { cache: "no-store" });
+          if (!response.ok) {
+            return;
+          }
+          const data = await response.json();
+          renderControllerStatus(data.controller_status);
+        } catch (_err) {
+          // Ignore transient network failures.
+        }
+      }, 120);
+    }
+    setTimeout(startControllerWebSocket, 1000);
+  };
+
+  ws.onerror = () => {
+    ws.close();
+  };
+}
+
+renderControllerStatus(null);
 
 boardFontFamily.addEventListener("change", () => {
   renderFontSizeOptions();
@@ -2180,3 +2288,4 @@ window.addEventListener("resize", syncCanvasResolution, { passive: true });
 loadSleepSettings();
 loadFontPreviewSettings();
 startWebSocket();
+startControllerWebSocket();

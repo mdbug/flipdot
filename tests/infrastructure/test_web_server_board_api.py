@@ -295,6 +295,63 @@ def test_board_endpoints_mutate_attached_board():
     assert response.json()["text"] == "HELLO"
 
 
+def test_frame_payload_includes_controller_status():
+    server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8127)
+    client = TestClient(server._app)
+
+    response = client.get("/api/frame")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "controller_status" in payload
+    assert payload["controller_status"]["connected"] is False
+    assert payload["controller_status"]["pressed_buttons"] == []
+
+    server.attach_controller_status_provider(
+        lambda: {
+            "enabled": True,
+            "connected": True,
+            "address": "AA:BB:CC:DD:EE:01",
+            "device_name": "Wireless Controller",
+            "pressed_buttons": ["A", "L1"],
+            "last_event_monotonic": 12.3,
+        }
+    )
+
+    response = client.get("/api/frame")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["controller_status"]["enabled"] is True
+    assert payload["controller_status"]["connected"] is True
+    assert payload["controller_status"]["pressed_buttons"] == ["A", "L1"]
+
+
+def test_controller_status_endpoint_uses_provider_snapshot():
+    server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8128)
+    client = TestClient(server._app)
+
+    response = client.get("/api/controller/status")
+    assert response.status_code == 200
+    assert response.json()["controller_status"]["connected"] is False
+
+    server.attach_controller_status_provider(
+        lambda: {
+            "enabled": True,
+            "connected": True,
+            "address": "AA:BB:CC:DD:EE:01",
+            "device_name": "Wireless Controller",
+            "pressed_buttons": ["D-Up"],
+            "last_event_monotonic": 42.0,
+        }
+    )
+
+    response = client.get("/api/controller/status")
+    assert response.status_code == 200
+    payload = response.json()["controller_status"]
+    assert payload["enabled"] is True
+    assert payload["connected"] is True
+    assert payload["pressed_buttons"] == ["D-Up"]
+
+
 def test_font_grid_page_route_serves_html():
     server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8126)
     client = TestClient(server._app)

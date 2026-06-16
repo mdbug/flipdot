@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 import threading
-from typing import Optional
+from typing import Callable, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -149,6 +149,7 @@ class WebServer:
         self._frame_version = 0
         self._current_mode = ""
         self._controls = []
+        self._controller_status_provider: Callable[[], dict] | None = None
         self._board = None
         self._transition_policy = None
         self._font_preview = None
@@ -184,7 +185,12 @@ class WebServer:
                     "mode": self._current_mode,
                     "controls": self._controls,
                 }
+            payload["controller_status"] = self._controller_status()
             return JSONResponse(payload)
+
+        @self._app.get("/api/controller/status")
+        def get_controller_status() -> JSONResponse:
+            return JSONResponse({"controller_status": self._controller_status()})
 
         @self._app.post("/api/input/pointer")
         def post_pointer(payload: PointerEventPayload) -> dict[str, str]:
@@ -512,9 +518,25 @@ class WebServer:
                             "mode": self._current_mode,
                             "controls": self._controls,
                         }
+                    payload["controller_status"] = self._controller_status()
                     if version != sent_version:
                         await websocket.send_json(payload)
                         sent_version = version
+                    await asyncio.sleep(1 / 30)
+            except WebSocketDisconnect:
+                return
+
+        @self._app.websocket("/ws/controller-status")
+        async def ws_controller_status(websocket: WebSocket) -> None:
+            await websocket.accept()
+            last_signature = None
+            try:
+                while True:
+                    status = self._controller_status()
+                    signature = self._controller_status_signature(status)
+                    if signature != last_signature:
+                        await websocket.send_json({"controller_status": status})
+                        last_signature = signature
                     await asyncio.sleep(1 / 30)
             except WebSocketDisconnect:
                 return
@@ -573,6 +595,59 @@ class WebServer:
                 spacing=int(persisted.get("spacing", 0)),
                 variants=list(persisted.get("variants", [])),
             )
+
+    def attach_controller_status_provider(self, provider: Callable[[], dict] | None) -> None:
+        self._controller_status_provider = provider
+
+    def _controller_status(self) -> dict:
+        provider = self._controller_status_provider
+        if provider is None:
+            return self._empty_controller_status()
+        try:
+            status = provider()
+        except Exception:
+            return self._empty_controller_status()
+
+        if not isinstance(status, dict):
+            return self._empty_controller_status()
+
+        pressed_buttons = status.get("pressed_buttons", [])
+        if not isinstance(pressed_buttons, list):
+            pressed_buttons = []
+
+        return {
+            "enabled": bool(status.get("enabled", False)),
+            "connected": bool(status.get("connected", False)),
+            "address": str(status.get("address", "") or ""),
+            "device_name": str(status.get("device_name", "") or ""),
+            "pressed_buttons": [str(item) for item in pressed_buttons],
+            "last_event_monotonic": status.get("last_event_monotonic"),
+        }
+
+    @staticmethod
+    def _controller_status_signature(status: dict) -> tuple:
+        buttons = status.get("pressed_buttons", [])
+        if not isinstance(buttons, list):
+            buttons = []
+        return (
+            bool(status.get("enabled", False)),
+            bool(status.get("connected", False)),
+            str(status.get("address", "") or ""),
+            str(status.get("device_name", "") or ""),
+            tuple(str(item) for item in buttons),
+            status.get("last_event_monotonic"),
+        )
+
+    @staticmethod
+    def _empty_controller_status() -> dict:
+        return {
+            "enabled": False,
+            "connected": False,
+            "address": "",
+            "device_name": "",
+            "pressed_buttons": [],
+            "last_event_monotonic": None,
+        }
 
     def _require_board(self):
         if self._board is None:

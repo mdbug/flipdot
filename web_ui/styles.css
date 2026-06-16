@@ -160,6 +160,33 @@ h1 {
   color: var(--muted);
 }
 
+.controller-buttons {
+  min-height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.controller-chip {
+  min-height: 1.8rem;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.22rem 0.52rem;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.controller-chip.active {
+  border-color: var(--teal);
+  background: rgba(42, 183, 169, 0.16);
+  color: var(--text);
+}
+
 .matrix-stage {
   min-height: 0;
   padding: clamp(0.6rem, 1.6vw, 1rem);

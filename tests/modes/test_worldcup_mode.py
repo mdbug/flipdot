@@ -26,8 +26,10 @@ def test_refresh_if_needed_respects_refresh_interval(monkeypatch):
 
     monkeypatch.setattr(worldcup_mode_module.time, "time", fake_time)
     monkeypatch.setattr(worldcup_mode_module, "get_worldcup_scorecard", fake_scorecard)
+    monkeypatch.setattr(worldcup_mode_module.threading, "Thread", lambda target, daemon: SimpleNamespace(start=target))
 
     mode = worldcup_mode_module.WorldCup(28, 28, SimpleNamespace())
+    mode._refresh_if_needed()
     mode._refresh_if_needed()
     assert calls["count"] == 1
 
@@ -36,6 +38,7 @@ def test_refresh_if_needed_respects_refresh_interval(monkeypatch):
     assert calls["count"] == 1
 
     now["value"] = 31.0
+    mode._refresh_if_needed()
     mode._refresh_if_needed()
     assert calls["count"] == 2
 

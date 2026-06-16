@@ -1,10 +1,14 @@
 import time
 import re
+import threading
+import logging
 
 import numpy as np
 
 from app.services.text import center_x, supported_characters, width, write, write_centered
 from app.services.worldcup import get_worldcup_scorecard
+
+logger = logging.getLogger(__name__)
 
 
 class WorldCup:
@@ -25,6 +29,9 @@ class WorldCup:
         self.score_flash_until = 0.0
         self.flashing_score_sides = {}
         self.frame = np.zeros((height, width), dtype=np.uint8)
+        self._refresh_lock = threading.Lock()
+        self._refresh_in_flight = False
+        self._pending_payload = None
 
     def _sanitize(self, value):
         text = (value or "").upper()
@@ -289,15 +296,50 @@ class WorldCup:
             style="regular",
         )
 
+    def _refresh_worker(self):
+        payload = None
+        try:
+            payload = get_worldcup_scorecard()
+        except Exception:
+            logger.exception("WorldCup refresh failed")
+
+        with self._refresh_lock:
+            if payload is not None:
+                self._pending_payload = payload
+            self._refresh_in_flight = False
+
+    def _drain_pending_payload(self):
+        pending = None
+        with self._refresh_lock:
+            pending = self._pending_payload
+            self._pending_payload = None
+
+        if pending is None:
+            return
+
+        self._update_goal_animation(pending)
+        # Keep last known good selection during transient API failures.
+        if pending.get("selected") is not None or self.last_payload is None:
+            self.last_payload = pending
+
     def _refresh_if_needed(self):
+        self._drain_pending_payload()
+
         now = time.time()
         if self.last_payload is None or now - self.last_refresh >= self.REFRESH_INTERVAL:
-            payload = get_worldcup_scorecard()
             self.last_refresh = now
-            self._update_goal_animation(payload)
-            # Keep last known good selection during transient API failures.
-            if payload.get("selected") is not None or self.last_payload is None:
-                self.last_payload = payload
+            should_refresh = False
+            with self._refresh_lock:
+                if not self._refresh_in_flight:
+                    self._refresh_in_flight = True
+                    should_refresh = True
+
+            if should_refresh:
+                try:
+                    threading.Thread(target=self._refresh_worker, daemon=True).start()
+                except Exception:
+                    with self._refresh_lock:
+                        self._refresh_in_flight = False
 
     def get_frame(self, pose_results):
         del pose_results  # Pose is not needed for this information mode.
