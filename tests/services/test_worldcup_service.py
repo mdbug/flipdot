@@ -194,6 +194,48 @@ def test_get_worldcup_scorecard_prefers_fifa_source(monkeypatch):
     assert scorecard is fifa_payload
 
 
+def test_get_worldcup_scorecard_prefers_api_live_when_fifa_not_live(monkeypatch):
+    fifa_payload = {
+        "selected": {"event_id": "fifa-finished"},
+        "selection": "latest_finished",
+        "events": [{"event_id": "fifa-finished", "status_bucket": "finished"}],
+        "rate_limit": {},
+    }
+    api_payload = {
+        "selected": {"event_id": "api-live"},
+        "selection": "live",
+        "events": [{"event_id": "api-live", "status_bucket": "live"}],
+        "rate_limit": {},
+    }
+
+    monkeypatch.setattr(worldcup_module, "_get_fifa_scorecard", lambda: fifa_payload)
+    monkeypatch.setattr(worldcup_module, "_get_api_football_scorecard", lambda: api_payload)
+
+    scorecard = worldcup_module.get_worldcup_scorecard()
+    assert scorecard is api_payload
+
+
+def test_get_worldcup_scorecard_falls_back_to_fifa_when_api_not_live(monkeypatch):
+    fifa_payload = {
+        "selected": {"event_id": "fifa-finished"},
+        "selection": "latest_finished",
+        "events": [{"event_id": "fifa-finished", "status_bucket": "finished"}],
+        "rate_limit": {},
+    }
+    api_payload = {
+        "selected": None,
+        "selection": "none",
+        "events": [],
+        "rate_limit": {},
+    }
+
+    monkeypatch.setattr(worldcup_module, "_get_fifa_scorecard", lambda: fifa_payload)
+    monkeypatch.setattr(worldcup_module, "_get_api_football_scorecard", lambda: api_payload)
+
+    scorecard = worldcup_module.get_worldcup_scorecard()
+    assert scorecard is fifa_payload
+
+
 def test_normalize_fifa_event_maps_expected_fields():
     raw = {
         "IdMatch": "400021447",
@@ -309,7 +351,7 @@ def test_effective_fifa_match_ids_discovers_recent_upcoming_matches(monkeypatch)
     now_utc = datetime(2026, 6, 13, 20, 0, 0, tzinfo=timezone.utc)
     now_mono = 123.0
 
-    monkeypatch.setattr(worldcup_module, "_default_fifa_match_ids", lambda: ["400021447"])
+    worldcup_module._last_fifa_match_id_hints = ["400021447"]
 
     def fake_fetch(path, params=None):
         if not path.startswith("calendar/"):
@@ -343,6 +385,27 @@ def test_effective_fifa_match_ids_discovers_recent_upcoming_matches(monkeypatch)
     out = worldcup_module._effective_fifa_match_ids(now_mono, now_utc)
     assert out[0] == "400021447"
     assert "400021456" in out
+
+
+def test_effective_fifa_match_ids_empty_without_hints(monkeypatch):
+    now_utc = datetime(2026, 6, 13, 20, 0, 0, tzinfo=timezone.utc)
+    now_mono = 123.0
+
+    worldcup_module._last_fifa_match_id_hints = []
+    worldcup_module._discovered_fifa_match_ids = None
+    worldcup_module._next_fifa_match_discovery_after_mono = 0.0
+
+    called = {"value": False}
+
+    def fake_fetch(path, params=None):
+        called["value"] = True
+        return {}
+
+    monkeypatch.setattr(worldcup_module, "_fetch_fifa_json", fake_fetch)
+
+    out = worldcup_module._effective_fifa_match_ids(now_mono, now_utc)
+    assert out == []
+    assert called["value"] is False
 
 
 def test_choose_live_and_latest_finished():

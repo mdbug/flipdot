@@ -16,7 +16,6 @@ REQUEST_TIMEOUT_SEC = 4
 FIFA_BASE_URL = os.getenv("FIFA_API_BASE_URL", "https://api.fifa.com/api/v3").rstrip("/")
 FIFA_LANGUAGE = os.getenv("FIFA_API_LANGUAGE", "en")
 FIFA_COMPETITION_ID = "17"
-DEFAULT_FIFA_MATCH_IDS = ["400021447"]
 
 # Keep a safety reserve so request spikes do not exhaust the daily quota.
 DAILY_REQUEST_RESERVE = 5
@@ -51,6 +50,7 @@ _cached_fifa_scorecard = None
 _next_fifa_fetch_after_mono = 0.0
 _discovered_fifa_match_ids = None
 _next_fifa_match_discovery_after_mono = 0.0
+_last_fifa_match_id_hints = []
 _rate_limit_state = {
     "daily_limit": None,
     "daily_remaining": None,
@@ -199,10 +199,6 @@ def _normalize_fifa_event(event):
     }
 
 
-def _default_fifa_match_ids():
-    return list(DEFAULT_FIFA_MATCH_IDS)
-
-
 def _parse_fifa_datetime(date_str):
     if not date_str:
         return None
@@ -222,11 +218,17 @@ def _is_fifa_worldcup_event(event):
 
 def _seed_fifa_match_id_ints():
     values = []
-    for token in _default_fifa_match_ids():
-        if token.isdigit():
+
+    # Prefer IDs observed from recent successful live payloads.
+    for token in _last_fifa_match_id_hints:
+        if str(token).isdigit():
             values.append(int(token))
-    if not values:
-        values.append(400021447)
+
+    if not values and _discovered_fifa_match_ids:
+        for token in _discovered_fifa_match_ids:
+            if str(token).isdigit():
+                values.append(int(token))
+
     return values
 
 
@@ -238,6 +240,12 @@ def _refresh_fifa_match_ids_if_needed(now_mono, now_utc):
         return
 
     seeds = _seed_fifa_match_id_ints()
+    if not seeds:
+        logger.info("World Cup FIFA discovery skipped: no match ID hints available")
+        _discovered_fifa_match_ids = []
+        _next_fifa_match_discovery_after_mono = now_mono + FIFA_MATCH_DISCOVERY_REFRESH_SEC
+        return
+
     low = max(1, min(seeds) - FIFA_MATCH_DISCOVERY_BACKWARD)
     high = max(seeds) + FIFA_MATCH_DISCOVERY_FORWARD
     earliest = now_utc - timedelta(hours=FIFA_MATCH_DISCOVERY_LOOKBACK_HOURS)
@@ -269,14 +277,19 @@ def _refresh_fifa_match_ids_if_needed(now_mono, now_utc):
         discovered.sort(key=lambda item: item[0])
         _discovered_fifa_match_ids = list(dict.fromkeys(match_id for _, match_id in discovered))
     else:
-        _discovered_fifa_match_ids = _default_fifa_match_ids()
+        _discovered_fifa_match_ids = []
+        logger.info(
+            "World Cup FIFA discovery found no matches in id window=%s..%s",
+            low,
+            high,
+        )
 
     _next_fifa_match_discovery_after_mono = now_mono + FIFA_MATCH_DISCOVERY_REFRESH_SEC
 
 
 def _effective_fifa_match_ids(now_mono, now_utc):
     _refresh_fifa_match_ids_if_needed(now_mono, now_utc)
-    return _discovered_fifa_match_ids or _default_fifa_match_ids()
+    return _discovered_fifa_match_ids or []
 
 
 def _fetch_fifa_json(path, params=None):
@@ -300,9 +313,15 @@ def _get_fifa_scorecard():
     if _cached_fifa_scorecard is not None and now_mono < _next_fifa_fetch_after_mono:
         return _with_rate_limit(_cached_fifa_scorecard)
 
+    global _last_fifa_match_id_hints
+
     events = []
     seen_event_ids = set()
-    for match_id in _effective_fifa_match_ids(now_mono, now_utc):
+    match_ids = _effective_fifa_match_ids(now_mono, now_utc)
+    if not match_ids:
+        return None
+
+    for match_id in match_ids:
         live_event = _fetch_fifa_json(f"live/football/{match_id}", params={"language": FIFA_LANGUAGE})
         if not isinstance(live_event, dict) or not live_event.get("IdMatch"):
             continue
@@ -315,6 +334,8 @@ def _get_fifa_scorecard():
             seen_event_ids.add(event_id)
         events.append(normalized)
 
+    _last_fifa_match_id_hints = [event.get("event_id") for event in events if event.get("event_id")]
+
     selected_live = _choose_live(events)
     if selected_live is not None:
         _cached_fifa_scorecard = {
@@ -322,6 +343,11 @@ def _get_fifa_scorecard():
             "selection": "live",
             "events": events,
         }
+        logger.info(
+            "World Cup source=FIFA selection=live event_id=%s events=%s",
+            selected_live.get("event_id"),
+            len(events),
+        )
         _next_fifa_fetch_after_mono = now_mono + _adaptive_interval_sec(
             "live",
             now_utc=now_utc,
@@ -337,6 +363,11 @@ def _get_fifa_scorecard():
             "selection": "latest_finished",
             "events": events,
         }
+        logger.info(
+            "World Cup source=FIFA selection=latest_finished event_id=%s events=%s",
+            selected_finished.get("event_id"),
+            len(events),
+        )
         _next_fifa_fetch_after_mono = now_mono + _adaptive_interval_sec(
             "latest_finished",
             now_utc=now_utc,
@@ -350,6 +381,7 @@ def _get_fifa_scorecard():
             "selection": "none",
             "events": events,
         }
+        logger.info("World Cup source=FIFA selection=none events=%s", len(events))
         _next_fifa_fetch_after_mono = now_mono + _adaptive_interval_sec(
             "none",
             now_utc=now_utc,
@@ -823,6 +855,11 @@ def _get_api_football_scorecard():
                 "selection": "live",
                 "events": events,
             }
+            logger.info(
+                "World Cup source=API_FOOTBALL selection=live event_id=%s events=%s",
+                selected_live.get("event_id"),
+                len(events),
+            )
             _next_fetch_after_mono = now_mono + _adaptive_interval_sec("live", now_utc=now_utc)
             return _with_rate_limit(_cached_scorecard)
 
@@ -880,6 +917,11 @@ def _get_api_football_scorecard():
                 "selection": "latest_finished",
                 "events": events,
             }
+            logger.info(
+                "World Cup source=API_FOOTBALL selection=latest_finished event_id=%s events=%s",
+                selected_finished.get("event_id"),
+                len(events),
+            )
             _next_fetch_after_mono = now_mono + _adaptive_interval_sec("latest_finished", now_utc=now_utc)
             return _with_rate_limit(_cached_scorecard)
 
@@ -888,6 +930,7 @@ def _get_api_football_scorecard():
             "selection": "none",
             "events": events,
         }
+        logger.info("World Cup source=API_FOOTBALL selection=none events=%s", len(events))
         _next_fetch_after_mono = now_mono + _adaptive_interval_sec("none", now_utc=now_utc)
         return _with_rate_limit(_cached_scorecard)
     except requests.RequestException as exc:
@@ -915,13 +958,29 @@ def _get_api_football_scorecard():
 def get_worldcup_scorecard():
     """Fetch World Cup score data with FIFA internal API first, API-Football fallback."""
 
+    fifa_payload = None
     try:
         fifa_payload = _get_fifa_scorecard()
-        if fifa_payload is not None and (fifa_payload.get("events") or fifa_payload.get("selected") is not None):
+        # Only short-circuit on a live FIFA selection; otherwise let
+        # API-Football try to provide a fresher live fixture.
+        if fifa_payload is not None and fifa_payload.get("selection") == "live":
             return fifa_payload
     except requests.RequestException as exc:
         logger.warning("FIFA internal API request failed: %s", exc)
     except Exception:  # pragma: no cover - defensive runtime safeguard
         logger.exception("Unexpected FIFA internal API failure")
 
-    return _get_api_football_scorecard()
+    api_payload = _get_api_football_scorecard()
+    if api_payload.get("selection") == "live":
+        return api_payload
+
+    # Keep FIFA as a fallback for finished/none when API-Football has no better result.
+    if fifa_payload is not None and fifa_payload.get("selection") in {"latest_finished", "none"}:
+        logger.info(
+            "World Cup source=FIFA fallback selection=%s events=%s",
+            fifa_payload.get("selection"),
+            len(fifa_payload.get("events") or []),
+        )
+        return fifa_payload
+
+    return api_payload
