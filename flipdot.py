@@ -32,6 +32,8 @@ CLOCK_DISOLVE_TIME = 1.0
 SPIN_WAIT_MIN_FPS = 20
 SPIN_GUARD_SEC = 0.012
 PAINT_CLEAR_HOLD_SEC = 1.0
+PRIMARY_CONTROLLER_ADDRESS = "AA:BB:CC:DD:EE:01"
+SECONDARY_CONTROLLER_ADDRESS = "AA:BB:CC:DD:EE:03"
 
 # Modes that are fully driven by the controller UI and never render pose.
 # When the controller is the active control source, pose inference can be
@@ -132,7 +134,8 @@ def main():
     panel = Panel(preview=preview)
     fps_tracker = FPSTracker()
     input_hub = InputHub()
-    controller_hub = ControllerHub()
+    primary_controller_hub = ControllerHub(target_address=PRIMARY_CONTROLLER_ADDRESS)
+    secondary_controller_hub = ControllerHub(target_address=SECONDARY_CONTROLLER_ADDRESS)
     controller_bridge = ControllerInputBridge()
     web_server = None
     web_server_start_pending = enable_web_ui
@@ -179,6 +182,14 @@ def main():
         face_mesh_max_fps=face_mesh_max_fps,
     )
 
+    def get_controller_statuses() -> list[dict]:
+        # Keep primary first so existing consumers can treat index 0 as the
+        # current gameplay controller while secondary status is visible in UI.
+        return [
+            primary_controller_hub.get_status_snapshot(),
+            secondary_controller_hub.get_status_snapshot(),
+        ]
+
     try:
         while True:
             t_start = time.time()
@@ -191,7 +202,7 @@ def main():
 
             t_process_start = time.time()
 
-            controller_snapshot = controller_hub.get_status_snapshot()
+            controller_snapshot = primary_controller_hub.get_status_snapshot()
             controller_active = bool(controller_snapshot.get("enabled")) and bool(controller_snapshot.get("connected"))
             mode_manager.update_controller_connected(controller_active)
 
@@ -210,7 +221,7 @@ def main():
                 pose_results = human_pose.get_human_pose(frame)
             input_hub.ingest_pose(pose_results)
 
-            controller_pressed_events = controller_hub.drain_pressed_events()
+            controller_pressed_events = primary_controller_hub.drain_pressed_events()
             controller_bridge.process(
                 snapshot=controller_snapshot,
                 mode=mode_manager.mode,
@@ -308,7 +319,7 @@ def main():
                 web_server.attach_board(board)
                 web_server.attach_font_preview(font_preview)
                 web_server.attach_transition_policy(transition_policy)
-                web_server.attach_controller_status_provider(controller_hub.get_status_snapshot)
+                web_server.attach_controller_status_provider(get_controller_statuses)
                 web_server.start()
                 web_server_start_pending = False
                 logger.info("Web UI enabled on http://%s:%s", web_ui_host, web_ui_port)

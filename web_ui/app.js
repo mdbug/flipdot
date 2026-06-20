@@ -2,11 +2,7 @@ const canvas = document.getElementById("matrix");
 const ctx = canvas.getContext("2d");
 const statusText = document.getElementById("statusText");
 const sourceText = document.getElementById("sourceText");
-const controllerText = document.getElementById("controllerText");
-const controllerBattery = document.getElementById("controllerBattery");
-const controllerBatteryLevel = document.getElementById("controllerBatteryLevel");
-const controllerBatteryText = document.getElementById("controllerBatteryText");
-const controllerButtons = document.getElementById("controllerButtons");
+const controllerStatuses = document.getElementById("controllerStatuses");
 const modeControls = document.getElementById("modeControls");
 const boardEditor = document.getElementById("boardEditor");
 const settingsToggle = document.getElementById("settingsToggle");
@@ -112,72 +108,124 @@ function normalizeControllerStatus(raw) {
   return {
     enabled: Boolean(raw.enabled),
     connected: Boolean(raw.connected),
+    address: String(raw.address || ""),
+    device_name: String(raw.device_name || ""),
     pressed_buttons: pressed,
     battery_percentage: batteryPercentage,
   };
 }
 
-function renderControllerStatus(rawStatus) {
-  if (!controllerText || !controllerButtons || !controllerBattery || !controllerBatteryLevel || !controllerBatteryText) {
-    return;
+function controllerStatusLabel(index, status) {
+  const prefix = index === 0 ? "P1" : `P${index + 1}`;
+  if (!status.enabled) {
+    return `${prefix}: unavailable`;
   }
-
-  const status = normalizeControllerStatus(rawStatus);
-  const hasSignal = status.enabled;
-  const isConnected = status.connected;
-  controllerText.classList.toggle("muted", !isConnected);
-  if (!hasSignal) {
-    controllerText.textContent = "Controller: unavailable";
-  } else if (isConnected) {
-    controllerText.textContent = "Controller: connected";
-  } else {
-    controllerText.textContent = "Controller: disconnected";
+  if (status.connected) {
+    return `${prefix}: connected`;
   }
+  return `${prefix}: disconnected`;
+}
 
-  if (!hasSignal || !isConnected || status.battery_percentage === null) {
-    controllerBattery.classList.add("hidden", "unknown");
-    controllerBattery.classList.remove("good", "medium", "low");
-    controllerBatteryLevel.style.width = "0%";
-    controllerBatteryText.textContent = "--%";
-  } else {
-    const battery = Math.max(0, Math.min(100, status.battery_percentage));
-    controllerBattery.classList.remove("hidden", "unknown");
-    controllerBatteryLevel.style.width = `${battery}%`;
-    controllerBatteryText.textContent = `${battery}%`;
-    if (battery <= 20) {
-      controllerBattery.classList.add("low");
-      controllerBattery.classList.remove("medium", "good");
-    } else if (battery <= 50) {
-      controllerBattery.classList.add("medium");
-      controllerBattery.classList.remove("low", "good");
-    } else {
-      controllerBattery.classList.add("good");
-      controllerBattery.classList.remove("low", "medium");
+function displayControllerButtonLabel(label) {
+  const normalized = String(label || "").trim();
+  const dpadArrows = {
+    "D-Up": "↑",
+    "D-Down": "↓",
+    "D-Left": "←",
+    "D-Right": "→",
+  };
+  return dpadArrows[normalized] || normalized;
+}
+
+function controllerStatusEntries(payload) {
+  if (payload && Array.isArray(payload.controller_statuses)) {
+    const normalized = payload.controller_statuses.map((item) => normalizeControllerStatus(item));
+    if (normalized.length > 0) {
+      return normalized;
     }
   }
+  return [normalizeControllerStatus(payload ? payload.controller_status : null)];
+}
 
-  controllerButtons.innerHTML = "";
-  if (!hasSignal || !isConnected) {
-    const chip = document.createElement("span");
-    chip.className = "controller-chip";
-    chip.textContent = "-";
-    controllerButtons.appendChild(chip);
+function renderControllerStatus(payload) {
+  if (!controllerStatuses) {
     return;
   }
 
-  if (status.pressed_buttons.length === 0) {
-    const chip = document.createElement("span");
-    chip.className = "controller-chip";
-    chip.textContent = "idle";
-    controllerButtons.appendChild(chip);
-    return;
-  }
+  const BUTTON_SLOT_COUNT = 3;
 
-  for (const button of status.pressed_buttons) {
-    const chip = document.createElement("span");
-    chip.className = "controller-chip active";
-    chip.textContent = button;
-    controllerButtons.appendChild(chip);
+  const statuses = controllerStatusEntries(payload);
+  controllerStatuses.innerHTML = "";
+
+  for (let index = 0; index < statuses.length; index += 1) {
+    const status = statuses[index];
+    const item = document.createElement("span");
+    item.className = `status-pill controller-status-item${status.connected ? "" : " muted"}`;
+    item.title = status.device_name || status.address || "Controller";
+
+    const text = document.createElement("span");
+    text.className = "controller-pill-label";
+    text.textContent = controllerStatusLabel(index, status);
+    item.appendChild(text);
+
+    const battery = document.createElement("span");
+    battery.className = "controller-pill-battery";
+    const batteryIcon = document.createElement("span");
+    batteryIcon.className = "battery-icon";
+    const batteryLevel = document.createElement("span");
+    batteryLevel.className = "battery-level";
+    batteryIcon.appendChild(batteryLevel);
+    const batteryText = document.createElement("span");
+    batteryText.className = "battery-text";
+
+    if (!status.enabled || !status.connected || status.battery_percentage === null) {
+      battery.classList.add("unknown");
+      batteryText.textContent = "--%";
+      batteryLevel.style.width = "0%";
+    } else {
+      const value = Math.max(0, Math.min(100, status.battery_percentage));
+      batteryText.textContent = `${value}%`;
+      batteryLevel.style.width = `${value}%`;
+      if (value <= 20) {
+        battery.classList.add("low");
+      } else if (value <= 50) {
+        battery.classList.add("medium");
+      } else {
+        battery.classList.add("good");
+      }
+    }
+    battery.appendChild(batteryIcon);
+    battery.appendChild(batteryText);
+    item.appendChild(battery);
+
+    const buttons = document.createElement("span");
+    buttons.className = "controller-pill-buttons";
+
+    const slotLabels = [];
+    if (!status.enabled || !status.connected) {
+      slotLabels.push("-");
+    } else if (status.pressed_buttons.length === 0) {
+      slotLabels.push("idle");
+    } else {
+      slotLabels.push(...status.pressed_buttons.slice(0, BUTTON_SLOT_COUNT));
+    }
+
+    for (let slot = 0; slot < BUTTON_SLOT_COUNT; slot += 1) {
+      const chip = document.createElement("span");
+      const label = slotLabels[slot] || "";
+      chip.className = "controller-chip";
+      if (label.length > 0 && label !== "idle" && label !== "-") {
+        chip.classList.add("active");
+      }
+      if (!label) {
+        chip.classList.add("slot-empty");
+      }
+      chip.textContent = displayControllerButtonLabel(label);
+      buttons.appendChild(chip);
+    }
+
+    item.appendChild(buttons);
+    controllerStatuses.appendChild(item);
   }
 }
 
@@ -1958,7 +2006,7 @@ function startWebSocket() {
 
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
-    renderControllerStatus(data.controller_status);
+    renderControllerStatus(data);
     if (data.version === lastVersion) {
       return;
     }
@@ -1982,7 +2030,7 @@ function startWebSocket() {
             return;
           }
           const data = await response.json();
-          renderControllerStatus(data.controller_status);
+          renderControllerStatus(data);
           if (data.version === lastVersion) {
             return;
           }
@@ -2020,7 +2068,7 @@ function startControllerWebSocket() {
 
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
-    renderControllerStatus(data.controller_status);
+    renderControllerStatus(data);
   };
 
   ws.onclose = () => {
@@ -2032,7 +2080,7 @@ function startControllerWebSocket() {
             return;
           }
           const data = await response.json();
-          renderControllerStatus(data.controller_status);
+          renderControllerStatus(data);
         } catch (_err) {
           // Ignore transient network failures.
         }

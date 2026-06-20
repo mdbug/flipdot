@@ -142,6 +142,49 @@ h1 {
   gap: var(--space-2);
 }
 
+.controller-statuses {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.32rem;
+}
+
+.controller-status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.22rem 0.38rem;
+  min-height: 1.65rem;
+  font-size: 0.74rem;
+}
+
+.controller-pill-label {
+  white-space: nowrap;
+}
+
+.controller-pill-battery {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.24rem;
+  padding: 0.06rem 0.24rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: #0f1318;
+  color: var(--text);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.controller-pill-buttons {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 0.2rem;
+  width: 8.2rem;
+  justify-content: flex-start;
+  overflow: hidden;
+}
+
 .status-pill {
   min-height: 2rem;
   display: inline-flex;
@@ -230,6 +273,22 @@ h1 {
   background: #586273;
 }
 
+.controller-pill-battery.good .battery-level {
+  background: #4acb85;
+}
+
+.controller-pill-battery.medium .battery-level {
+  background: #e2bf52;
+}
+
+.controller-pill-battery.low .battery-level {
+  background: #df5f51;
+}
+
+.controller-pill-battery.unknown .battery-level {
+  background: #586273;
+}
+
 .controller-buttons {
   min-height: 2rem;
   display: inline-flex;
@@ -239,22 +298,31 @@ h1 {
 }
 
 .controller-chip {
-  min-height: 1.8rem;
+  min-height: 1.3rem;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 0.22rem 0.52rem;
+  padding: 0.1rem 0.26rem;
+  width: 2.6rem;
   background: var(--surface);
   color: var(--muted);
-  font-size: 0.74rem;
+  font-size: 0.64rem;
   font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .controller-chip.active {
   border-color: var(--teal);
   background: rgba(42, 183, 169, 0.16);
   color: var(--text);
+}
+
+.controller-chip.slot-empty {
+  visibility: hidden;
 }
 
 .matrix-stage {

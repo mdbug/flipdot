@@ -303,8 +303,11 @@ def test_frame_payload_includes_controller_status():
     assert response.status_code == 200
     payload = response.json()
     assert "controller_status" in payload
+    assert "controller_statuses" in payload
     assert payload["controller_status"]["connected"] is False
     assert payload["controller_status"]["pressed_buttons"] == []
+    assert isinstance(payload["controller_statuses"], list)
+    assert payload["controller_statuses"][0]["connected"] is False
 
     server.attach_controller_status_provider(
         lambda: {
@@ -325,6 +328,46 @@ def test_frame_payload_includes_controller_status():
     assert payload["controller_status"]["connected"] is True
     assert payload["controller_status"]["pressed_buttons"] == ["A", "L1"]
     assert payload["controller_status"]["battery_percentage"] == 92
+    assert len(payload["controller_statuses"]) == 1
+    assert payload["controller_statuses"][0]["connected"] is True
+
+
+def test_frame_payload_includes_multiple_controller_statuses():
+    server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8129)
+    client = TestClient(server._app)
+
+    server.attach_controller_status_provider(
+        lambda: [
+            {
+                "enabled": True,
+                "connected": True,
+                "address": "AA:BB:CC:DD:EE:01",
+                "device_name": "Wireless Controller",
+                "pressed_buttons": ["A"],
+                "last_event_monotonic": 12.3,
+                "battery_percentage": 92,
+            },
+            {
+                "enabled": True,
+                "connected": True,
+                "address": "AA:BB:CC:DD:EE:03",
+                "device_name": "Wireless Controller",
+                "pressed_buttons": ["B"],
+                "last_event_monotonic": 13.0,
+                "battery_percentage": 81,
+            },
+        ]
+    )
+
+    response = client.get("/api/frame")
+    assert response.status_code == 200
+    payload = response.json()
+    # Backward-compatible primary status remains available.
+    assert payload["controller_status"]["address"] == "AA:BB:CC:DD:EE:01"
+    assert payload["controller_status"]["pressed_buttons"] == ["A"]
+    assert len(payload["controller_statuses"]) == 2
+    assert payload["controller_statuses"][1]["address"] == "AA:BB:CC:DD:EE:03"
+    assert payload["controller_statuses"][1]["pressed_buttons"] == ["B"]
 
 
 def test_controller_status_endpoint_uses_provider_snapshot():
@@ -334,6 +377,7 @@ def test_controller_status_endpoint_uses_provider_snapshot():
     response = client.get("/api/controller/status")
     assert response.status_code == 200
     assert response.json()["controller_status"]["connected"] is False
+    assert response.json()["controller_statuses"][0]["connected"] is False
 
     server.attach_controller_status_provider(
         lambda: {
@@ -349,11 +393,45 @@ def test_controller_status_endpoint_uses_provider_snapshot():
 
     response = client.get("/api/controller/status")
     assert response.status_code == 200
-    payload = response.json()["controller_status"]
+    body = response.json()
+    payload = body["controller_status"]
     assert payload["enabled"] is True
     assert payload["connected"] is True
     assert payload["pressed_buttons"] == ["D-Up"]
     assert payload["battery_percentage"] == 93
+    assert len(body["controller_statuses"]) == 1
+
+
+def test_controller_status_endpoint_includes_multiple_controllers():
+    server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8131)
+    client = TestClient(server._app)
+
+    server.attach_controller_status_provider(
+        lambda: [
+            {
+                "enabled": True,
+                "connected": True,
+                "address": "AA:BB:CC:DD:EE:01",
+                "pressed_buttons": ["A"],
+                "battery_percentage": 90,
+            },
+            {
+                "enabled": True,
+                "connected": False,
+                "address": "AA:BB:CC:DD:EE:03",
+                "pressed_buttons": [],
+                "battery_percentage": None,
+            },
+        ]
+    )
+
+    response = client.get("/api/controller/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["controller_status"]["address"] == "AA:BB:CC:DD:EE:01"
+    assert len(body["controller_statuses"]) == 2
+    assert body["controller_statuses"][1]["address"] == "AA:BB:CC:DD:EE:03"
+    assert body["controller_statuses"][1]["connected"] is False
 
 
 def test_font_grid_page_route_serves_html():
