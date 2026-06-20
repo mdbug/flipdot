@@ -614,6 +614,16 @@ class WebServer:
         pressed_buttons = status.get("pressed_buttons", [])
         if not isinstance(pressed_buttons, list):
             pressed_buttons = []
+        battery_percentage = status.get("battery_percentage")
+        if battery_percentage is None:
+            normalized_battery = None
+        else:
+            try:
+                parsed_battery = int(battery_percentage)
+            except (TypeError, ValueError):
+                normalized_battery = None
+            else:
+                normalized_battery = parsed_battery if 0 <= parsed_battery <= 100 else None
 
         return {
             "enabled": bool(status.get("enabled", False)),
@@ -622,6 +632,7 @@ class WebServer:
             "device_name": str(status.get("device_name", "") or ""),
             "pressed_buttons": [str(item) for item in pressed_buttons],
             "last_event_monotonic": status.get("last_event_monotonic"),
+            "battery_percentage": normalized_battery,
         }
 
     @staticmethod
@@ -636,6 +647,7 @@ class WebServer:
             str(status.get("device_name", "") or ""),
             tuple(str(item) for item in buttons),
             status.get("last_event_monotonic"),
+            status.get("battery_percentage"),
         )
 
     @staticmethod
@@ -647,6 +659,7 @@ class WebServer:
             "device_name": "",
             "pressed_buttons": [],
             "last_event_monotonic": None,
+            "battery_percentage": None,
         }
 
     def _require_board(self):

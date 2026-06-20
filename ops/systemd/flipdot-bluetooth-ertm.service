@@ -1,0 +1,22 @@
+[Unit]
+Description=Disable Bluetooth ERTM (fixes Xbox controller input lag/freezes)
+Documentation=https://github.com/atar-axis/xpadneo/issues
+# The bluetooth core is built into the Jetson kernel, so its sysfs parameter
+# exists before userspace starts. Run before bluetooth.service so the setting is
+# in effect before the controller establishes its L2CAP channel.
+DefaultDependencies=no
+After=sysinit.target
+Before=bluetooth.service shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# ERTM (Enhanced Re-Transmission Mode) causes multi-second input stalls with
+# Xbox Wireless controllers over Bluetooth on Linux. Disabling it is the
+# canonical fix. The leading '-' tells systemd to ignore a non-zero exit (e.g.
+# if the sysfs parameter is absent on a non-Jetson kernel).
+ExecStart=-/bin/sh -c 'echo 1 > /sys/module/bluetooth/parameters/disable_ertm'
+
+[Install]
+WantedBy=multi-user.target

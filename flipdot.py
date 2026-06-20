@@ -11,9 +11,11 @@ logger = logging.getLogger(__name__)
 
 from app.services.fps import FPSTracker
 from app.services.controller import ControllerHub
+from app.services.controller_mapping import ControllerInputBridge
 from app.infrastructure.camera import Camera
 from app.infrastructure.panel import Panel
 from app.core.input_source import InputHub
+from app.core.action_dispatch import dispatch_actions
 import app.services.human_pose as human_pose
 import app.services.image as image
 import app.services.text as text
@@ -30,6 +32,21 @@ CLOCK_DISOLVE_TIME = 1.0
 SPIN_WAIT_MIN_FPS = 20
 SPIN_GUARD_SEC = 0.012
 PAINT_CLEAR_HOLD_SEC = 1.0
+
+# Modes that are fully driven by the controller UI and never render pose.
+# When the controller is the active control source, pose inference can be
+# skipped for these modes so the render/input loop is not starved by the
+# expensive per-frame MediaPipe call (keeping controller input responsive).
+CONTROLLER_DRIVEN_UI_MODES = frozenset({
+    ModeManager.MODE_MENU,
+    ModeManager.MODE_PAINT,
+    ModeManager.MODE_BOARD,
+    ModeManager.MODE_TETRIS,
+    ModeManager.MODE_PONG,
+    ModeManager.MODE_PERCUSSION,
+    ModeManager.MODE_AUTODRUM,
+    ModeManager.MODE_FONT_PREVIEW,
+})
 
 
 def get_web_controls(mode: str) -> list[dict[str, str]]:
@@ -116,6 +133,7 @@ def main():
     fps_tracker = FPSTracker()
     input_hub = InputHub()
     controller_hub = ControllerHub()
+    controller_bridge = ControllerInputBridge()
     web_server = None
     web_server_start_pending = enable_web_ui
 
@@ -173,11 +191,43 @@ def main():
 
             t_process_start = time.time()
 
-            if transition_policy.is_sleep_hour():
+            controller_snapshot = controller_hub.get_status_snapshot()
+            controller_active = bool(controller_snapshot.get("enabled")) and bool(controller_snapshot.get("connected"))
+            mode_manager.update_controller_connected(controller_active)
+
+            # Skip the expensive per-frame pose inference when the controller is
+            # driving a UI mode that does not render pose. This keeps the loop
+            # fast and steady so controller input stays responsive (no MediaPipe
+            # stall between input samples).
+            controller_driving_ui = (
+                mode_manager.get_effective_control_source() == ModeManager.CONTROL_CONTROLLER
+                and mode_manager.mode in CONTROLLER_DRIVEN_UI_MODES
+            )
+
+            if transition_policy.is_sleep_hour() or controller_driving_ui:
                 pose_results = None
             else:
                 pose_results = human_pose.get_human_pose(frame)
             input_hub.ingest_pose(pose_results)
+
+            controller_pressed_events = controller_hub.drain_pressed_events()
+            controller_bridge.process(
+                snapshot=controller_snapshot,
+                mode=mode_manager.mode,
+                input_hub=input_hub,
+                mode_manager=mode_manager,
+                menu=menu,
+                paint=paint,
+                autodrum=autodrum,
+                board=board,
+                font_preview=font_preview,
+                tetris_game=tetris_game,
+                pong_game=pong_game,
+                percussion=percussion,
+                pressed_events=controller_pressed_events,
+            )
+
+            allowed_sources = mode_manager.get_allowed_input_sources(include_web=True)
 
             if mode_manager.mode == ModeManager.MODE_PAINT:
                 if human_pose.is_left_hand_raised(pose_results):
@@ -193,21 +243,15 @@ def main():
                 paint_clear_gesture_start = None
                 paint_clear_gesture_armed = True
 
-            for action in input_hub.pop_actions():
-                if action.action == 'toggle_menu':
-                    mode_manager.toggle_menu()
-                elif action.action == 'paint_clear' and mode_manager.mode == ModeManager.MODE_PAINT:
-                    paint.clear()
-                elif action.action == 'autodrum_next_song' and mode_manager.mode == ModeManager.MODE_AUTODRUM:
-                    autodrum.next_song()
-                elif action.action == 'board_clear' and mode_manager.mode == ModeManager.MODE_BOARD:
-                    board.clear()
-                elif action.action == 'board_undo' and mode_manager.mode == ModeManager.MODE_BOARD:
-                    board.undo()
-                elif action.action == 'font_preview_prev' and mode_manager.mode == ModeManager.MODE_FONT_PREVIEW:
-                    font_preview.previous_variant()
-                elif action.action == 'font_preview_next' and mode_manager.mode == ModeManager.MODE_FONT_PREVIEW:
-                    font_preview.next_variant()
+            dispatch_actions(
+                actions=input_hub.pop_actions(allowed_sources=allowed_sources),
+                mode_manager=mode_manager,
+                paint=paint,
+                autodrum=autodrum,
+                board=board,
+                font_preview=font_preview,
+                allowed_sources=allowed_sources,
+            )
 
             transition_state = transition_policy.apply(
                 frame=frame,

@@ -160,6 +160,76 @@ h1 {
   color: var(--muted);
 }
 
+.battery-pill {
+  min-height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.34rem 0.62rem;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.battery-pill.hidden {
+  display: none;
+}
+
+.battery-icon {
+  position: relative;
+  width: 1.3rem;
+  height: 0.72rem;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.08rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.16rem;
+  background: #0f1318;
+}
+
+.battery-icon::after {
+  content: "";
+  position: absolute;
+  right: -0.18rem;
+  width: 0.12rem;
+  height: 0.32rem;
+  border-radius: 0 0.08rem 0.08rem 0;
+  background: var(--line-strong);
+}
+
+.battery-level {
+  display: block;
+  width: 0%;
+  height: 100%;
+  border-radius: 0.08rem;
+  background: #df5f51;
+  transition: width 140ms ease;
+}
+
+.battery-text {
+  letter-spacing: 0.01em;
+}
+
+.battery-pill.good .battery-level {
+  background: #4acb85;
+}
+
+.battery-pill.medium .battery-level {
+  background: #e2bf52;
+}
+
+.battery-pill.low .battery-level {
+  background: #df5f51;
+}
+
+.battery-pill.unknown .battery-level {
+  background: #586273;
+}
+
 .controller-buttons {
   min-height: 2rem;
   display: inline-flex;
@@ -708,6 +778,10 @@ input:disabled {
   .status-pill {
     flex: 1 1 auto;
     justify-content: center;
+  }
+
+  .battery-pill {
+    flex: 0 0 auto;
   }
 
   .control-rail {

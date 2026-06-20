@@ -162,6 +162,9 @@ class FontPreview:
             return
         self._window_start = (self._window_start + 1) % total
 
+    def adjust_spacing(self, delta: int) -> None:
+        self._spacing_px = max(0, min(self.MAX_SPACING_PX, self._spacing_px + int(delta)))
+
     def _pointer_to_panel(self, source: str | None, x: float, y: float) -> tuple[int, int]:
         if source == "pose":
             panel_x = int(self.width - (x * self.width))

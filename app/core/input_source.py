@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import threading
 import time
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 import app.services.human_pose as human_pose
 
@@ -84,18 +84,37 @@ class InputHub:
             return
         self.submit_pointer(source="pose", x=finger_x, y=finger_y)
 
-    def get_active_pointer(self, *, max_age_sec: float = 1.0) -> Optional[PointerSample]:
+    def get_active_pointer(
+        self,
+        *,
+        max_age_sec: float = 1.0,
+        allowed_sources: Optional[Iterable[str]] = None,
+    ) -> Optional[PointerSample]:
         now = time.monotonic()
+        allowed = set(allowed_sources) if allowed_sources is not None else None
         with self._lock:
             if not self._latest_pointer_by_source:
                 return None
-            newest = max(self._latest_pointer_by_source.values(), key=lambda sample: sample.timestamp)
+            samples = self._latest_pointer_by_source.values()
+            if allowed is not None:
+                samples = [sample for sample in samples if sample.source in allowed]
+            else:
+                samples = list(samples)
+            if not samples:
+                return None
+            newest = max(samples, key=lambda sample: sample.timestamp)
             if now - newest.timestamp > max_age_sec:
                 return None
             return newest
 
-    def pop_actions(self, *, max_age_sec: float = 2.0) -> List[InputAction]:
+    def pop_actions(
+        self,
+        *,
+        max_age_sec: float = 2.0,
+        allowed_sources: Optional[Iterable[str]] = None,
+    ) -> List[InputAction]:
         now = time.monotonic()
+        allowed = set(allowed_sources) if allowed_sources is not None else None
         with self._lock:
             actions = self._actions
             self._actions = []
@@ -103,11 +122,19 @@ class InputHub:
         fresh_actions: List[InputAction] = []
         for action in actions:
             if now - action.timestamp <= max_age_sec:
+                if allowed is not None and action.source not in allowed:
+                    continue
                 fresh_actions.append(action)
         return fresh_actions
 
-    def pop_clicks(self, *, max_age_sec: float = 1.0) -> List[PointerClick]:
+    def pop_clicks(
+        self,
+        *,
+        max_age_sec: float = 1.0,
+        allowed_sources: Optional[Iterable[str]] = None,
+    ) -> List[PointerClick]:
         now = time.monotonic()
+        allowed = set(allowed_sources) if allowed_sources is not None else None
         with self._lock:
             clicks = self._clicks
             self._clicks = []
@@ -115,5 +142,7 @@ class InputHub:
         fresh_clicks: List[PointerClick] = []
         for click in clicks:
             if now - click.timestamp <= max_age_sec:
+                if allowed is not None and click.source not in allowed:
+                    continue
                 fresh_clicks.append(click)
         return fresh_clicks

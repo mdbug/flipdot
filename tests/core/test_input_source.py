@@ -59,6 +59,25 @@ def test_get_active_pointer_prefers_newest_sample(monkeypatch):
     assert sample.y == 0.9
 
 
+def test_get_active_pointer_can_filter_allowed_sources(monkeypatch):
+    input_source_module = _load_input_source_module(monkeypatch)
+    now = {"value": 10.0}
+
+    def fake_monotonic():
+        return now["value"]
+
+    monkeypatch.setattr(input_source_module.time, "monotonic", fake_monotonic)
+    hub = input_source_module.InputHub()
+
+    hub.submit_pointer(source="pose", x=0.2, y=0.2, timestamp=9.0)
+    hub.submit_pointer(source="controller", x=0.9, y=0.9, timestamp=9.5)
+
+    sample = hub.get_active_pointer(max_age_sec=2.0, allowed_sources={"pose"})
+
+    assert sample is not None
+    assert sample.source == "pose"
+
+
 def test_pop_actions_filters_by_age(monkeypatch):
     input_source_module = _load_input_source_module(monkeypatch)
     now = {"value": 50.0}
@@ -75,6 +94,23 @@ def test_pop_actions_filters_by_age(monkeypatch):
 
     assert [a.action for a in actions] == ["prev"]
     assert hub.pop_actions(max_age_sec=2.0) == []
+
+
+def test_pop_actions_can_filter_allowed_sources(monkeypatch):
+    input_source_module = _load_input_source_module(monkeypatch)
+    now = {"value": 50.0}
+
+    def fake_monotonic():
+        return now["value"]
+
+    monkeypatch.setattr(input_source_module.time, "monotonic", fake_monotonic)
+    hub = input_source_module.InputHub()
+    hub.submit_action(source="pose", action="toggle_menu", timestamp=49.5)
+    hub.submit_action(source="controller", action="toggle_menu", timestamp=49.5)
+
+    actions = hub.pop_actions(max_age_sec=2.0, allowed_sources={"pose"})
+
+    assert [a.source for a in actions] == ["pose"]
 
 
 def test_pop_clicks_filters_by_age(monkeypatch):
@@ -95,3 +131,21 @@ def test_pop_clicks_filters_by_age(monkeypatch):
     assert clicks[0].x == 0.9
     assert clicks[0].y == 0.8
     assert hub.pop_clicks(max_age_sec=1.0) == []
+
+
+def test_pop_clicks_can_filter_allowed_sources(monkeypatch):
+    input_source_module = _load_input_source_module(monkeypatch)
+    now = {"value": 12.0}
+
+    def fake_monotonic():
+        return now["value"]
+
+    monkeypatch.setattr(input_source_module.time, "monotonic", fake_monotonic)
+    hub = input_source_module.InputHub()
+    hub.submit_click(source="pose", x=0.1, y=0.2, timestamp=11.8)
+    hub.submit_click(source="controller", x=0.9, y=0.8, timestamp=11.9)
+
+    clicks = hub.pop_clicks(max_age_sec=1.0, allowed_sources={"pose"})
+
+    assert len(clicks) == 1
+    assert clicks[0].source == "pose"

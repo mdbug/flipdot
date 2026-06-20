@@ -20,7 +20,13 @@ def _load_paint_module(monkeypatch):
 
 
 class DummyModeManager:
-    pass
+    def __init__(self):
+        self.allowed_sources = {"pose", "controller", "web"}
+
+    def get_allowed_input_sources(self, include_web=True):
+        if include_web:
+            return set(self.allowed_sources)
+        return {source for source in self.allowed_sources if source != "web"}
 
 
 class DummyInputHub:
@@ -28,11 +34,15 @@ class DummyInputHub:
         self.pointer = pointer
         self.down = down
 
-    def get_active_pointer(self, max_age_sec=0.8):
+    def get_active_pointer(self, max_age_sec=0.8, allowed_sources=None):
+        if self.pointer is None:
+            return None
+        if allowed_sources is not None and self.pointer.source not in allowed_sources:
+            return None
         return self.pointer
 
     def is_button_down(self, source="web"):
-        return self.down
+        return self.down if source in ("web", "controller") else False
 
 
 def test_pointer_to_pixel_mirrors_pose_but_not_web(monkeypatch):
@@ -98,3 +108,26 @@ def test_pose_hold_on_top_right_clears_canvas(monkeypatch):
 
     assert paint.canvas.sum() == 0
     assert paint.drawing is False
+
+
+def test_controller_pointer_is_ignored_when_gesture_controls_mode(monkeypatch):
+    paint_module = _load_paint_module(monkeypatch)
+    manager = DummyModeManager()
+    manager.allowed_sources = {"pose", "web"}
+    paint = paint_module.Paint(28, 28, manager)
+
+    line_calls = {"count": 0}
+
+    def fake_line(canvas, p0, p1, color, thickness=1):
+        line_calls["count"] += 1
+        return canvas
+
+    monkeypatch.setattr(paint_module.cv2, "line", fake_line)
+
+    hub1 = DummyInputHub(pointer=types.SimpleNamespace(source="controller", x=0.1, y=0.1), down=True)
+    hub2 = DummyInputHub(pointer=types.SimpleNamespace(source="controller", x=0.2, y=0.2), down=True)
+
+    paint.get_frame(None, input_hub=hub1)
+    paint.get_frame(None, input_hub=hub2)
+
+    assert line_calls["count"] == 0

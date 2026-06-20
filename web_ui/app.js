@@ -3,6 +3,9 @@ const ctx = canvas.getContext("2d");
 const statusText = document.getElementById("statusText");
 const sourceText = document.getElementById("sourceText");
 const controllerText = document.getElementById("controllerText");
+const controllerBattery = document.getElementById("controllerBattery");
+const controllerBatteryLevel = document.getElementById("controllerBatteryLevel");
+const controllerBatteryText = document.getElementById("controllerBatteryText");
 const controllerButtons = document.getElementById("controllerButtons");
 const modeControls = document.getElementById("modeControls");
 const boardEditor = document.getElementById("boardEditor");
@@ -95,6 +98,7 @@ function normalizeControllerStatus(raw) {
       enabled: false,
       connected: false,
       pressed_buttons: [],
+      battery_percentage: null,
     };
   }
 
@@ -102,15 +106,19 @@ function normalizeControllerStatus(raw) {
     ? raw.pressed_buttons.map((label) => String(label || "").trim()).filter((label) => label.length > 0)
     : [];
 
+  const battery = Number(raw.battery_percentage);
+  const batteryPercentage = Number.isFinite(battery) && battery >= 0 && battery <= 100 ? Math.round(battery) : null;
+
   return {
     enabled: Boolean(raw.enabled),
     connected: Boolean(raw.connected),
     pressed_buttons: pressed,
+    battery_percentage: batteryPercentage,
   };
 }
 
 function renderControllerStatus(rawStatus) {
-  if (!controllerText || !controllerButtons) {
+  if (!controllerText || !controllerButtons || !controllerBattery || !controllerBatteryLevel || !controllerBatteryText) {
     return;
   }
 
@@ -124,6 +132,28 @@ function renderControllerStatus(rawStatus) {
     controllerText.textContent = "Controller: connected";
   } else {
     controllerText.textContent = "Controller: disconnected";
+  }
+
+  if (!hasSignal || !isConnected || status.battery_percentage === null) {
+    controllerBattery.classList.add("hidden", "unknown");
+    controllerBattery.classList.remove("good", "medium", "low");
+    controllerBatteryLevel.style.width = "0%";
+    controllerBatteryText.textContent = "--%";
+  } else {
+    const battery = Math.max(0, Math.min(100, status.battery_percentage));
+    controllerBattery.classList.remove("hidden", "unknown");
+    controllerBatteryLevel.style.width = `${battery}%`;
+    controllerBatteryText.textContent = `${battery}%`;
+    if (battery <= 20) {
+      controllerBattery.classList.add("low");
+      controllerBattery.classList.remove("medium", "good");
+    } else if (battery <= 50) {
+      controllerBattery.classList.add("medium");
+      controllerBattery.classList.remove("low", "good");
+    } else {
+      controllerBattery.classList.add("good");
+      controllerBattery.classList.remove("low", "medium");
+    }
   }
 
   controllerButtons.innerHTML = "";

@@ -4,20 +4,40 @@ from app.services.controller import ControllerHub
 
 
 class FakeInputDevice:
-    def __init__(self, *, path: str, name: str, uniq: str = "", phys: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        path: str,
+        name: str,
+        uniq: str = "",
+        phys: str = "",
+        capabilities: dict[int, list[int]] | None = None,
+    ) -> None:
         self.path = path
         self.name = name
         self.uniq = uniq
         self.phys = phys
+        self._capabilities = capabilities or {}
 
     def read_loop(self):
         return iter([])
+
+    def capabilities(self, absinfo=False):
+        del absinfo
+        return self._capabilities
+
+    def close(self):
+        return None
 
 
 class FakeEvdev:
     class ecodes:
         EV_KEY = 1
         EV_ABS = 3
+        ABS_X = 0
+        ABS_Y = 1
+        ABS_RX = 3
+        ABS_RY = 4
         BTN_SOUTH = 304
         BTN_EAST = 305
         BTN_WEST = 307
@@ -129,3 +149,134 @@ def test_hat_axis_updates_dpad_buttons():
 
     hub._apply_abs_state(fake_evdev.ecodes.ABS_HAT0Y, 1)
     assert "D-Down" in hub.get_status_snapshot()["pressed_buttons"]
+
+
+def test_quick_tap_is_latched_until_drained():
+    fake_evdev = FakeEvdev({})
+    hub = ControllerHub(evdev_module=fake_evdev, auto_start=False)
+
+    # A press and release that happens entirely between drains must still be
+    # reported as a single down-edge.
+    hub._apply_button_state("A", 1)
+    hub._apply_button_state("A", 0)
+    assert hub.get_status_snapshot()["pressed_buttons"] == []
+
+    assert hub.drain_pressed_events() == {"A"}
+    # Edges are cleared after draining.
+    assert hub.drain_pressed_events() == set()
+
+
+def test_held_button_latches_single_edge():
+    fake_evdev = FakeEvdev({})
+    hub = ControllerHub(evdev_module=fake_evdev, auto_start=False)
+
+    hub._apply_button_state("B", 1)
+    hub._apply_button_state("B", 1)  # repeated press event while held
+    assert hub.drain_pressed_events() == {"B"}
+    assert hub.drain_pressed_events() == set()
+
+
+def test_controller_matching_prefers_highest_capability_score():
+    ec = FakeEvdev.ecodes
+    target = "AA:BB:CC:DD:EE:01"
+    fake_evdev = FakeEvdev(
+        {
+            "/dev/input/event1": FakeInputDevice(
+                path="/dev/input/event1",
+                name="Wireless Controller Sensor",
+                uniq="aa:bb:cc:dd:ee:01",
+                capabilities={
+                    ec.EV_ABS: [ec.ABS_X],
+                },
+            ),
+            "/dev/input/event2": FakeInputDevice(
+                path="/dev/input/event2",
+                name="Wireless Controller",
+                uniq="aa:bb:cc:dd:ee:01",
+                capabilities={
+                    ec.EV_KEY: [
+                        ec.BTN_SOUTH,
+                        ec.BTN_EAST,
+                        ec.BTN_WEST,
+                        ec.BTN_NORTH,
+                        ec.BTN_START,
+                        ec.BTN_SELECT,
+                    ],
+                    ec.EV_ABS: [ec.ABS_HAT0X, ec.ABS_HAT0Y, ec.ABS_X, ec.ABS_Y],
+                },
+            ),
+        }
+    )
+
+    hub = ControllerHub(target_address=target, evdev_module=fake_evdev, auto_start=False)
+    device = hub._find_matching_device()
+
+    assert device is not None
+    assert device.path == "/dev/input/event2"
+
+
+def test_button_state_is_merged_across_devices():
+    fake_evdev = FakeEvdev({})
+    hub = ControllerHub(evdev_module=fake_evdev, auto_start=False)
+
+    hub._set_connected_devices(
+        [
+            FakeInputDevice(path="/dev/input/event1", name="Wireless Controller"),
+            FakeInputDevice(path="/dev/input/event2", name="Wireless Controller"),
+        ]
+    )
+
+    hub._apply_button_state("A", 1, device_path="/dev/input/event1")
+    hub._apply_button_state("B", 1, device_path="/dev/input/event2")
+    snapshot = hub.get_status_snapshot()
+    assert snapshot["pressed_buttons"] == ["A", "B"]
+
+    hub._apply_button_state("A", 0, device_path="/dev/input/event1")
+    snapshot = hub.get_status_snapshot()
+    assert snapshot["pressed_buttons"] == ["B"]
+
+    hub._apply_button_state("B", 0, device_path="/dev/input/event2")
+    snapshot = hub.get_status_snapshot()
+    assert snapshot["pressed_buttons"] == []
+
+
+def test_parse_bluetoothctl_battery_percentage_prefers_decimal_parenthesis():
+    output = "Battery Percentage: 0x5c (92)"
+    assert ControllerHub._parse_bluetoothctl_battery_percentage(output) == 92
+
+
+def test_parse_bluetoothctl_battery_percentage_accepts_plain_decimal():
+    output = "Battery Percentage: 76"
+    assert ControllerHub._parse_bluetoothctl_battery_percentage(output) == 76
+
+
+def test_parse_bluetoothctl_battery_percentage_rejects_missing_value():
+    output = "Battery Service present, percentage unavailable"
+    assert ControllerHub._parse_bluetoothctl_battery_percentage(output) is None
+
+
+def test_parse_upower_percentage_accepts_decimal_value():
+    output = "gaming-input\n  percentage:          92%\n"
+    assert ControllerHub._parse_upower_percentage(output) == 92
+
+
+def test_parse_upower_percentage_rounds_fractional_value():
+    output = "gaming-input\n  percentage:          91.6%\n"
+    assert ControllerHub._parse_upower_percentage(output) == 92
+
+
+def test_parse_upower_percentage_rejects_invalid_value():
+    output = "gaming-input\n  percentage:          unknown\n"
+    assert ControllerHub._parse_upower_percentage(output) is None
+
+
+def test_upower_info_matches_address_from_serial():
+    hub = ControllerHub(evdev_module=FakeEvdev({}), auto_start=False)
+    info = "serial:               AA:BB:CC:DD:EE:01\n"
+    assert hub._upower_info_matches_address(info, "aa:bb:cc:dd:ee:01") is True
+
+
+def test_upower_info_matches_address_from_native_path():
+    hub = ControllerHub(evdev_module=FakeEvdev({}), auto_start=False)
+    info = "native-path:          /org/bluez/hci0/dev_AA_BB_CC_DD_EE_01\n"
+    assert hub._upower_info_matches_address(info, "aa:bb:cc:dd:ee:01") is True

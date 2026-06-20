@@ -314,6 +314,7 @@ def test_frame_payload_includes_controller_status():
             "device_name": "Wireless Controller",
             "pressed_buttons": ["A", "L1"],
             "last_event_monotonic": 12.3,
+            "battery_percentage": 92,
         }
     )
 
@@ -323,6 +324,7 @@ def test_frame_payload_includes_controller_status():
     assert payload["controller_status"]["enabled"] is True
     assert payload["controller_status"]["connected"] is True
     assert payload["controller_status"]["pressed_buttons"] == ["A", "L1"]
+    assert payload["controller_status"]["battery_percentage"] == 92
 
 
 def test_controller_status_endpoint_uses_provider_snapshot():
@@ -341,6 +343,7 @@ def test_controller_status_endpoint_uses_provider_snapshot():
             "device_name": "Wireless Controller",
             "pressed_buttons": ["D-Up"],
             "last_event_monotonic": 42.0,
+            "battery_percentage": "93",
         }
     )
 
@@ -350,6 +353,7 @@ def test_controller_status_endpoint_uses_provider_snapshot():
     assert payload["enabled"] is True
     assert payload["connected"] is True
     assert payload["pressed_buttons"] == ["D-Up"]
+    assert payload["battery_percentage"] == 93
 
 
 def test_font_grid_page_route_serves_html():

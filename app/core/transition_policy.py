@@ -166,7 +166,7 @@ class TransitionPolicy:
             ModeManager.MODE_FONT_PREVIEW,
         ):
             if human_pose.is_arms_crossed(pose_results):
-                mode_manager.click_menu()
+                mode_manager.click_menu(entered_via=ModeManager.CONTROL_GESTURE)
             else:
                 mode_manager.reset_menu_click()
 
@@ -195,7 +195,7 @@ class TransitionPolicy:
                 mode_manager.set_mode(ModeManager.MODE_CLOCK)
 
             if human_pose.is_arms_crossed(pose_results) and state.eyes_visible:
-                mode_manager.click_menu()
+                mode_manager.click_menu(entered_via=ModeManager.CONTROL_GESTURE)
             else:
                 mode_manager.reset_menu_click()
 
@@ -219,7 +219,7 @@ class TransitionPolicy:
                         mode_manager.set_mode(ModeManager.MODE_POSE)
 
             if human_pose.is_arms_crossed(pose_results) and (state.eyes_visible or not mode_manager.pose_enabled):
-                mode_manager.click_menu()
+                mode_manager.click_menu(entered_via=ModeManager.CONTROL_GESTURE)
             else:
                 mode_manager.reset_menu_click()
 

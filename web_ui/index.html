@@ -15,9 +15,7 @@
       <section class="display-deck" aria-label="Flipdot display console">
         <header class="topbar">
           <div>
-            <p class="eyebrow">Live panel</p>
-            <h1>Flipdot Console</h1>
-            <p class="console-links">
+            <p class="eyebrow">Live panel</p> <p class="console-links">
               <a class="console-link" href="/font-grid">Open Font Grid</a>
             </p>
           </div>
@@ -25,6 +23,12 @@
             <span id="statusText" class="status-pill">Connecting...</span>
             <span id="sourceText" class="status-pill muted">Source: none</span>
             <span id="controllerText" class="status-pill muted">Controller: disconnected</span>
+            <span id="controllerBattery" class="battery-pill hidden" aria-label="Controller battery">
+              <span class="battery-icon" aria-hidden="true">
+                <span id="controllerBatteryLevel" class="battery-level"></span>
+              </span>
+              <span id="controllerBatteryText" class="battery-text">--%</span>
+            </span>
             <span id="controllerButtons" class="controller-buttons" aria-label="Controller pressed buttons"></span>
           </div>
         </header>

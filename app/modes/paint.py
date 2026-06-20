@@ -31,24 +31,43 @@ class Paint:
         return pixel_x, pixel_y
 
     def get_frame(self, pose_results, input_hub=None):
-        pointer_source = "pose"
+        get_allowed_sources = getattr(self.mode_manager, "get_allowed_input_sources", None)
+        allowed_sources = (
+            get_allowed_sources(include_web=True)
+            if callable(get_allowed_sources)
+            else {"pose", "controller", "web"}
+        )
+        allow_pose_fallback = "pose" in allowed_sources
+        pointer_source = "pose" if allow_pose_fallback else "web"
         web_button_down = input_hub.is_button_down(source="web") if input_hub is not None else False
-        pointer_sample = input_hub.get_active_pointer(max_age_sec=0.8) if input_hub is not None else None
+        controller_button_down = (
+            input_hub.is_button_down(source="controller")
+            if input_hub is not None and "controller" in allowed_sources
+            else False
+        )
+        pointer_button_down = web_button_down or controller_button_down
+        pointer_sample = (
+            input_hub.get_active_pointer(max_age_sec=0.8, allowed_sources=allowed_sources)
+            if input_hub is not None
+            else None
+        )
         if pointer_sample is not None:
             pointer_source = pointer_sample.source
             pixel_x, pixel_y = self._pointer_to_pixel(pointer_sample.source, pointer_sample.x, pointer_sample.y)
             has_pointer = True
-        else:
+        elif allow_pose_fallback:
             finger_x, finger_y = human_pose.get_right_index_finger_position(pose_results)
             has_pointer = finger_x is not None and finger_y is not None
             if has_pointer:
                 pixel_x, pixel_y = self._pointer_to_pixel("pose", finger_x, finger_y)
+        else:
+            has_pointer = False
 
         if has_pointer:
 
-            if pointer_source == "web":
+            if pointer_source in ("web", "controller"):
                 self.last_pointer_duration = 0
-                if self.last_pointer_position is not None and web_button_down:
+                if self.last_pointer_position is not None and pointer_button_down:
                     cv2.line(self.canvas, self.last_pointer_position, (pixel_x, pixel_y), 1, thickness=1)
             else:
                 if self.last_pointer_position is not None:
@@ -82,8 +101,8 @@ class Paint:
                 pointer_x = None
                 pointer_y = None
             frame = human_pose.draw_pointer(frame, pointer_x, pointer_y, size=2, mirror_x=False)
-        if pointer_source == "web":
-            if web_button_down:
+        if pointer_source in ("web", "controller"):
+            if pointer_button_down:
                 frame[self.height-1, 0:self.width] = 1
             else:
                 frame[self.height-1, 0:self.width] = 0

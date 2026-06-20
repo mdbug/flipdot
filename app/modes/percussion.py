@@ -75,6 +75,19 @@ class Percussion:
             self._decay_events.append(
                 (now + (i + 1) * self.DECAY_TICK, name, tail_density))
 
+    def adjust_bpm(self, delta):
+        self.bpm = max(self.MIN_BPM, min(self.MAX_BPM, float(self.bpm) + float(delta)))
+
+    def cycle_pattern(self, delta):
+        if not self.PATTERNS:
+            return
+        self.pattern_index = (self.pattern_index + int(delta)) % len(self.PATTERNS)
+
+    def trigger_accent(self):
+        now = time.time()
+        self._hit('kick', now)
+        self._hit('snare', now)
+
     def get_frame(self, pose_results):
         finger_x, finger_y = human_pose.get_right_index_finger_position(pose_results)
         if finger_x is not None and finger_y is not None:

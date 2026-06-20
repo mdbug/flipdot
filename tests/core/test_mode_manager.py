@@ -83,3 +83,56 @@ def test_get_fps_limit_warmup_then_mode_specific(monkeypatch):
 
     fake.now = 56.0
     assert manager.get_fps_limit() == mode_manager_module.ModeManager.MAX_FPS[mode_manager_module.ModeManager.MODE_CLOCK]
+
+
+def test_set_mode_updates_control_source_when_entered_via(monkeypatch):
+    fake = FakeClock(start=20.0)
+    monkeypatch.setattr(mode_manager_module.time, "time", fake.time)
+
+    manager = mode_manager_module.ModeManager(mode=mode_manager_module.ModeManager.MODE_CLOCK)
+    manager.update_controller_connected(True)
+    manager.set_mode(
+        mode_manager_module.ModeManager.MODE_MENU,
+        entered_via=mode_manager_module.ModeManager.CONTROL_GESTURE,
+    )
+
+    assert manager.control_source == mode_manager_module.ModeManager.CONTROL_GESTURE
+
+
+def test_set_mode_keeps_control_source_when_entered_via_missing(monkeypatch):
+    fake = FakeClock(start=30.0)
+    monkeypatch.setattr(mode_manager_module.time, "time", fake.time)
+
+    manager = mode_manager_module.ModeManager(mode=mode_manager_module.ModeManager.MODE_CLOCK)
+    manager.update_controller_connected(True)
+    manager.set_mode(
+        mode_manager_module.ModeManager.MODE_MENU,
+        entered_via=mode_manager_module.ModeManager.CONTROL_CONTROLLER,
+    )
+    manager.set_mode(mode_manager_module.ModeManager.MODE_TETRIS)
+
+    assert manager.control_source == mode_manager_module.ModeManager.CONTROL_CONTROLLER
+
+
+def test_effective_control_source_falls_back_to_gesture_when_disconnected(monkeypatch):
+    fake = FakeClock(start=40.0)
+    monkeypatch.setattr(mode_manager_module.time, "time", fake.time)
+
+    manager = mode_manager_module.ModeManager(mode=mode_manager_module.ModeManager.MODE_CLOCK)
+    manager.control_source = mode_manager_module.ModeManager.CONTROL_CONTROLLER
+    manager.update_controller_connected(False)
+
+    assert manager.get_effective_control_source() == mode_manager_module.ModeManager.CONTROL_GESTURE
+
+
+def test_controller_connect_immediately_switches_control_source(monkeypatch):
+    fake = FakeClock(start=50.0)
+    monkeypatch.setattr(mode_manager_module.time, "time", fake.time)
+
+    manager = mode_manager_module.ModeManager(mode=mode_manager_module.ModeManager.MODE_MENU)
+    manager.control_source = mode_manager_module.ModeManager.CONTROL_GESTURE
+
+    switched = manager.update_controller_connected(True)
+
+    assert switched is True
+    assert manager.control_source == mode_manager_module.ModeManager.CONTROL_CONTROLLER

@@ -2,19 +2,19 @@ import numpy as np
 import time
 import app.services.text as text
 import app.services.human_pose as human_pose
-from app.modes.autodrum import AutoDrum
 
 
-class Pong(AutoDrum):
-    """Pong with gesture control, an AI opponent, and beat-locked physics.
+class Pong:
+    """Pong with gesture control and smooth continuous motion.
 
-    The ball moves one tick per sequencer step, so its motion IS the
-    metronome.  Game sounds are diegetic — drawn into the background at
-    the spot where they happen, so they are loud (lots of dots), look
-    like impacts, and clean themselves up because the background is
-    recomposed from game state on every step:
+    Physics runs every rendered frame (time-based), so paddle and ball
+    movement stay responsive and fluid even at varying frame rates.
 
-    * ball movement → the steady tick of background flips
+    Percussion-like panel effects are still drawn at impact locations and
+    naturally clean up over time.
+
+    Effects:
+
     * wall bounce   → a 2×10 flash of the wall at the impact point
     * paddle hit    → a flash hugging the paddle face (the vertical
                       mirror of the wall flash), then a semicircular
@@ -27,9 +27,7 @@ class Pong(AutoDrum):
                       flashes across the whole display, then lands on
                       the result screen
 
-    Rallies accelerate the tempo (and therefore the ball) the same way
-    Tetris lines speed the song — beat-locked physics gets faster with
-    the music for free.
+    Rallies accelerate ball speed to intensify play.
 
     Layout (h×w panel)
     ------------------
@@ -39,7 +37,7 @@ class Pong(AutoDrum):
     Controls
     --------
     * Right index finger height → your paddle (right side).  Movement is
-      buffered and applied on the step grid, max PLAYER_SPEED px/step.
+            continuous and speed-limited, max PLAYER_SPEED px/s.
     * Left hand raised on the win screen → rematch (or wait 8 s).
     * Arms crossed → exit to menu (handled by the main loop as usual).
 
@@ -49,83 +47,117 @@ class Pong(AutoDrum):
     than you, and aims with a small random error — sharp angles win.
     """
 
-    AI_TAKEOVER_DELAY = 3.0
+    AI_TAKEOVER_DELAY = 15.0
     WIN_SCORE = 5
     PAD_H = 6          # paddle height in px
     PAD_W = 2          # paddle width in px
     BALL = 2           # ball is BALL×BALL px
-    PLAYER_SPEED = 3   # px per step
-    AI_SPEED = 2       # px per step
+    PLAYER_SPEED = 24.0      # px/s
+    CONTROLLER_SPEED = 100.0  # px/s when driven by controller
+    AI_SPEED = 16.0          # px/s
+    BASE_BALL_SPEED = 15.5   # px/s
+    MAX_DT = 0.05            # clamp dt to avoid tunneling on hitches
+    INITIAL_SERVE_DELAY = 1.0
+    POINT_SERVE_DELAY = 1.5
     POINT_CELEBRATION_TIME = 1.25
     WIN_FANFARE_TIME = 2.0
-
-    SONGS = [
-        {
-            'name': 'PONG',
-            'bpm': 116,
-            'subdivisions': 4,   # ball ticks on 16th notes
-            'sections': [
-                (0, [set() for _ in range(16)]),   # no backing drums —
-            ],                                     # the ball is the beat
-            'bg': '_pong_background',
-            'bg_step': '_pong_step',
-            # Voice stripes are retained for AutoDrum compatibility;
-            # Pong's score/win moments use full-screen events below.
-            'melody': {
-                'pitches': (('g5', 79), ('e5', 76), ('c5', 72),
-                            ('g4', 67), ('e4', 64), ('c4', 60)),
-                'long': ('g5', 'c5', 'c4'),
-            },
-        },
-    ]
+    MODE_NAME_TIME = 2.0
+    WIN_RESTART_TIME = 8.0
 
     def __init__(self, width, height, mode_manager):
-        self._celebration_hits = []  # (due_time, instrument_name) queue;
-        #                             exists before the super() init chain
-        super().__init__(width, height, mode_manager)
+        self.width = width
+        self.height = height
+        self.mode_manager = mode_manager
+        self.state = np.zeros((height, width), dtype=np.uint8)
+        self.rng = np.random.default_rng()
+
+        # Drum-like panel hits used by score/win celebrations.
+        h, w = height, width
+        self._instruments = {
+            'kick':  {'area': (h // 2, h, 0, w),           'density': 1.0,
+                      'decay': []},
+            'tom':   {'area': (h // 4, h // 2, w // 2, w), 'density': 0.9,
+                      'decay': [0.35, 0.15]},
+            'crash': {'area': (0, h, 0, w),                'density': 0.8,
+                      'decay': [0.45, 0.3, 0.18, 0.1, 0.05]},
+            'clap':  {'area': (0, h // 2, 0, w),           'density': 0.5,
+                      'decay': [0.3, 0.18, 0.1]},
+        }
+        self._decay_events = []
+
+        self._celebration_hits = []
         self._left_raise_armed = True
-        self._human_target = None      # latest finger-derived paddle top
+        self._human_target = None
         self._last_person_time = None
+        self._last_controller_input_time = None
+        now = time.time()
+        self.song_start_time = now
+        self._last_frame_time = now
+        self._reset_match(now, initial=True)
 
     # ------------------------------------------------------------------
     # Match setup
     # ------------------------------------------------------------------
 
-    def _pong_background(self):
-        """Initialise the match; return the first rendered frame."""
+    def _reset_match(self, now, initial=False):
+        """Initialize or restart the match state."""
         h, w = self.height, self.width
+        self._last_person_time = now
+        self._decay_events = []
+        self._celebration_hits = []
+        self.state[:, :] = 0
+        center_pad = (h - self.PAD_H) / 2.0
         self._pong = {
-            'ft': 0, 'fb': h,            # playfield top/bottom (excl.)
-            'ball': [w // 2 - 1, h // 2],
-            'v': [0, 0],
-            'lpad': (h - self.PAD_H) // 2,
-            'rpad': (h - self.PAD_H) // 2,
-            'aim_l': 0, 'aim_r': 0,      # AI aiming error, resampled per rally
-            'score': [0, 0],             # [left, right]
+            'ft': 0,
+            'fb': h,
+            'ball': [w / 2.0 - self.BALL / 2.0, (h - self.BALL) / 2.0],
+            'v': [0.0, 0.0],
+            'lpad': center_pad,
+            'rpad': center_pad,
+            'aim_l': 0,
+            'aim_r': 0,
+            'score': [0, 0],
             'rally': 0,
-            'fx': [],                    # transient impact effects
-            'serve_wait': 8,             # steps until serve (ball blinks)
+            'fx': [],
+            'serve_until': now + self.INITIAL_SERVE_DELAY,
             'serve_dir': 1 if self.rng.random() < 0.5 else -1,
-            'serve_blink': 0,
             'celebration': None,
-            'winner': None, 'win_time': None, 'win_text': '',
+            'winner': None,
+            'win_time': None,
+            'win_text': '',
         }
-        return self._compose_pong_bg()
+        self._center_paddles()
+        if initial:
+            self.song_start_time = now
+        self._last_frame_time = now
+
+    def _center_paddles(self):
+        p = self._pong
+        center_pad = (p['ft'] + p['fb'] - self.PAD_H) / 2.0
+        p['lpad'] = center_pad
+        p['rpad'] = center_pad
 
     # ------------------------------------------------------------------
-    # Per-step game update — every flip lands on the musical grid
+    # Core update
     # ------------------------------------------------------------------
 
     def _human_active(self, now):
-        return (self._last_person_time is not None
-                and now - self._last_person_time < self.AI_TAKEOVER_DELAY)
+        person_active = (
+            self._last_person_time is not None
+            and now - self._last_person_time < self.AI_TAKEOVER_DELAY
+        )
+        controller_active = (
+            self._last_controller_input_time is not None
+            and now - self._last_controller_input_time < self.AI_TAKEOVER_DELAY
+        )
+        return person_active or controller_active
 
     def _ai_paddle_target(self, side):
         """Where the AI wants its paddle top.  side: 0 = left, 1 = right."""
         p = self._pong
         x, y = p['ball']
         w = self.width
-        centre = (p['ft'] + p['fb'] - self.PAD_H) // 2
+        centre = (p['ft'] + p['fb'] - self.PAD_H) / 2.0
         approaching = p['v'][0] < 0 if side == 0 else p['v'][0] > 0
         on_my_half = x < w // 2 if side == 0 else x + self.BALL > w // 2
         if p['v'][0] != 0 and approaching and on_my_half:
@@ -133,102 +165,127 @@ class Pong(AutoDrum):
             return y + self.BALL // 2 - self.PAD_H // 2 + aim
         return centre
 
-    def _move_paddle(self, key, target, speed):
+    def _move_paddle(self, key, target, speed, dt):
         p = self._pong
-        target = max(p['ft'], min(p['fb'] - self.PAD_H, int(round(target))))
-        p[key] += max(-speed, min(speed, target - p[key]))
+        target = max(p['ft'], min(p['fb'] - self.PAD_H, float(target)))
+        max_move = speed * dt
+        delta = max(-max_move, min(max_move, target - p[key]))
+        p[key] += delta
 
-    def _pong_step(self, now):
-        """Advance the match one sequencer step."""
+    def _tick_decay(self, now):
+        if not self._decay_events:
+            return
+        due = [e for e in self._decay_events if e[0] <= now]
+        self._decay_events = [e for e in self._decay_events if e[0] > now]
+        for _, name, density in due:
+            self._scatter_flip(name, density)
+
+    def _scatter_flip(self, name, density):
+        inst = self._instruments[name]
+        r0, r1, c0, c1 = inst['area']
+        if density >= 1.0:
+            self.state[r0:r1, c0:c1] ^= 1
+            return
+        mask = self.rng.random((r1 - r0, c1 - c0)) < density
+        self.state[r0:r1, c0:c1] ^= mask.astype(np.uint8)
+
+    def _hit(self, name, now):
+        inst = self._instruments.get(name)
+        if inst is None:
+            return
+        self._scatter_flip(name, inst['density'])
+        for i, tail_density in enumerate(inst['decay']):
+            self._decay_events.append((now + (i + 1) * 0.05, name, tail_density))
+
+    def _update_match(self, now, dt):
         p = self._pong
+
+        self._tick_decay(now)
+
+        # Age and prune impact effects.
+        p['fx'] = [f for f in p['fx'] if f['until'] > now]
+
         if p['winner'] is not None:
-            # Keep aging the impact effects so the winning point's
-            # shockwave finishes rolling behind the fanfare.
-            for f in p['fx']:
-                f['ttl'] -= 1
-            p['fx'] = [f for f in p['fx'] if f['ttl'] > 0]
-            self._bg_frame = self._compose_pong_bg()
             return
 
-        # Age impact effects.  Every transition they cause lands on the
-        # grid, and expiry cleans up automatically because the
-        # background is recomposed from game state each step.
-        for f in p['fx']:
-            f['ttl'] -= 1
-        p['fx'] = [f for f in p['fx'] if f['ttl'] > 0]
-
-        # Paddles chase their targets at limited speed — quantised to
-        # the grid, so paddle motion clicks in rhythm too.  The human
-        # (right-hand tracking) plays the RIGHT paddle; the left paddle
-        # is always the AI.
-        self._move_paddle('lpad', self._ai_paddle_target(0), self.AI_SPEED)
-        if self._human_active(now) and self._human_target is not None:
-            self._move_paddle('rpad', self._human_target, self.PLAYER_SPEED)
-        else:
-            self._move_paddle('rpad', self._ai_paddle_target(1), self.AI_SPEED)
-
-        if p['serve_wait'] > 0:
-            p['serve_wait'] -= 1
-            p['serve_blink'] += 1
-            if p['serve_wait'] == 0:
-                # Wipe celebration/drum residue in the SAME frame as
-                # the serve burst, so cleanup is absorbed by the launch.
-                mc0, mc1 = self._voice_span
-                self.state[:, mc0:mc1] = 0
+        if p['serve_until'] is not None:
+            # Keep both paddles centered while waiting for the next serve.
+            self._center_paddles()
+            if now >= p['serve_until'] and p['v'][0] == 0.0 and p['v'][1] == 0.0:
+                # Clear celebration/percussion residue in the launch frame.
+                self.state[:, :] = 0
                 self._decay_events = []
-                self._voice_decay = []
-                self._voice_shimmer = None
                 p['celebration'] = None
-                p['ball'] = [self.width // 2 - 1,
-                             (p['ft'] + p['fb'] - self.BALL) // 2]
-                p['v'] = [2 * p['serve_dir'],
-                          int(self.rng.integers(-1, 2))]
+                p['ball'] = [self.width / 2.0 - self.BALL / 2.0,
+                             (p['ft'] + p['fb'] - self.BALL) / 2.0]
+                speed = self.BASE_BALL_SPEED * (1.0 + 0.05 * min(p['rally'], 10))
+                p['v'] = [speed * p['serve_dir'],
+                          float(self.rng.integers(-1, 2)) * speed * 0.5]
                 p['aim_l'], p['aim_r'] = self._new_aim(), self._new_aim()
-                p['fx'].append({'kind': 'serve', 'ttl': 1, 'ttl0': 1})
-            self._bg_frame = self._compose_pong_bg()
+                p['fx'].append({'kind': 'serve', 'start': now, 'until': now + 0.12})
+                p['serve_until'] = None
             return
 
-        # Ball flight
+        self._move_paddle('lpad', self._ai_paddle_target(0), self.AI_SPEED, dt)
+        if self._human_active(now) and self._human_target is not None:
+            controller_active = (
+                self._last_controller_input_time is not None
+                and now - self._last_controller_input_time < self.AI_TAKEOVER_DELAY
+            )
+            speed = self.CONTROLLER_SPEED if controller_active else self.PLAYER_SPEED
+            self._move_paddle('rpad', self._human_target, speed, dt)
+        else:
+            self._move_paddle('rpad', self._ai_paddle_target(1), self.AI_SPEED, dt)
+
+        # Ball flight (continuous).
         x, y = p['ball']
         vx, vy = p['v']
         x_old = x
-        x += vx
-        y += vy
+        y += vy * dt
+        x = x_old + vx * dt
+
         # Walls
         if y < p['ft']:
             y = 2 * p['ft'] - y
             vy = -vy
-            p['fx'].append({'kind': 'wall', 'ttl': 1, 'ttl0': 1,
-                            'x': x, 'top': True})
+            p['fx'].append({'kind': 'wall', 'x': x, 'top': True,
+                            'start': now, 'until': now + 0.08})
         elif y + self.BALL > p['fb']:
             y = 2 * (p['fb'] - self.BALL) - y
             vy = -vy
-            p['fx'].append({'kind': 'wall', 'ttl': 1, 'ttl0': 1,
-                            'x': x, 'top': False})
-        # Left paddle plane (only on the crossing step, never behind it)
+            p['fx'].append({'kind': 'wall', 'x': x, 'top': False,
+                            'start': now, 'until': now + 0.08})
+
+        # Left paddle plane.
         lplane = self.PAD_W
         if vx < 0 and x_old > lplane >= x:
             if y + self.BALL > p['lpad'] and y < p['lpad'] + self.PAD_H:
                 x = lplane
                 vx = -vx
-                vy = self._english(y, p['lpad'])
                 p['rally'] += 1
+                speed = self.BASE_BALL_SPEED * (1.0 + 0.05 * min(p['rally'], 10))
+                vx = speed
+                vy = self._english(y, p['lpad'], speed)
                 p['aim_r'] = self._new_aim()
-                p['fx'].append({'kind': 'pad', 'ttl': 2, 'ttl0': 2,
+                p['fx'].append({'kind': 'pad', 'start': now, 'until': now + 0.18,
                                 'side': 0, 'y': p['lpad'],
                                 'cy': y + self.BALL // 2})
-        # Right paddle plane
+
+        # Right paddle plane.
         rplane = self.width - self.PAD_W
         if vx > 0 and x_old + self.BALL < rplane <= x + self.BALL:
             if y + self.BALL > p['rpad'] and y < p['rpad'] + self.PAD_H:
                 x = rplane - self.BALL
                 vx = -vx
-                vy = self._english(y, p['rpad'])
                 p['rally'] += 1
+                speed = self.BASE_BALL_SPEED * (1.0 + 0.05 * min(p['rally'], 10))
+                vx = -speed
+                vy = self._english(y, p['rpad'], speed)
                 p['aim_l'] = self._new_aim()
-                p['fx'].append({'kind': 'pad', 'ttl': 2, 'ttl0': 2,
+                p['fx'].append({'kind': 'pad', 'start': now, 'until': now + 0.18,
                                 'side': 1, 'y': p['rpad'],
                                 'cy': y + self.BALL // 2})
+
         # Goals
         if x + self.BALL <= 0:
             self._point(1, now, 0, y + self.BALL // 2)
@@ -238,12 +295,11 @@ class Pong(AutoDrum):
             p['ball'] = [x, y]
             p['v'] = [vx, vy]
 
-        self._bg_frame = self._compose_pong_bg()
-
-    def _english(self, ball_y, pad_y):
+    def _english(self, ball_y, pad_y, speed):
         """Bounce angle from where the ball met the paddle."""
-        rel = (ball_y + self.BALL / 2) - (pad_y + self.PAD_H / 2)
-        return max(-2, min(2, int(round(rel / (self.PAD_H / 2) * 2))))
+        rel = (ball_y + self.BALL / 2.0) - (pad_y + self.PAD_H / 2.0)
+        rel_norm = max(-1.0, min(1.0, rel / max(1.0, self.PAD_H / 2.0)))
+        return rel_norm * speed
 
     def _new_aim(self):
         """AI aiming error: small enough to rally, big enough to lose."""
@@ -254,18 +310,20 @@ class Pong(AutoDrum):
         p = self._pong
         p['score'][side] += 1
         p['rally'] = 0
-        p['fx'].append({'kind': 'burst', 'ttl': 8, 'ttl0': 8,
+        p['fx'].append({'kind': 'burst', 'start': now, 'until': now + 0.95,
                         'cx': exit_x, 'cy': exit_y})
         self._start_celebration('point', side, now, exit_x, exit_y)
         if p['score'][side] >= self.WIN_SCORE:
             self._trigger_win(side, now)
             return
-        p['serve_wait'] = 12
-        p['serve_blink'] = 0
+
         # Serve toward the player who just lost the point
         p['serve_dir'] = -1 if side == 1 else 1
-        p['ball'] = [self.width // 2 - 1, (p['ft'] + p['fb'] - self.BALL) // 2]
-        p['v'] = [0, 0]
+        self._center_paddles()
+        p['ball'] = [self.width / 2.0 - self.BALL / 2.0,
+                     (p['ft'] + p['fb'] - self.BALL) / 2.0]
+        p['v'] = [0.0, 0.0]
+        p['serve_until'] = now + self.POINT_SERVE_DELAY
 
     def _trigger_win(self, side, now):
         p = self._pong
@@ -278,11 +336,9 @@ class Pong(AutoDrum):
         self._start_celebration('win', side, now, exit_x, exit_y)
 
     def _restart_match(self):
-        self._celebration_hits = []
         self._left_raise_armed = False
-        # _load_song resets the sequencer and, via the 'bg' hook,
-        # rebuilds the whole match state.
-        self._load_song(0)
+        self.song_start_time = time.time()
+        self._reset_match(self.song_start_time)
 
     def _start_celebration(self, kind, side, now, exit_x, exit_y):
         duration = (self.WIN_FANFARE_TIME if kind == 'win'
@@ -402,50 +458,60 @@ class Pong(AutoDrum):
     # Rendering
     # ------------------------------------------------------------------
 
-    def _compose_pong_bg(self):
+    def _compose_pong_bg(self, now):
         h, w = self.height, self.width
         p = self._pong
         bg = np.zeros((h, w), dtype=np.uint8)
+
+        lpad = int(round(p['lpad']))
+        rpad = int(round(p['rpad']))
+
         # Paddles
-        bg[p['lpad']:p['lpad'] + self.PAD_H, 0:self.PAD_W] = 1
-        bg[p['rpad']:p['rpad'] + self.PAD_H, w - self.PAD_W:w] = 1
-        # Ball (blinks at centre during the serve count-in)
-        draw_ball = (p['serve_wait'] == 0 or p['serve_blink'] % 4 < 2)
+        bg[lpad:lpad + self.PAD_H, 0:self.PAD_W] = 1
+        bg[rpad:rpad + self.PAD_H, w - self.PAD_W:w] = 1
+
+        # Ball blinks at centre during serve count-in.
+        draw_ball = True
+        if p['serve_until'] is not None and now < p['serve_until']:
+            draw_ball = int(now * 8.0) % 2 == 0
         if p['winner'] is None and draw_ball:
             x, y = p['ball']
-            bg[max(0, y):y + self.BALL, max(0, x):max(0, x + self.BALL)] = 1
-        # Impact effects, drawn where they happened
+            xi = int(round(x))
+            yi = int(round(y))
+            bg[max(0, yi):yi + self.BALL, max(0, xi):max(0, xi + self.BALL)] = 1
+
+        # Impact effects, drawn where they happened.
         for f in p['fx']:
             if f['kind'] == 'pad':
                 face = self.PAD_W if f['side'] == 0 else w - self.PAD_W - 1
                 direction = 1 if f['side'] == 0 else -1
-                if f['ttl'] == f['ttl0']:          # first step: face flash
-                    r0 = max(p['ft'], f['y'] - 2)
-                    r1 = min(p['fb'], f['y'] + self.PAD_H + 2)
+                elapsed = now - f['start']
+                if elapsed < 0.08:
+                    r0 = max(p['ft'], int(round(f['y'])) - 2)
+                    r1 = min(p['fb'], int(round(f['y'])) + self.PAD_H + 2)
                     c0 = face if direction == 1 else face - 1
                     bg[r0:r1, max(0, c0):c0 + 2] = 1
-                else:                              # second step: ripple
+                else:
                     rad = 5
                     for dr in range(-rad, rad + 1):
                         dc = int(round((rad * rad - dr * dr) ** 0.5))
-                        rr = f['cy'] + dr
+                        rr = int(round(f['cy'])) + dr
                         for cc in (face + direction * dc,
                                    face + direction * max(0, dc - 1)):
                             if p['ft'] <= rr < p['fb'] and 0 <= cc < w:
                                 bg[rr, cc] = 1
             elif f['kind'] == 'wall':
-                c0 = max(0, f['x'] - 4)
+                c0 = max(0, int(round(f['x'])) - 4)
                 if f['top']:
                     bg[p['ft']:p['ft'] + 2, c0:c0 + 10] = 1
                 else:
                     bg[p['fb'] - 2:p['fb'], c0:c0 + 10] = 1
             elif f['kind'] == 'burst':
-                # Double shockwave from the goal mouth: a leading and a
-                # trailing wavefront, rolling clear across the panel
-                age = f['ttl0'] - f['ttl']
+                # Double shockwave from the goal mouth.
+                progress = max(0.0, min(1.0, (now - f['start']) / (f['until'] - f['start'])))
                 yy, xx = np.ogrid[:h, :w]
                 d2 = (yy - f['cy']) ** 2 + (xx - f['cx']) ** 2
-                lead = age * 4 + 4
+                lead = 4 + int(progress * (w + h))
                 for rad in (lead, lead - 9):
                     if rad > 2:
                         bg[(d2 >= (rad - 1) ** 2)
@@ -453,6 +519,7 @@ class Pong(AutoDrum):
             elif f['kind'] == 'serve':
                 mr = (p['ft'] + p['fb']) // 2
                 bg[mr - 3:mr + 3, w // 2 - 3:w // 2 + 3] = 1
+
         # Score digits at the top (drawn last, over the ball — classic)
         score_str = self._score_text(p['score'])
         text.write_centered(bg, score_str, y=1, size=5, style="regular")
@@ -470,9 +537,10 @@ class Pong(AutoDrum):
                 self._restart_match()
             elif not left_raised:
                 self._left_raise_armed = True
-            if p['win_time'] is not None and now - p['win_time'] >= 8.0:
+            if p['win_time'] is not None and now - p['win_time'] >= self.WIN_RESTART_TIME:
                 self._restart_match()
             return
+
         person_present = (
             pose_results is not None
             and getattr(pose_results, 'pose_landmarks', None) is not None
@@ -480,22 +548,21 @@ class Pong(AutoDrum):
         if not person_present:
             return
         self._last_person_time = now
-        finger_x, finger_y = human_pose.get_right_index_finger_position(
-            pose_results)
+        _, finger_y = human_pose.get_right_index_finger_position(pose_results)
         if finger_y is not None:
-            # Finger height → paddle CENTRE; buffered, applied on the grid
+            # Finger height -> paddle center target.
             self._human_target = (finger_y * (p['fb'] - p['ft'])
                                   + p['ft'] - self.PAD_H / 2)
 
     def get_frame(self, pose_results):
         now = time.time()
+        dt = min(self.MAX_DT, max(0.0, now - self._last_frame_time))
+        self._last_frame_time = now
+
         p = self._pong
-        song = self.SONGS[self.song_index]
-        step_interval = 60.0 / song['bpm'] / song['subdivisions']
-        # Rallies accelerate the tick — and therefore the ball
-        step_interval /= (1 + 0.05 * min(p['rally'], 10))
 
         self._handle_gestures(pose_results, now)
+        self._update_match(now, dt)
 
         due = [e for e in self._celebration_hits if e[0] <= now]
         self._celebration_hits = [e for e in self._celebration_hits
@@ -503,23 +570,17 @@ class Pong(AutoDrum):
         for _, instrument_name in due:
             self._hit(instrument_name, now)
 
-        self._tick_voice(now)
-        # The sequencer keeps ticking after a win too: the pattern is
-        # empty, but bg_step still ages the final shockwave.
-        self._advance_sequencer(now, step_interval)
-
         frame = self.state.copy()
-        if self._bg_frame is not None:
-            frame ^= self._bg_frame
+        frame ^= self._compose_pong_bg(now)
 
         celebration_frame = self._render_celebration(now)
         if celebration_frame is not None:
             frame = celebration_frame
 
         # Mode name overlay for the first 2 s
-        if celebration_frame is None and now - self.song_start_time < 2.0:
+        if celebration_frame is None and now - self.song_start_time < self.MODE_NAME_TIME:
             frame[:6, :] = 0
-            text.write(frame, song['name'], x=1, y=0, size=5, style="regular")
+            text.write(frame, 'PONG', x=1, y=0, size=5, style="regular")
 
         # Win screen: fanfare plays over the final court for a moment,
         # then the static result
@@ -531,3 +592,14 @@ class Pong(AutoDrum):
             text.write_centered(frame, score_str, y=15, size=6, style="regular")
 
         return frame
+
+    def set_controller_target(self, norm_y):
+        p = self._pong
+        normalized = max(0.0, min(1.0, float(norm_y)))
+        playable_span = p['fb'] - p['ft']
+        self._human_target = (normalized * playable_span) + p['ft'] - self.PAD_H / 2
+        self._last_controller_input_time = time.time()
+
+    def restart_if_game_over(self):
+        if self._pong.get('winner') is not None:
+            self._restart_match()

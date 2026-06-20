@@ -36,7 +36,7 @@ class MenuItem:
         hover_bottom = self.y + 6
         return hover_top <= y < hover_bottom
 
-    def hover(self, hovering):
+    def hover(self, hovering, source=None):
         if hovering and not self.hovered:
             self.hover_start_time = time.time()
         elif not hovering:
@@ -44,14 +44,17 @@ class MenuItem:
         else:
             hover_duration = self.get_hover_duration()
             if hover_duration >= MenuItem.CLICK_TIME and self.on_click:
-                self.click()
+                self.click(source)
                 self.hover_start_time = None
 
         self.hovered = hovering
 
-    def click(self):
+    def click(self, source=None):
         if self.on_click:
-            self.on_click()
+            try:
+                self.on_click(source)
+            except TypeError:
+                self.on_click()
     
     def get_hover_duration(self):
         if self.hover_start_time:
@@ -96,8 +99,8 @@ class Checkbox(MenuItem):
         if self.hovered and self.hover_start_time:
             frame[self.y+2, 2] = int(time.time()*2) % 2
     
-    def hover(self, hovering):
-        super().hover(hovering)
+    def hover(self, hovering, source=None):
+        super().hover(hovering, source=source)
 
     def click(self):
         self.checked = not self.checked
@@ -121,6 +124,7 @@ class Menu:
     SWIPE_RELEASE_STILL_DX = 1
     SWIPE_RELEASE_STILL_DY = 1
     INDICATOR_HOVER_HYSTERESIS_PX = 2
+    CONTROLLER_SUPPRESS_SEC = 0.7
 
     def __init__(self, width, height, mode_manager):
         self.width = width
@@ -136,43 +140,100 @@ class Menu:
         self._still_frames = 0
         self._indicator_hover_page = None
         self._indicator_hover_start = None
+        self._selected_row = 0
+        self._controller_navigation_until = 0.0
         self.pages = [
             [
-                Button("CLOCK", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_CLOCK)),
-                Button("WRLDCUP", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_WORLDCUP)),
+                Button("CLOCK", 0, width, on_click=self._make_mode_setter(ModeManager.MODE_CLOCK)),
+                Button("WRLDCUP", 1, width, on_click=self._make_mode_setter(ModeManager.MODE_WORLDCUP)),
                 Checkbox("POSE", 2, width, checked=mode_manager.pose_enabled, on_click=mode_manager.toggle_pose_enabled),
             ],
             [
-                Button("DRUM", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_PERCUSSION)),
-                Button("BEATS", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_AUTODRUM)),
-                Button("MIRROR", 2, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_BEATMIRROR)),
+                Button("DRUM", 0, width, on_click=self._make_mode_setter(ModeManager.MODE_PERCUSSION)),
+                Button("BEATS", 1, width, on_click=self._make_mode_setter(ModeManager.MODE_AUTODRUM)),
+                Button("MIRROR", 2, width, on_click=self._make_mode_setter(ModeManager.MODE_BEATMIRROR)),
             ],
             [
-                Button("TETRIS", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_TETRIS)),
-                Button("PONG", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_PONG)),
-                Button("PAINT", 2, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_PAINT)),
+                Button("TETRIS", 0, width, on_click=self._make_mode_setter(ModeManager.MODE_TETRIS)),
+                Button("PONG", 1, width, on_click=self._make_mode_setter(ModeManager.MODE_PONG)),
+                Button("PAINT", 2, width, on_click=self._make_mode_setter(ModeManager.MODE_PAINT)),
             ],
             [
-                Button("BOARD", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_BOARD)),
-                Button("PAINT", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_PAINT)),
-                Button("CLOCK", 2, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_CLOCK)),
+                Button("BOARD", 0, width, on_click=self._make_mode_setter(ModeManager.MODE_BOARD)),
+                Button("PAINT", 1, width, on_click=self._make_mode_setter(ModeManager.MODE_PAINT)),
+                Button("CLOCK", 2, width, on_click=self._make_mode_setter(ModeManager.MODE_CLOCK)),
             ],
             [
-                Button("FONTS", 0, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_FONT_PREVIEW)),
-                Button("CLOCK", 1, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_CLOCK)),
-                Button("MENU", 2, width, on_click=lambda: mode_manager.set_mode(ModeManager.MODE_MENU)),
+                Button("FONTS", 0, width, on_click=self._make_mode_setter(ModeManager.MODE_FONT_PREVIEW)),
+                Button("CLOCK", 1, width, on_click=self._make_mode_setter(ModeManager.MODE_CLOCK)),
+                Button("MENU", 2, width, on_click=self._make_mode_setter(ModeManager.MODE_MENU)),
             ],
         ]
+
+    def _source_to_entered_via(self, source):
+        if source == "controller":
+            return ModeManager.CONTROL_CONTROLLER
+        if source == "pose":
+            return ModeManager.CONTROL_GESTURE
+        return None
+
+    def _make_mode_setter(self, mode):
+        def _set_mode(source=None):
+            entered_via = self._source_to_entered_via(source)
+            try:
+                self.mode_manager.set_mode(mode, entered_via=entered_via)
+            except TypeError:
+                self.mode_manager.set_mode(mode)
+
+        return _set_mode
 
     @property
     def items(self):
         return self.pages[self.page]
 
+    def _clamp_selected_row(self):
+        if not self.items:
+            self._selected_row = 0
+            return
+        self._selected_row = max(0, min(self._selected_row, len(self.items) - 1))
+
+    def select_next_item(self):
+        if not self.items:
+            return
+        self._selected_row = (self._selected_row + 1) % len(self.items)
+
+    def select_prev_item(self):
+        if not self.items:
+            return
+        self._selected_row = (self._selected_row - 1) % len(self.items)
+
+    def activate_selected(self, source="controller"):
+        if not self.items:
+            return
+        self._clamp_selected_row()
+        self.items[self._selected_row].click(source)
+
+    def set_page_next(self):
+        self.next_page()
+
+    def set_page_prev(self):
+        self.prev_page()
+
+    def mark_controller_navigation_active(self, now=None):
+        if now is None:
+            now = time.time()
+        self._controller_navigation_until = max(
+            self._controller_navigation_until,
+            float(now) + self.CONTROLLER_SUPPRESS_SEC,
+        )
+
     def next_page(self):
         self.page = (self.page + 1) % len(self.pages)
+        self._clamp_selected_row()
 
     def prev_page(self):
         self.page = (self.page - 1) % len(self.pages)
+        self._clamp_selected_row()
 
     def _reset_swipe_state(self):
         self._swipe_origin = None
@@ -417,22 +478,32 @@ class Menu:
         frame = np.zeros((self.height, self.width), dtype=np.uint8)
 
         now = time.time()
+        controller_navigation_active = now < self._controller_navigation_until
+        get_allowed_sources = getattr(self.mode_manager, "get_allowed_input_sources", None)
+        allowed_sources = (
+            get_allowed_sources(include_web=True)
+            if callable(get_allowed_sources)
+            else {"pose", "controller", "web"}
+        )
+        allow_pose_fallback = "pose" in allowed_sources
         pointer_source = "pose"
 
         panel_x = None
         panel_y = None
-        active_pointer = input_hub.get_active_pointer(max_age_sec=0.8) if input_hub is not None else None
+        active_pointer = None
+        if (input_hub is not None) and (not controller_navigation_active):
+            active_pointer = input_hub.get_active_pointer(max_age_sec=0.8, allowed_sources=allowed_sources)
 
         if active_pointer is not None:
             pointer_source = active_pointer.source
             panel_x, panel_y = self._pointer_to_panel(active_pointer.source, active_pointer.x, active_pointer.y)
-        else:
+        elif allow_pose_fallback:
             finger_x, finger_y = human_pose.get_right_index_finger_position(pose_results)
             if finger_x is not None and finger_y is not None:
                 panel_x, panel_y = self._pointer_to_panel("pose", finger_x, finger_y)
 
-        if input_hub is not None:
-            for click in input_hub.pop_clicks(max_age_sec=1.2):
+        if (input_hub is not None) and (not controller_navigation_active):
+            for click in input_hub.pop_clicks(max_age_sec=1.2, allowed_sources=allowed_sources):
                 click_x, click_y = self._pointer_to_panel(click.source, click.x, click.y)
                 clicked_indicator_page = self._get_indicator_page(click_x, click_y)
                 if clicked_indicator_page is not None:
@@ -444,31 +515,49 @@ class Menu:
 
                 for item in self.items:
                     if item.is_hovered(click_y):
-                        item.click()
+                        item.click(click.source)
                         break
 
-        hovered_indicator_page = self._get_indicator_page(panel_x, panel_y)
-        in_indicator_area = hovered_indicator_page is not None
-        if hovered_indicator_page is None:
-            self._update_swipe(panel_x, panel_y, now)
-        else:
-            # While using the indicator, suppress swipe detection entirely.
+        if controller_navigation_active:
+            hovered_indicator_page = None
+            in_indicator_area = False
             self._reset_swipe_state()
+            self._indicator_hover_page = None
+            self._indicator_hover_start = None
+            for item in self.items:
+                item.hover(False)
+        else:
+            hovered_indicator_page = self._get_indicator_page(panel_x, panel_y)
+            in_indicator_area = hovered_indicator_page is not None
+            if hovered_indicator_page is None:
+                self._update_swipe(panel_x, panel_y, now)
+            else:
+                # While using the indicator, suppress swipe detection entirely.
+                self._reset_swipe_state()
 
-        self._update_indicator_hover(panel_x, panel_y, now, hovered_page=hovered_indicator_page)
+            self._update_indicator_hover(panel_x, panel_y, now, hovered_page=hovered_indicator_page)
 
         for item in self.items:
             if in_indicator_area:
-                item.hover(False)
+                item.hover(False, source=pointer_source)
             elif panel_y is not None:
-                item.hover(item.is_hovered(panel_y))
+                item.hover(item.is_hovered(panel_y), source=pointer_source)
             else:
-                item.hover(False)
+                item.hover(False, source=pointer_source)
 
             item.draw(frame)
 
+        if self.items:
+            self._clamp_selected_row()
+            selected = self.items[self._selected_row]
+            hover_top = max(0, selected.y - 1)
+            hover_bottom = min(frame.shape[0], selected.y + 6)
+            frame[hover_top:hover_bottom, 0:1] = 1
+
         self._draw_page_indicator(frame)
-        if pointer_source == "pose":
+        if controller_navigation_active:
+            return frame
+        if pointer_source == "pose" and allow_pose_fallback:
             frame = human_pose.draw_right_index_pointer(frame, pose_results)
         else:
             pointer_x = (panel_x / self.width) if panel_x is not None else None

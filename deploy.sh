@@ -55,6 +55,11 @@ if ! sudo cmp -s "${REMOTE_DIR}/ops/systemd/flipdot.service" /etc/systemd/system
   daemon_reload_needed=true
 fi
 
+if ! sudo cmp -s "${REMOTE_DIR}/ops/systemd/flipdot-bluetooth-ertm.service" /etc/systemd/system/flipdot-bluetooth-ertm.service; then
+  sudo install -m 644 "${REMOTE_DIR}/ops/systemd/flipdot-bluetooth-ertm.service" /etc/systemd/system/flipdot-bluetooth-ertm.service
+  daemon_reload_needed=true
+fi
+
 if ! sudo cmp -s "${REMOTE_DIR}/ops/logrotate/flipdot" /etc/logrotate.d/flipdot; then
   sudo install -m 644 "${REMOTE_DIR}/ops/logrotate/flipdot" /etc/logrotate.d/flipdot
 fi
@@ -63,6 +68,9 @@ if [[ "${daemon_reload_needed}" == "true" ]]; then
   sudo systemctl daemon-reload
 fi
 
+# Disable Bluetooth ERTM to prevent multi-second input freezes with the Xbox
+# Wireless controller. Enable (persists across reboots) and start (applies now).
+sudo systemctl enable --now flipdot-bluetooth-ertm.service
 sudo systemctl restart flipdot.service
 sudo systemctl --no-pager --full status flipdot.service | sed -n '1,20p'
 EOF

@@ -56,7 +56,7 @@ class Tetris(AutoDrum):
     AI's fixed input cadence, so even the attract mode dies in the end.
     """
 
-    AI_TAKEOVER_DELAY = 5.0    # seconds of absence before AI takes over
+    AI_TAKEOVER_DELAY = 15.0   # seconds of absence before AI takes over
     AI_HARD_DROP_DELAY = 0.9   # min visible time before AI may hard drop
     AI_HARD_DROP_MIN_ROW = 3   # avoid instant top-of-board hard drops
 
@@ -79,9 +79,19 @@ class Tetris(AutoDrum):
         self._last_move_time = 0.0      # timestamp of last horizontal step
         self._pending = {
             'move': 0,
-            'rotate': False,
+            'rotate': 0,
             'hard_drop': False,
         }  # buffered per-step intent
+        self._last_controller_input_time = None
+
+    def _mark_controller_input(self, now=None):
+        self._last_controller_input_time = time.time() if now is None else float(now)
+
+    def _controller_input_active(self, now):
+        return (
+            self._last_controller_input_time is not None
+            and now - self._last_controller_input_time < self.AI_TAKEOVER_DELAY
+        )
 
     def _resolve_best_file(self):
         override = os.getenv(self._BEST_FILE_ENV)
@@ -179,7 +189,7 @@ class Tetris(AutoDrum):
         self._ai_played_this_game = False
         self._ai_target = None          # (target_col, target_rot_idx)
         self._ai_piece_id = None        # piece_seq when _ai_target was computed
-        self._last_person_time = None   # timestamp of last detected person
+        self._last_person_time = time.time()   # startup grace before AI takeover
         self._ai_rotate_cooldown = 0.0  # timestamp of last AI-requested rotation
         self._player_spawn(time.time())
 
@@ -238,19 +248,22 @@ class Tetris(AutoDrum):
         }
         self._player['piece'] = piece
         # A fresh piece must not inherit input buffered for the old one.
-        self._pending = {'move': 0, 'rotate': False, 'hard_drop': False}
+        self._pending = {'move': 0, 'rotate': 0, 'hard_drop': False}
         # Game over when spawn position is already blocked
         if not self._player_tet_fits(cells, row, col):
             self._trigger_game_over(now)
             self._player['piece'] = None
 
-    def _player_rotate(self):
-        """Try the next rotation with wall-kick ±1, ±2."""
+    def _player_rotate(self, direction=1):
+        """Try rotation with wall-kick ±1, ±2. direction=1 clockwise, -1 counter-clockwise."""
         p = self._player['piece']
         if p is None:
             return
         all_rots = p['all_rots']
-        next_idx = (p['rot_idx'] + 1) % len(all_rots)
+        if direction >= 0:
+            next_idx = (p['rot_idx'] + 1) % len(all_rots)
+        else:
+            next_idx = (p['rot_idx'] - 1) % len(all_rots)
         next_cells = all_rots[next_idx]
         for kick in (0, -1, 1, -2, 2):
             new_col = p['col'] + kick
@@ -299,7 +312,7 @@ class Tetris(AutoDrum):
         """Start a fresh game AND the song from the top of the theme."""
         self._jingle_events = []
         self._left_raise_armed = False
-        self._pending = {'move': 0, 'rotate': False, 'hard_drop': False}
+        self._pending = {'move': 0, 'rotate': 0, 'hard_drop': False}
         # _load_song resets the sequencer to bar 1, silences the melody
         # column, and — via the 'bg' hook — rebuilds the board
         # (_init_player_state + first spawn).  self._best survives.
@@ -320,9 +333,10 @@ class Tetris(AutoDrum):
         # grace notes even on off-beats, keeping them in sync with the grid.
         if not self._player['game_over'] and not self._player['flash']:
             changed = False
-            if self._pending['rotate']:
-                self._player_rotate()   # _player_rotate also updates _bg_frame
-                self._pending['rotate'] = False
+            rotate_direction = int(self._pending['rotate'])
+            if rotate_direction != 0:
+                self._player_rotate(direction=rotate_direction)
+                self._pending['rotate'] = 0
                 changed = True
             if self._pending['move']:
                 p = self._player['piece']
@@ -561,7 +575,7 @@ class Tetris(AutoDrum):
         # entered the visible board (row >= 0) so the rotation is observable.
         if (p['rot_idx'] != target_rot and p['row'] >= 0
                 and now - self._ai_rotate_cooldown >= 0.15):
-            self._pending['rotate'] = True
+            self._pending['rotate'] = 1
             self._ai_rotate_cooldown = now
         # Steer toward target column in parallel — don't wait for rotation.
         if p['col'] != target_col and now - self._last_move_time >= 0.15:
@@ -604,9 +618,18 @@ class Tetris(AutoDrum):
             self._last_person_time = now
             self._pending['hard_drop'] = False
         else:
+            last_manual_input_time = self._last_person_time
+            if (
+                self._last_controller_input_time is not None
+                and (
+                    last_manual_input_time is None
+                    or self._last_controller_input_time > last_manual_input_time
+                )
+            ):
+                last_manual_input_time = self._last_controller_input_time
             delay_expired = (
-                self._last_person_time is None
-                or now - self._last_person_time >= self.AI_TAKEOVER_DELAY
+                last_manual_input_time is None
+                or now - last_manual_input_time >= self.AI_TAKEOVER_DELAY
             )
             if delay_expired:
                 self._ai_played_this_game = True
@@ -616,7 +639,7 @@ class Tetris(AutoDrum):
         # ---- Rotate: buffer intent, execute on next step ----
         left_raised = human_pose.is_left_hand_raised(pose_results)
         if left_raised and self._left_raise_armed:
-            self._pending['rotate'] = True
+            self._pending['rotate'] = 1
             self._left_raise_armed = False
         elif not left_raised:
             self._left_raise_armed = True
@@ -738,3 +761,21 @@ class Tetris(AutoDrum):
                 text.write_centered(frame, hi_str, y=23, size=5, style="regular")
 
         return frame
+
+    def queue_controller_move(self, dx):
+        if int(dx) == 0:
+            return
+        self._mark_controller_input()
+        self._pending['move'] = -1 if int(dx) < 0 else 1
+
+    def queue_controller_rotate_ccw(self):
+        self._mark_controller_input()
+        self._pending['rotate'] = -1
+
+    def queue_controller_rotate_cw(self):
+        self._mark_controller_input()
+        self._pending['rotate'] = 1
+
+    def queue_controller_hard_drop(self):
+        self._mark_controller_input()
+        self._pending['hard_drop'] = True

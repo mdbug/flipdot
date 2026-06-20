@@ -28,6 +28,7 @@ class DummyModeManager:
         self.pose_enabled = True
         self.modes = []
         self.toggle_count = 0
+        self.allowed_sources = {"pose", "controller", "web"}
 
     def set_mode(self, mode):
         self.modes.append(mode)
@@ -36,19 +37,30 @@ class DummyModeManager:
         self.pose_enabled = not self.pose_enabled
         self.toggle_count += 1
 
+    def get_allowed_input_sources(self, include_web=True):
+        if include_web:
+            return set(self.allowed_sources)
+        return {source for source in self.allowed_sources if source != "web"}
+
 
 class DummyInputHub:
     def __init__(self, pointer=None, clicks=None):
         self._pointer = pointer
         self._clicks = list(clicks or [])
 
-    def get_active_pointer(self, max_age_sec=0.8):
+    def get_active_pointer(self, max_age_sec=0.8, allowed_sources=None):
+        if self._pointer is None:
+            return None
+        if allowed_sources is not None and self._pointer.source not in allowed_sources:
+            return None
         return self._pointer
 
-    def pop_clicks(self, max_age_sec=1.2):
+    def pop_clicks(self, max_age_sec=1.2, allowed_sources=None):
         clicks = self._clicks
         self._clicks = []
-        return clicks
+        if allowed_sources is None:
+            return clicks
+        return [click for click in clicks if click.source in allowed_sources]
 
 
 def test_menuitem_hover_triggers_click_after_dwell(monkeypatch):
@@ -155,3 +167,41 @@ def test_fonts_button_is_on_new_page(monkeypatch):
     assert len(menu.pages) >= 5
     labels = [item.label for item in menu.pages[4]]
     assert "FONTS" in labels
+
+
+def test_controller_navigation_suppresses_pointer_dwell(monkeypatch):
+    menu_module = _load_menu_module(monkeypatch)
+    now = {"value": 10.0}
+    monkeypatch.setattr(menu_module.time, "time", lambda: now["value"])
+
+    manager = DummyModeManager()
+    menu = menu_module.Menu(width=28, height=28, mode_manager=manager)
+
+    # Point at row 0 (CLOCK) and keep pointer steady long enough that normal
+    # dwell behavior would click it.
+    pointer = types.SimpleNamespace(source="web", x=0.10, y=0.05)
+    hub = DummyInputHub(pointer=pointer, clicks=[])
+
+    menu.mark_controller_navigation_active(now=now["value"])
+    menu.get_frame(pose_results=None, input_hub=hub)
+
+    now["value"] = now["value"] + 2.1
+    menu.get_frame(pose_results=None, input_hub=hub)
+
+    # No delayed click should occur while controller navigation suppression is active.
+    assert manager.modes == []
+
+
+def test_menu_ignores_controller_click_when_gesture_is_active_source(monkeypatch):
+    menu_module = _load_menu_module(monkeypatch)
+    monkeypatch.setattr(menu_module.time, "time", lambda: 1.0)
+
+    manager = DummyModeManager()
+    manager.allowed_sources = {"pose", "web"}
+    menu = menu_module.Menu(width=28, height=28, mode_manager=manager)
+    click = types.SimpleNamespace(source="controller", x=0.10, y=0.05)
+    hub = DummyInputHub(pointer=None, clicks=[click])
+
+    menu.get_frame(pose_results=None, input_hub=hub)
+
+    assert manager.modes == []

@@ -5,6 +5,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 class ModeManager:
+    CONTROL_GESTURE = 'gesture'
+    CONTROL_CONTROLLER = 'controller'
+
     MODE_SLEEP = 'sleep'
     MODE_CLOCK = 'clock'
     MODE_POSE = 'pose'
@@ -44,11 +47,17 @@ class ModeManager:
         self.mode_update_time = time.time()
         self.menu_click_start = None
         self.pose_enabled = True
+        self.control_source = self.CONTROL_GESTURE
+        self.controller_connected = False
 
-    def set_mode(self, mode):
+    def set_mode(self, mode, entered_via=None):
         requested_mode = mode
         if mode == self.MODE_POSE and not self.pose_enabled:
             mode = self.MODE_CLOCK
+
+        normalized_source = self.normalize_control_source(entered_via)
+        if normalized_source is not None:
+            self.control_source = normalized_source
 
         if mode != self.mode:
             previous_mode = self.mode
@@ -59,24 +68,24 @@ class ModeManager:
         self.mode = mode
         self.mode_update_time = time.time()
 
-    def click_menu(self):
+    def click_menu(self, entered_via=None):
         if self.menu_click_start is None:
             self.menu_click_start = time.time()
         elif time.time() - self.menu_click_start > 2:
             if self.mode != self.MODE_MENU:
-                self.set_mode(self.MODE_MENU)
+                self.set_mode(self.MODE_MENU, entered_via=entered_via)
             else:
                 previous_mode = self.last_mode if self.last_mode not in (None, self.MODE_MENU) else self.MODE_POSE
-                self.set_mode(previous_mode)
+                self.set_mode(previous_mode, entered_via=entered_via)
             self.menu_click_start = None
 
-    def toggle_menu(self):
+    def toggle_menu(self, entered_via=None):
         if self.mode != self.MODE_MENU:
-            self.set_mode(self.MODE_MENU)
+            self.set_mode(self.MODE_MENU, entered_via=entered_via)
             return
 
         previous_mode = self.last_mode if self.last_mode not in (None, self.MODE_MENU) else self.MODE_POSE
-        self.set_mode(previous_mode)
+        self.set_mode(previous_mode, entered_via=entered_via)
         self.menu_click_start = None
 
     def reset_menu_click(self):
@@ -97,3 +106,32 @@ class ModeManager:
     def toggle_pose_enabled(self):
         self.pose_enabled = not self.pose_enabled
         logger.info("Pose mode enabled=%s", self.pose_enabled)
+
+    @classmethod
+    def normalize_control_source(cls, source):
+        if source in (cls.CONTROL_GESTURE, 'pose'):
+            return cls.CONTROL_GESTURE
+        if source == cls.CONTROL_CONTROLLER:
+            return cls.CONTROL_CONTROLLER
+        return None
+
+    def update_controller_connected(self, connected):
+        connected = bool(connected)
+        was_connected = self.controller_connected
+        self.controller_connected = connected
+        if connected and not was_connected:
+            self.control_source = self.CONTROL_CONTROLLER
+            return True
+        return False
+
+    def get_effective_control_source(self):
+        if not self.controller_connected:
+            return self.CONTROL_GESTURE
+        return self.control_source
+
+    def get_allowed_input_sources(self, *, include_web=True):
+        effective = self.get_effective_control_source()
+        allowed = {'pose'} if effective == self.CONTROL_GESTURE else {'controller'}
+        if include_web:
+            allowed.add('web')
+        return allowed
