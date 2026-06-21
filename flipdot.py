@@ -184,11 +184,41 @@ def main():
 
     def get_controller_statuses() -> list[dict]:
         # Keep primary first so existing consumers can treat index 0 as the
-        # current gameplay controller while secondary status is visible in UI.
+        # first status while the gameplay bridge accepts either controller.
         return [
             primary_controller_hub.get_status_snapshot(),
             secondary_controller_hub.get_status_snapshot(),
         ]
+
+    def merge_controller_snapshots(snapshots: list[dict]) -> dict:
+        connected_snapshots = [
+            snapshot
+            for snapshot in snapshots
+            if bool(snapshot.get("enabled")) and bool(snapshot.get("connected"))
+        ]
+        primary_snapshot = snapshots[0] if snapshots else {}
+        source_snapshot = connected_snapshots[0] if connected_snapshots else primary_snapshot
+
+        pressed_buttons = set()
+        last_event_monotonic = None
+        for snapshot in connected_snapshots:
+            pressed_buttons.update(str(button) for button in snapshot.get("pressed_buttons", []))
+            event_time = snapshot.get("last_event_monotonic")
+            if isinstance(event_time, (int, float)) and (
+                last_event_monotonic is None or event_time > last_event_monotonic
+            ):
+                last_event_monotonic = event_time
+
+        return {
+            "enabled": any(bool(snapshot.get("enabled")) for snapshot in snapshots),
+            "connected": bool(connected_snapshots),
+            "address": str(source_snapshot.get("address", "") or ""),
+            "device_name": str(source_snapshot.get("device_name", "") or ""),
+            "pressed_buttons": sorted(pressed_buttons),
+            "last_event_monotonic": last_event_monotonic,
+            "battery_percentage": source_snapshot.get("battery_percentage"),
+            "battery_updated_monotonic": source_snapshot.get("battery_updated_monotonic"),
+        }
 
     try:
         while True:
@@ -202,26 +232,15 @@ def main():
 
             t_process_start = time.time()
 
-            controller_snapshot = primary_controller_hub.get_status_snapshot()
+            controller_snapshots = get_controller_statuses()
+            controller_snapshot = merge_controller_snapshots(controller_snapshots)
             controller_active = bool(controller_snapshot.get("enabled")) and bool(controller_snapshot.get("connected"))
             mode_manager.update_controller_connected(controller_active)
 
-            # Skip the expensive per-frame pose inference when the controller is
-            # driving a UI mode that does not render pose. This keeps the loop
-            # fast and steady so controller input stays responsive (no MediaPipe
-            # stall between input samples).
-            controller_driving_ui = (
-                mode_manager.get_effective_control_source() == ModeManager.CONTROL_CONTROLLER
-                and mode_manager.mode in CONTROLLER_DRIVEN_UI_MODES
+            controller_pressed_events = (
+                primary_controller_hub.drain_pressed_events()
+                | secondary_controller_hub.drain_pressed_events()
             )
-
-            if transition_policy.is_sleep_hour() or controller_driving_ui:
-                pose_results = None
-            else:
-                pose_results = human_pose.get_human_pose(frame)
-            input_hub.ingest_pose(pose_results)
-
-            controller_pressed_events = primary_controller_hub.drain_pressed_events()
             controller_bridge.process(
                 snapshot=controller_snapshot,
                 mode=mode_manager.mode,
@@ -237,6 +256,21 @@ def main():
                 percussion=percussion,
                 pressed_events=controller_pressed_events,
             )
+
+            # Skip the expensive per-frame pose inference when the controller is
+            # driving a UI mode that does not render pose. This keeps the loop
+            # fast and steady so controller input stays responsive (no MediaPipe
+            # stall between input samples).
+            controller_driving_ui = (
+                mode_manager.get_effective_control_source() == ModeManager.CONTROL_CONTROLLER
+                and mode_manager.mode in CONTROLLER_DRIVEN_UI_MODES
+            )
+
+            if transition_policy.is_sleep_hour() or controller_driving_ui:
+                pose_results = None
+            else:
+                pose_results = human_pose.get_human_pose(frame)
+            input_hub.ingest_pose(pose_results)
 
             allowed_sources = mode_manager.get_allowed_input_sources(include_web=True)
 
@@ -285,6 +319,8 @@ def main():
 
             process_time = time.time() - t_process_start
             fps_limit = mode_manager.get_fps_limit()
+            if controller_active:
+                fps_limit = max(fps_limit, 30)
             # Run at full speed in clock mode when a body is in frame, so the
             # transition to POSE mode feels immediate.
             body_in_frame = pose_results is not None and pose_results.pose_landmarks is not None
@@ -309,6 +345,7 @@ def main():
             t_panel_start = time.time()
             panel.update(dots)
             panel_time = time.time() - t_panel_start
+            panel_updated_monotonic = time.monotonic()
 
             if web_server_start_pending:
                 # Defer FastAPI/uvicorn import/start until after the first panel
@@ -329,6 +366,7 @@ def main():
                     dots,
                     mode=mode_manager.mode,
                     controls=get_web_controls(mode_manager.mode),
+                    panel_updated_monotonic=panel_updated_monotonic,
                 )
 
             # Use precision spin-wait only for high-FPS modes; for low-FPS modes,

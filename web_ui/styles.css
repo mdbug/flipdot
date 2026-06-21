@@ -175,6 +175,22 @@ h1 {
   font-weight: 700;
 }
 
+.controller-pill-freshness {
+  min-width: 2.3rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-align: right;
+}
+
+.controller-pill-freshness.stale {
+  color: var(--coral);
+}
+
+.controller-pill-freshness.unknown {
+  color: var(--dim);
+}
+
 .controller-pill-buttons {
   display: inline-flex;
   align-items: center;
@@ -271,6 +287,258 @@ h1 {
 
 .battery-pill.unknown .battery-level {
   background: #586273;
+}
+
+.metrics-body {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.metrics-shell {
+  width: min(1180px, calc(100vw - 2rem));
+  margin: 0 auto;
+  padding: var(--space-4) 0;
+  display: grid;
+  gap: var(--space-4);
+}
+
+.metrics-topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.metrics-topbar h1 {
+  margin: 0.12rem 0 0;
+  font-size: clamp(1.8rem, 3vw, 3rem);
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.metrics-subtitle,
+.metrics-note {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.metrics-nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+.metrics-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.metrics-toolbar-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.metrics-toolbar .secondary {
+  width: auto;
+}
+
+.metrics-window-presets {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.metrics-preset-btn {
+  width: auto !important;
+  min-height: 2rem;
+  padding: 0.4rem 0.62rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.metrics-preset-btn:hover {
+  border-color: var(--teal);
+  background: #283035;
+}
+
+.metrics-preset-btn.active {
+  border-color: var(--teal);
+  background: rgba(42, 183, 169, 0.22);
+  color: #d5fff8;
+}
+
+.metrics-preset-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.metrics-warning {
+  border: 1px solid #ef6b55;
+  border-radius: var(--radius);
+  padding: 0.65rem 0.8rem;
+  background: rgba(239, 107, 85, 0.12);
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.metrics-warning.hidden {
+  display: none;
+}
+
+.metrics-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-3);
+}
+
+.metrics-summary-card,
+.metrics-panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24);
+}
+
+.metrics-summary-card {
+  padding: var(--space-3);
+}
+
+.metrics-summary-card h2 {
+  margin: 0.15rem 0 0.75rem;
+  font-size: 1.4rem;
+  letter-spacing: 0;
+}
+
+.metrics-summary-card dl {
+  margin: 0;
+  display: grid;
+  gap: 0.42rem;
+}
+
+.metrics-summary-card dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.42rem;
+}
+
+.metrics-summary-card dt {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.metrics-summary-card dd {
+  margin: 0;
+  max-width: 62%;
+  overflow-wrap: anywhere;
+  text-align: right;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.metrics-grid {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.metrics-panel {
+  padding: var(--space-3);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.metrics-panel.hidden {
+  display: none;
+}
+
+.metrics-chart-frame {
+  position: relative;
+  width: 100%;
+  height: 18rem;
+  min-height: 18rem;
+  max-height: 18rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #15171b;
+  overflow: hidden;
+}
+
+.metrics-chart {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+
+.metrics-events {
+  max-height: 18rem;
+  overflow: auto;
+  display: grid;
+  gap: 0.42rem;
+}
+
+.metrics-event {
+  min-height: 2rem;
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-left-width: 0.3rem;
+  border-radius: var(--radius);
+  padding: 0.38rem 0.58rem;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.metrics-event.good {
+  border-left-color: var(--teal);
+}
+
+.metrics-event.bad {
+  border-left-color: #ef6b55;
+}
+
+.system-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+@media (max-width: 720px) {
+  .metrics-topbar {
+    display: grid;
+  }
+
+  .metrics-nav {
+    justify-content: flex-start;
+  }
+
+  .metrics-summary-card dl div {
+    display: grid;
+    gap: 0.12rem;
+  }
+
+  .metrics-summary-card dd {
+    max-width: none;
+    text-align: left;
+  }
 }
 
 .controller-pill-battery.good .battery-level {

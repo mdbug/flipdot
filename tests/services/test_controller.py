@@ -128,6 +128,23 @@ def test_button_press_and_release_updates_snapshot(monkeypatch):
     assert snapshot["last_event_monotonic"] == 101.0
 
 
+def test_button_events_are_included_in_status_snapshot(monkeypatch):
+    fake_evdev = FakeEvdev({})
+    hub = ControllerHub(evdev_module=fake_evdev, auto_start=False)
+    clock = {"value": 200.0}
+    monkeypatch.setattr("app.services.controller.time.monotonic", lambda: clock["value"])
+
+    hub._apply_button_state("A", 1)
+    clock["value"] = 200.2
+    hub._apply_button_state("A", 0)
+
+    events = hub.get_status_snapshot()["recent_button_events"]
+    assert events == [
+        {"sequence": 1, "button": "A", "event": "pressed", "monotonic": 200.0},
+        {"sequence": 2, "button": "A", "event": "released", "monotonic": 200.2},
+    ]
+
+
 def test_button_label_mapping_uses_friendly_names():
     fake_evdev = FakeEvdev({})
     hub = ControllerHub(evdev_module=fake_evdev, auto_start=False)
@@ -255,6 +272,24 @@ def test_parse_bluetoothctl_battery_percentage_rejects_missing_value():
     assert ControllerHub._parse_bluetoothctl_battery_percentage(output) is None
 
 
+def test_parse_bluetoothctl_link_metrics_accepts_rssi_and_tx_power():
+    output = "Device AA:BB:CC:DD:EE:01\n\tRSSI: 0xffffffc4 (-60)\n\tTxPower: 0x04 (4)\n"
+    assert ControllerHub._parse_bluetoothctl_link_metrics(output) == {
+        "rssi_dbm": -60,
+        "tx_power_dbm": 4,
+        "link_quality": None,
+    }
+
+
+def test_parse_bluetoothctl_link_metrics_accepts_plain_values():
+    output = "RSSI: -72\nTxPower: -3\nLink Quality: 54\n"
+    assert ControllerHub._parse_bluetoothctl_link_metrics(output) == {
+        "rssi_dbm": -72,
+        "tx_power_dbm": -3,
+        "link_quality": 54,
+    }
+
+
 def test_parse_upower_percentage_accepts_decimal_value():
     output = "gaming-input\n  percentage:          92%\n"
     assert ControllerHub._parse_upower_percentage(output) == 92
@@ -280,3 +315,47 @@ def test_upower_info_matches_address_from_native_path():
     hub = ControllerHub(evdev_module=FakeEvdev({}), auto_start=False)
     info = "native-path:          /org/bluez/hci0/dev_AA_BB_CC_DD_EE_01\n"
     assert hub._upower_info_matches_address(info, "aa:bb:cc:dd:ee:01") is True
+
+
+def test_bluetooth_reconnect_attempt_is_throttled(monkeypatch):
+    fake_evdev = FakeEvdev({})
+    hub = ControllerHub(
+        target_address="AA:BB:CC:DD:EE:01",
+        bluetooth_connect_interval_sec=5.0,
+        evdev_module=fake_evdev,
+        auto_start=False,
+    )
+
+    now = {"value": 10.0}
+    calls = []
+
+    def fake_monotonic():
+        return now["value"]
+
+    class _Result:
+        returncode = 0
+        stdout = "Connection successful"
+        stderr = ""
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        return _Result()
+
+    monkeypatch.setattr("app.services.controller.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("app.services.controller.subprocess.run", fake_run)
+
+    hub._request_bluetooth_connect()
+    hub._request_bluetooth_connect()
+    now["value"] = 14.9
+    hub._request_bluetooth_connect()
+    now["value"] = 15.0
+    hub._request_bluetooth_connect()
+
+    assert [call[0] for call in calls] == [
+        ["bluetoothctl", "connect", "aa:bb:cc:dd:ee:01"],
+        ["bluetoothctl", "connect", "aa:bb:cc:dd:ee:01"],
+    ]
+    assert calls[0][1]["timeout"] == 2.0
+    assert calls[0][1]["check"] is False
+
+

@@ -295,7 +295,8 @@ def test_board_endpoints_mutate_attached_board():
     assert response.json()["text"] == "HELLO"
 
 
-def test_frame_payload_includes_controller_status():
+def test_frame_payload_includes_controller_status(monkeypatch):
+    monkeypatch.setattr("app.infrastructure.web_server.time.monotonic", lambda: 12.345)
     server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8127)
     client = TestClient(server._app)
 
@@ -327,6 +328,8 @@ def test_frame_payload_includes_controller_status():
     assert payload["controller_status"]["enabled"] is True
     assert payload["controller_status"]["connected"] is True
     assert payload["controller_status"]["pressed_buttons"] == ["A", "L1"]
+    assert payload["controller_status"]["last_event_monotonic"] == 12.3
+    assert payload["controller_status"]["last_event_age_ms"] == 45
     assert payload["controller_status"]["battery_percentage"] == 92
     assert len(payload["controller_statuses"]) == 1
     assert payload["controller_statuses"][0]["connected"] is True
@@ -370,7 +373,8 @@ def test_frame_payload_includes_multiple_controller_statuses():
     assert payload["controller_statuses"][1]["pressed_buttons"] == ["B"]
 
 
-def test_controller_status_endpoint_uses_provider_snapshot():
+def test_controller_status_endpoint_uses_provider_snapshot(monkeypatch):
+    monkeypatch.setattr("app.infrastructure.web_server.time.monotonic", lambda: 42.125)
     server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8128)
     client = TestClient(server._app)
 
@@ -398,6 +402,8 @@ def test_controller_status_endpoint_uses_provider_snapshot():
     assert payload["enabled"] is True
     assert payload["connected"] is True
     assert payload["pressed_buttons"] == ["D-Up"]
+    assert payload["last_event_monotonic"] == 42.0
+    assert payload["last_event_age_ms"] == 125
     assert payload["battery_percentage"] == 93
     assert len(body["controller_statuses"]) == 1
 
@@ -432,6 +438,70 @@ def test_controller_status_endpoint_includes_multiple_controllers():
     assert len(body["controller_statuses"]) == 2
     assert body["controller_statuses"][1]["address"] == "AA:BB:CC:DD:EE:03"
     assert body["controller_statuses"][1]["connected"] is False
+
+
+def test_controller_metrics_endpoint_records_samples_and_disconnects(monkeypatch):
+    clock = {"monotonic": 100.0, "wall": 1_700_000_000.0}
+    monkeypatch.setattr("app.infrastructure.web_server.time.monotonic", lambda: clock["monotonic"])
+    monkeypatch.setattr("app.infrastructure.web_server.time.time", lambda: clock["wall"])
+    server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8132)
+    client = TestClient(server._app)
+
+    state = {"connected": True}
+    server.attach_controller_status_provider(
+        lambda: [
+            {
+                "enabled": True,
+                "connected": state["connected"],
+                "address": "AA:BB:CC:DD:EE:01",
+                "device_name": "IINE Controller",
+                "pressed_buttons": ["A"] if state["connected"] else [],
+                "last_event_monotonic": 99.9,
+                "battery_percentage": 91,
+                "rssi_dbm": -62,
+                "tx_power_dbm": 4,
+                "recent_button_events": [
+                    {"sequence": 1, "button": "A", "event": "pressed", "monotonic": 99.95},
+                ],
+            }
+        ]
+    )
+
+    response = client.get("/api/controller/metrics")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["window_sec"] == 3600
+    assert len(body["samples"]) == 1
+    assert body["samples"][0]["controllers"][0]["connected"] is True
+    assert body["samples"][0]["controllers"][0]["rssi_dbm"] == -62
+    assert body["samples"][0]["controllers"][0]["tx_power_dbm"] == 4
+    assert body["button_events"][0]["button"] == "A"
+    assert body["button_events"][0]["event"] == "pressed"
+    assert body["controllers"][0]["disconnects"] == 0
+    assert body["controllers"][0]["button_event_count"] == 1
+
+    state["connected"] = False
+    clock["monotonic"] += 0.1
+    clock["wall"] += 0.1
+
+    response = client.get("/api/controller/metrics")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["samples"]) == 2
+    assert body["controllers"][0]["disconnects"] == 1
+    assert body["controllers"][0]["latest"]["connected"] is False
+    assert body["events"][-1]["event"] == "disconnected"
+    assert len(body["button_events"]) == 1
+
+
+def test_controller_metrics_page_route_serves_html():
+    server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8133)
+    client = TestClient(server._app)
+
+    response = client.get("/controller-metrics")
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers.get("content-type", "")
 
 
 def test_font_grid_page_route_serves_html():

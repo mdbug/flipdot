@@ -94,6 +94,7 @@ function normalizeControllerStatus(raw) {
       enabled: false,
       connected: false,
       pressed_buttons: [],
+      last_event_age_ms: null,
       battery_percentage: null,
     };
   }
@@ -104,6 +105,8 @@ function normalizeControllerStatus(raw) {
 
   const battery = Number(raw.battery_percentage);
   const batteryPercentage = Number.isFinite(battery) && battery >= 0 && battery <= 100 ? Math.round(battery) : null;
+  const lastEventAge = Number(raw.last_event_age_ms);
+  const lastEventAgeMs = Number.isFinite(lastEventAge) && lastEventAge >= 0 ? Math.round(lastEventAge) : null;
 
   return {
     enabled: Boolean(raw.enabled),
@@ -111,8 +114,22 @@ function normalizeControllerStatus(raw) {
     address: String(raw.address || ""),
     device_name: String(raw.device_name || ""),
     pressed_buttons: pressed,
+    last_event_age_ms: lastEventAgeMs,
     battery_percentage: batteryPercentage,
   };
+}
+
+function controllerEventAgeLabel(ageMs) {
+  if (!Number.isFinite(ageMs)) {
+    return "--";
+  }
+  if (ageMs < 1000) {
+    return `${ageMs}ms`;
+  }
+  if (ageMs < 10000) {
+    return `${(ageMs / 1000).toFixed(1)}s`;
+  }
+  return `${Math.round(ageMs / 1000)}s`;
 }
 
 function controllerStatusLabel(index, status) {
@@ -161,7 +178,8 @@ function renderControllerStatus(payload) {
     const status = statuses[index];
     const item = document.createElement("span");
     item.className = `status-pill controller-status-item${status.connected ? "" : " muted"}`;
-    item.title = status.device_name || status.address || "Controller";
+    const lastEventLabel = controllerEventAgeLabel(status.last_event_age_ms);
+    item.title = `${status.device_name || status.address || "Controller"} | last event ${lastEventLabel} ago`;
 
     const text = document.createElement("span");
     text.className = "controller-pill-label";
@@ -197,6 +215,16 @@ function renderControllerStatus(payload) {
     battery.appendChild(batteryIcon);
     battery.appendChild(batteryText);
     item.appendChild(battery);
+
+    const freshness = document.createElement("span");
+    freshness.className = "controller-pill-freshness";
+    freshness.textContent = lastEventLabel;
+    if (!status.enabled || !status.connected || status.last_event_age_ms === null) {
+      freshness.classList.add("unknown");
+    } else if (status.last_event_age_ms > 250) {
+      freshness.classList.add("stale");
+    }
+    item.appendChild(freshness);
 
     const buttons = document.createElement("span");
     buttons.className = "controller-pill-buttons";
