@@ -53,6 +53,7 @@ class ControllerHub:
         self,
         *,
         target_address: str = TARGET_CONTROLLER_ADDRESS,
+        target_name_hint: str | None = None,
         scan_interval_sec: float = 0.2,
         reconnect_delay_sec: float = 0.05,
         bluetooth_connect_interval_sec: float = 5.0,
@@ -63,6 +64,7 @@ class ControllerHub:
     ) -> None:
         self._evdev = evdev if evdev_module is _UNSET else evdev_module
         self._target_address = self._normalize_address(target_address)
+        self._target_name_hint = str(target_name_hint or "").strip().lower()
         self._scan_interval_sec = max(0.1, float(scan_interval_sec))
         self._reconnect_delay_sec = max(0.05, float(reconnect_delay_sec))
         self._bluetooth_connect_interval_sec = max(1.0, float(bluetooth_connect_interval_sec))
@@ -340,10 +342,17 @@ class ControllerHub:
             self._normalize_address(getattr(device, "uniq", "")),
             self._normalize_address(getattr(device, "phys", "")),
         ]
-        for candidate in candidates:
-            if not candidate:
-                continue
-            if self._target_address in candidate:
+        # If an explicit target address is configured, keep matching strict to
+        # that address so hubs for similarly named controllers do not overlap.
+        if self._target_address:
+            for candidate in candidates:
+                if candidate and self._target_address in candidate:
+                    return True
+            return False
+
+        if self._target_name_hint:
+            name = str(getattr(device, "name", "") or "").strip().lower()
+            if self._target_name_hint in name:
                 return True
         return False
 
@@ -572,6 +581,37 @@ class ControllerHub:
             ec.BTN_DPAD_LEFT: "D-Left",
             ec.BTN_DPAD_RIGHT: "D-Right",
         }
+
+        # Keyboard-profile fallbacks for controllers that expose key events
+        # instead of gamepad buttons in alternate switch modes.
+        keyboard_map = {
+            "KEY_UP": "D-Up",
+            "KEY_DOWN": "D-Down",
+            "KEY_LEFT": "D-Left",
+            "KEY_RIGHT": "D-Right",
+            "KEY_W": "D-Up",
+            "KEY_S": "D-Down",
+            "KEY_A": "D-Left",
+            "KEY_D": "D-Right",
+            "KEY_ENTER": "A",
+            "KEY_SPACE": "B",
+            "KEY_B": "B",
+            "KEY_ESC": "B",
+            "KEY_BACKSPACE": "B",
+            "KEY_Z": "X",
+            "KEY_X": "Y",
+            "KEY_Q": "L1",
+            "KEY_E": "R1",
+            "KEY_1": "L2",
+            "KEY_3": "R2",
+            "KEY_TAB": "Select",
+            "KEY_F1": "Start",
+            "KEY_HOME": "Home",
+        }
+        for key_name, mapped_label in keyboard_map.items():
+            key_code = getattr(ec, key_name, None)
+            if key_code is not None:
+                label_map[key_code] = mapped_label
         return label_map.get(code)
 
     def _apply_abs_state(self, code: int, value: int, device_path: str = "") -> None:

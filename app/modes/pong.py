@@ -88,8 +88,10 @@ class Pong:
         self._celebration_hits = []
         self._left_raise_armed = True
         self._human_target = None
+        self._left_controller_target = None
         self._last_person_time = None
         self._last_controller_input_time = None
+        self._last_left_controller_input_time = None
         now = time.time()
         self.song_start_time = now
         self._last_frame_time = now
@@ -102,6 +104,10 @@ class Pong:
     def _reset_match(self, now, initial=False):
         """Initialize or restart the match state."""
         h, w = self.height, self.width
+        self._human_target = None
+        self._left_controller_target = None
+        self._last_controller_input_time = None
+        self._last_left_controller_input_time = None
         self._last_person_time = now
         self._decay_events = []
         self._celebration_hits = []
@@ -150,7 +156,18 @@ class Pong:
             self._last_controller_input_time is not None
             and now - self._last_controller_input_time < self.AI_TAKEOVER_DELAY
         )
-        return person_active or controller_active
+        left_controller_active = (
+            self._last_left_controller_input_time is not None
+            and now - self._last_left_controller_input_time < self.AI_TAKEOVER_DELAY
+        )
+        return person_active or controller_active or left_controller_active
+
+    def _left_controller_active(self, now):
+        return (
+            self._left_controller_target is not None
+            and self._last_left_controller_input_time is not None
+            and now - self._last_left_controller_input_time < self.AI_TAKEOVER_DELAY
+        )
 
     def _ai_paddle_target(self, side):
         """Where the AI wants its paddle top.  side: 0 = left, 1 = right."""
@@ -226,7 +243,10 @@ class Pong:
                 p['serve_until'] = None
             return
 
-        self._move_paddle('lpad', self._ai_paddle_target(0), self.AI_SPEED, dt)
+        if self._left_controller_active(now):
+            self._move_paddle('lpad', self._left_controller_target, self.CONTROLLER_SPEED, dt)
+        else:
+            self._move_paddle('lpad', self._ai_paddle_target(0), self.AI_SPEED, dt)
         if self._human_active(now) and self._human_target is not None:
             controller_active = (
                 self._last_controller_input_time is not None
@@ -320,6 +340,7 @@ class Pong:
         # Serve toward the player who just lost the point
         p['serve_dir'] = -1 if side == 1 else 1
         self._center_paddles()
+        self._human_target = (p['ft'] + p['fb'] - self.PAD_H) / 2.0
         p['ball'] = [self.width / 2.0 - self.BALL / 2.0,
                      (p['ft'] + p['fb'] - self.BALL) / 2.0]
         p['v'] = [0.0, 0.0]
@@ -593,12 +614,19 @@ class Pong:
 
         return frame
 
-    def set_controller_target(self, norm_y):
+    def set_controller_target(self, norm_y, side="right"):
         p = self._pong
         normalized = max(0.0, min(1.0, float(norm_y)))
         playable_span = p['fb'] - p['ft']
-        self._human_target = (normalized * playable_span) + p['ft'] - self.PAD_H / 2
-        self._last_controller_input_time = time.time()
+        target = (normalized * playable_span) + p['ft'] - self.PAD_H / 2
+        now = time.time()
+        if side == "left":
+            self._left_controller_target = target
+            self._last_left_controller_input_time = now
+            return
+
+        self._human_target = target
+        self._last_controller_input_time = now
 
     def restart_if_game_over(self):
         if self._pong.get('winner') is not None:

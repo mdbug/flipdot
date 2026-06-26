@@ -85,8 +85,14 @@ class DummyTetris:
 
 
 class DummyPong:
-    def set_controller_target(self, norm_y):
+    def __init__(self):
+        self.targets = []
+        self.restart_called = False
+
+    def set_controller_target(self, norm_y, side="right"):
+        self.targets.append((side, norm_y))
         self.last_target = norm_y
+        self.last_side = side
 
     def restart_if_game_over(self):
         self.restart_called = True
@@ -132,14 +138,26 @@ class DummyBoard:
         self.undo_called = True
 
 
-def _run_bridge(bridge, monkeypatch, now, *, mode, snapshot):
+def _run_bridge(
+    bridge,
+    monkeypatch,
+    now,
+    *,
+    mode,
+    snapshot,
+    primary_snapshot=None,
+    secondary_snapshot=None,
+):
     monkeypatch.setattr("app.services.controller_mapping.time.time", lambda: now)
     input_hub = DummyInputHub()
     mode_manager = DummyModeManager()
     menu = DummyMenu()
     tetris = DummyTetris()
+    pong = DummyPong()
     bridge.process(
         snapshot=snapshot,
+        primary_snapshot=primary_snapshot,
+        secondary_snapshot=secondary_snapshot,
         mode=mode,
         input_hub=input_hub,
         mode_manager=mode_manager,
@@ -149,10 +167,10 @@ def _run_bridge(bridge, monkeypatch, now, *, mode, snapshot):
         board=DummyBoard(),
         font_preview=DummyFontPreview(),
         tetris_game=tetris,
-        pong_game=DummyPong(),
+        pong_game=pong,
         percussion=DummyPercussion(),
     )
-    return input_hub, mode_manager, menu, tetris
+    return input_hub, mode_manager, menu, tetris, pong
 
 
 def test_pressed_events_fire_even_when_level_state_missing(monkeypatch):
@@ -208,7 +226,7 @@ def test_ab_hold_toggles_menu_once(monkeypatch):
     bridge = ControllerInputBridge()
     snapshot = {"enabled": True, "connected": True, "pressed_buttons": ["A", "B"]}
 
-    input_hub, _, _, tetris = _run_bridge(
+    input_hub, _, _, tetris, _ = _run_bridge(
         bridge,
         monkeypatch,
         10.0,
@@ -219,7 +237,7 @@ def test_ab_hold_toggles_menu_once(monkeypatch):
     assert tetris.ccw == 0
     assert tetris.cw == 0
 
-    input_hub, _, _, tetris = _run_bridge(
+    input_hub, _, _, tetris, _ = _run_bridge(
         bridge,
         monkeypatch,
         12.1,
@@ -230,7 +248,7 @@ def test_ab_hold_toggles_menu_once(monkeypatch):
     assert tetris.ccw == 0
     assert tetris.cw == 0
 
-    input_hub, _, _, _ = _run_bridge(
+    input_hub, _, _, _, _ = _run_bridge(
         bridge,
         monkeypatch,
         12.5,
@@ -243,7 +261,7 @@ def test_ab_hold_toggles_menu_once(monkeypatch):
 def test_tetris_mapping_uses_ccw_cw_and_hard_drop(monkeypatch):
     bridge = ControllerInputBridge()
 
-    _, _, _, tetris = _run_bridge(
+    _, _, _, tetris, _ = _run_bridge(
         bridge,
         monkeypatch,
         5.0,
@@ -254,7 +272,7 @@ def test_tetris_mapping_uses_ccw_cw_and_hard_drop(monkeypatch):
     assert tetris.cw == 0
     assert tetris.hard_drop == 0
 
-    _, _, _, tetris = _run_bridge(
+    _, _, _, tetris, _ = _run_bridge(
         bridge,
         monkeypatch,
         5.2,
@@ -265,7 +283,7 @@ def test_tetris_mapping_uses_ccw_cw_and_hard_drop(monkeypatch):
     assert tetris.cw == 1
     assert tetris.hard_drop == 0
 
-    _, _, _, tetris = _run_bridge(
+    _, _, _, tetris, _ = _run_bridge(
         bridge,
         monkeypatch,
         5.4,
@@ -279,7 +297,7 @@ def test_tetris_mapping_uses_ccw_cw_and_hard_drop(monkeypatch):
 
 def test_paint_mode_sets_controller_button_and_pointer(monkeypatch):
     bridge = ControllerInputBridge()
-    input_hub, _, _, _ = _run_bridge(
+    input_hub, _, _, _, _ = _run_bridge(
         bridge,
         monkeypatch,
         20.0,
@@ -309,7 +327,7 @@ def test_menu_buttons_are_not_preempted_by_ab_hold(monkeypatch):
 
     # Press A while B is still held; selection should trigger immediately
     # in menu mode (no 2s A+B chord gating while already in menu).
-    _, mode_manager, menu, _ = _run_bridge(
+    _, mode_manager, menu, _, _ = _run_bridge(
         bridge,
         monkeypatch,
         30.1,
@@ -349,3 +367,38 @@ def test_controller_input_is_ignored_when_gesture_controls_mode(monkeypatch):
     assert menu.activate_count == 0
     assert menu.next_count == 0
     assert input_hub.button_states.get("controller") is False
+
+
+def test_pong_secondary_only_controls_right_paddle(monkeypatch):
+    bridge = ControllerInputBridge()
+
+    _, _, _, _, pong = _run_bridge(
+        bridge,
+        monkeypatch,
+        40.0,
+        mode=ModeManager.MODE_PONG,
+        snapshot={"enabled": True, "connected": True, "pressed_buttons": ["D-Down"]},
+        primary_snapshot={"enabled": True, "connected": False, "pressed_buttons": []},
+        secondary_snapshot={"enabled": True, "connected": True, "pressed_buttons": ["D-Down"]},
+    )
+
+    assert pong.targets
+    assert pong.targets[-1][0] == "right"
+
+
+def test_pong_two_controllers_are_two_player(monkeypatch):
+    bridge = ControllerInputBridge()
+
+    _, _, _, _, pong = _run_bridge(
+        bridge,
+        monkeypatch,
+        41.0,
+        mode=ModeManager.MODE_PONG,
+        snapshot={"enabled": True, "connected": True, "pressed_buttons": ["D-Up", "D-Down"]},
+        primary_snapshot={"enabled": True, "connected": True, "pressed_buttons": ["D-Up"]},
+        secondary_snapshot={"enabled": True, "connected": True, "pressed_buttons": ["D-Down"]},
+    )
+
+    sides = {side for side, _ in pong.targets}
+    assert "right" in sides
+    assert "left" in sides

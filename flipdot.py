@@ -32,8 +32,9 @@ CLOCK_DISOLVE_TIME = 1.0
 SPIN_WAIT_MIN_FPS = 20
 SPIN_GUARD_SEC = 0.012
 PAINT_CLEAR_HOLD_SEC = 1.0
-PRIMARY_CONTROLLER_ADDRESS = "AA:BB:CC:DD:EE:01"
-SECONDARY_CONTROLLER_ADDRESS = "AA:BB:CC:DD:EE:03"
+PRIMARY_CONTROLLER_ADDRESS = os.getenv("PRIMARY_CONTROLLER_ADDRESS", "AA:BB:CC:DD:EE:02")
+PRIMARY_CONTROLLER_NAME = os.getenv("PRIMARY_CONTROLLER_NAME", "IINE_keyboard")
+SECONDARY_CONTROLLER_ADDRESS = os.getenv("SECONDARY_CONTROLLER_ADDRESS", "AA:BB:CC:DD:EE:03")
 
 # Modes that are fully driven by the controller UI and never render pose.
 # When the controller is the active control source, pose inference can be
@@ -134,7 +135,10 @@ def main():
     panel = Panel(preview=preview)
     fps_tracker = FPSTracker()
     input_hub = InputHub()
-    primary_controller_hub = ControllerHub(target_address=PRIMARY_CONTROLLER_ADDRESS)
+    primary_controller_hub = ControllerHub(
+        target_address=PRIMARY_CONTROLLER_ADDRESS,
+        target_name_hint=PRIMARY_CONTROLLER_NAME,
+    )
     secondary_controller_hub = ControllerHub(target_address=SECONDARY_CONTROLLER_ADDRESS)
     controller_bridge = ControllerInputBridge()
     web_server = None
@@ -243,6 +247,8 @@ def main():
             )
             controller_bridge.process(
                 snapshot=controller_snapshot,
+                primary_snapshot=controller_snapshots[0] if controller_snapshots else None,
+                secondary_snapshot=controller_snapshots[1] if len(controller_snapshots) > 1 else None,
                 mode=mode_manager.mode,
                 input_hub=input_hub,
                 mode_manager=mode_manager,
@@ -354,6 +360,7 @@ def main():
 
                 web_server = WebServer(input_hub=input_hub, host=web_ui_host, port=web_ui_port)
                 web_server.attach_board(board)
+                web_server.attach_mode_manager(mode_manager)
                 web_server.attach_font_preview(font_preview)
                 web_server.attach_transition_policy(transition_policy)
                 web_server.attach_controller_status_provider(get_controller_statuses)

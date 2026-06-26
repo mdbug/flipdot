@@ -57,6 +57,11 @@ class FakeEvdev:
         BTN_DPAD_RIGHT = 547
         ABS_HAT0X = 16
         ABS_HAT0Y = 17
+        KEY_ENTER = 28
+        KEY_SPACE = 57
+        KEY_ESC = 1
+        KEY_BACKSPACE = 14
+        KEY_B = 48
 
     def __init__(self, devices: dict[str, FakeInputDevice]) -> None:
         self._devices = devices
@@ -94,6 +99,42 @@ def test_controller_matching_uses_target_bluetooth_address():
 
     assert device is not None
     assert device.path == "/dev/input/event10"
+
+
+def test_controller_matching_does_not_fallback_to_name_when_address_set():
+    fake_evdev = FakeEvdev({})
+    hub = ControllerHub(
+        target_address="AA:BB:CC:DD:EE:02",
+        target_name_hint="IINE_keyboard",
+        evdev_module=fake_evdev,
+        auto_start=False,
+    )
+
+    wrong = FakeInputDevice(
+        path="/dev/input/event7",
+        name="IINE_keyboard",
+        uniq="a2:54:84:c5:9a:92",
+    )
+    assert hub._device_matches(wrong) is False
+
+    right = FakeInputDevice(
+        path="/dev/input/event6",
+        name="IINE_keyboard",
+        uniq="aa:bb:cc:dd:ee:02",
+    )
+    assert hub._device_matches(right) is True
+
+
+def test_controller_matching_can_use_name_hint_without_address():
+    fake_evdev = FakeEvdev({})
+    hub = ControllerHub(
+        target_address="",
+        target_name_hint="iine_keyboard",
+        evdev_module=fake_evdev,
+        auto_start=False,
+    )
+    by_name = FakeInputDevice(path="/dev/input/event7", name="IINE_keyboard", uniq="")
+    assert hub._device_matches(by_name) is True
 
 
 def test_button_press_and_release_updates_snapshot(monkeypatch):
@@ -152,6 +193,14 @@ def test_button_label_mapping_uses_friendly_names():
     assert hub._map_button_label(fake_evdev.ecodes.BTN_SOUTH) == "A"
     assert hub._map_button_label(fake_evdev.ecodes.BTN_NORTH) == "Y"
     assert hub._map_button_label(999999) is None
+
+
+def test_keyboard_profile_maps_a_and_b_distinctly():
+    fake_evdev = FakeEvdev({})
+    hub = ControllerHub(evdev_module=fake_evdev, auto_start=False)
+
+    assert hub._map_button_label(fake_evdev.ecodes.KEY_ENTER) == "A"
+    assert hub._map_button_label(fake_evdev.ecodes.KEY_SPACE) == "B"
 
 
 def test_hat_axis_updates_dpad_buttons():

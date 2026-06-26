@@ -117,10 +117,10 @@ class WorldCup:
         return "UNK"
 
     def _render_two_live_matches(self, frame, matches):
-        blink_on = int(time.time() * 2) % 2 == 0
-
         for idx, match in enumerate(matches):
-            band_top = idx * 14
+            # Bottom band is nudged down one row so there is a blank line of
+            # space beneath the divider at row 13.
+            band_top = idx * 14 + (1 if idx else 0)
 
             home = self._team_code(match, "home_code")
             away = self._team_code(match, "away_code")
@@ -136,9 +136,6 @@ class WorldCup:
 
             write_centered(frame, teams_text, y=band_top, size=5, style="regular")
             self._render_score(frame, event_id, home_score, away_score, y=band_top + 6)
-
-            if blink_on:
-                frame[band_top, self.width - 1] = 1
 
         # Divider between top and bottom match bands.
         frame[13, :] = 1

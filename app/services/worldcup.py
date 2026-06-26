@@ -17,6 +17,15 @@ FIFA_BASE_URL = os.getenv("FIFA_API_BASE_URL", "https://api.fifa.com/api/v3").rs
 FIFA_LANGUAGE = os.getenv("FIFA_API_LANGUAGE", "en")
 FIFA_COMPETITION_ID = "17"
 
+ESPN_SCOREBOARD_URL = os.getenv(
+    "ESPN_SCOREBOARD_URL",
+    "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard",
+)
+ESPN_BASE_INTERVAL_LIVE_SEC = 15
+ESPN_BASE_INTERVAL_FINISHED_SEC = 5 * 60
+ESPN_BASE_INTERVAL_NONE_SEC = 10 * 60
+ESPN_MIN_RETRY_SEC = 10
+
 # Keep a safety reserve so request spikes do not exhaust the daily quota.
 DAILY_REQUEST_RESERVE = 5
 MIN_RETRY_SEC = 60
@@ -46,6 +55,8 @@ _next_fallback_lookup_after_mono = 0.0
 _next_status_probe_after_mono = 0.0
 _next_schedule_refresh_after_mono = 0.0
 _schedule_windows_utc = []
+_cached_espn_scorecard = None
+_next_espn_fetch_after_mono = 0.0
 _cached_fifa_scorecard = None
 _next_fifa_fetch_after_mono = 0.0
 _discovered_fifa_match_ids = None
@@ -955,14 +966,148 @@ def _get_api_football_scorecard():
         return _with_rate_limit(_cached_scorecard)
 
 
+def _fetch_espn_json(url):
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json, text/plain, */*",
+    }
+    response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT_SEC)
+    response.raise_for_status()
+    return response.json()
+
+
+def _espn_status(status):
+    """Map an ESPN competition status block to (short_status, status_bucket)."""
+
+    status_type = status.get("type") or {}
+    state = (status_type.get("state") or "").lower()
+    name = (status_type.get("name") or "").upper()
+
+    if state == "pre":
+        return "NS", "scheduled"
+    if state == "post":
+        # Penalty/AET endings still resolve to a finished match for our purposes.
+        return "FT", "finished"
+
+    # state == "in" (or anything unexpected) is treated as live.
+    if "HALFTIME" in name:
+        return "HT", "live"
+    if "SHOOTOUT" in name or "PENALT" in name:
+        return "PEN", "live"
+    if "EXTRA" in name or "OVERTIME" in name:
+        return "ET", "live"
+    return "LIVE", "live"
+
+
+def _normalize_espn_event(event):
+    competition = (event.get("competitions") or [{}])[0]
+    competitors = competition.get("competitors") or []
+
+    home = away = {}
+    for competitor in competitors:
+        side = (competitor.get("homeAway") or "").lower()
+        if side == "home":
+            home = competitor
+        elif side == "away":
+            away = competitor
+
+    home_team_info = home.get("team") or {}
+    away_team_info = away.get("team") or {}
+    home_team = (home_team_info.get("displayName") or "").upper()
+    away_team = (away_team_info.get("displayName") or "").upper()
+
+    home_code = (home_team_info.get("abbreviation") or "").upper() or _team_code(home_team)
+    away_code = (away_team_info.get("abbreviation") or "").upper() or _team_code(away_team)
+
+    status = competition.get("status") or event.get("status") or {}
+    short_status, status_bucket = _espn_status(status)
+    minute = _normalize_fifa_match_time(status.get("displayClock")) if status_bucket == "live" else ""
+
+    return {
+        "event_id": event.get("id"),
+        "league": event.get("name"),
+        "home_team": home_team,
+        "away_team": away_team,
+        "home_code": home_code,
+        "away_code": away_code,
+        "home_score": _safe_int(home.get("score")),
+        "away_score": _safe_int(away.get("score")),
+        "home_penalty_score": _safe_int(home.get("shootoutScore")),
+        "away_penalty_score": _safe_int(away.get("shootoutScore")),
+        "status": short_status,
+        "status_bucket": status_bucket,
+        "minute": minute,
+        "kickoff_utc": _parse_fifa_datetime(event.get("date")),
+    }
+
+
+def _get_espn_scorecard():
+    global _cached_espn_scorecard
+    global _next_espn_fetch_after_mono
+
+    now_mono = time.monotonic()
+    if _cached_espn_scorecard is not None and now_mono < _next_espn_fetch_after_mono:
+        return _cached_espn_scorecard
+
+    payload = _fetch_espn_json(ESPN_SCOREBOARD_URL)
+    events = []
+    seen_event_ids = set()
+    for event in payload.get("events") or []:
+        normalized = _normalize_espn_event(event)
+        event_id = normalized.get("event_id")
+        if event_id and event_id in seen_event_ids:
+            continue
+        if event_id:
+            seen_event_ids.add(event_id)
+        events.append(normalized)
+
+    selected_live = _choose_live(events)
+    if selected_live is not None:
+        selection, selected, interval = "live", selected_live, ESPN_BASE_INTERVAL_LIVE_SEC
+    else:
+        selected_finished = _choose_latest_finished(events)
+        if selected_finished is not None:
+            selection, selected, interval = (
+                "latest_finished",
+                selected_finished,
+                ESPN_BASE_INTERVAL_FINISHED_SEC,
+            )
+        else:
+            selection, selected, interval = "none", None, ESPN_BASE_INTERVAL_NONE_SEC
+
+    _cached_espn_scorecard = {
+        "selected": selected,
+        "selection": selection,
+        "events": events,
+    }
+    logger.info(
+        "World Cup source=ESPN selection=%s event_id=%s events=%s",
+        selection,
+        selected.get("event_id") if selected else None,
+        len(events),
+    )
+    _next_espn_fetch_after_mono = now_mono + max(ESPN_MIN_RETRY_SEC, interval)
+    return _cached_espn_scorecard
+
+
 def get_worldcup_scorecard():
-    """Fetch World Cup score data with FIFA internal API first, API-Football fallback."""
+    """Fetch World Cup score data with ESPN first, then FIFA internal, then API-Football."""
+
+    espn_payload = None
+    try:
+        espn_payload = _get_espn_scorecard()
+        # Only short-circuit on a live ESPN selection; otherwise let the other
+        # sources try to provide a fresher live fixture.
+        if espn_payload is not None and espn_payload.get("selection") == "live":
+            return espn_payload
+    except requests.RequestException as exc:
+        logger.warning("ESPN API request failed: %s", exc)
+    except Exception:  # pragma: no cover - defensive runtime safeguard
+        logger.exception("Unexpected ESPN API failure")
 
     fifa_payload = None
     try:
         fifa_payload = _get_fifa_scorecard()
-        # Only short-circuit on a live FIFA selection; otherwise let
-        # API-Football try to provide a fresher live fixture.
         if fifa_payload is not None and fifa_payload.get("selection") == "live":
             return fifa_payload
     except requests.RequestException as exc:
@@ -974,13 +1119,15 @@ def get_worldcup_scorecard():
     if api_payload.get("selection") == "live":
         return api_payload
 
-    # Keep FIFA as a fallback for finished/none when API-Football has no better result.
-    if fifa_payload is not None and fifa_payload.get("selection") in {"latest_finished", "none"}:
-        logger.info(
-            "World Cup source=FIFA fallback selection=%s events=%s",
-            fifa_payload.get("selection"),
-            len(fifa_payload.get("events") or []),
-        )
-        return fifa_payload
+    # No live match anywhere: prefer a finished/none result from ESPN, then FIFA.
+    for source_name, payload in (("ESPN", espn_payload), ("FIFA", fifa_payload)):
+        if payload is not None and payload.get("selection") in {"latest_finished", "none"}:
+            logger.info(
+                "World Cup source=%s fallback selection=%s events=%s",
+                source_name,
+                payload.get("selection"),
+                len(payload.get("events") or []),
+            )
+            return payload
 
     return api_payload

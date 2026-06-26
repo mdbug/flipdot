@@ -132,15 +132,15 @@ function controllerEventAgeLabel(ageMs) {
   return `${Math.round(ageMs / 1000)}s`;
 }
 
-function controllerStatusLabel(index, status) {
-  const prefix = index === 0 ? "P1" : `P${index + 1}`;
+function controllerPlayerTag(index) {
+  return index === 0 ? "P1" : `P${index + 1}`;
+}
+
+function controllerStatusState(status) {
   if (!status.enabled) {
-    return `${prefix}: unavailable`;
+    return "unavailable";
   }
-  if (status.connected) {
-    return `${prefix}: connected`;
-  }
-  return `${prefix}: disconnected`;
+  return status.connected ? "connected" : "disconnected";
 }
 
 function displayControllerButtonLabel(label) {
@@ -179,11 +179,16 @@ function renderControllerStatus(payload) {
     const item = document.createElement("span");
     item.className = `status-pill controller-status-item${status.connected ? "" : " muted"}`;
     const lastEventLabel = controllerEventAgeLabel(status.last_event_age_ms);
-    item.title = `${status.device_name || status.address || "Controller"} | last event ${lastEventLabel} ago`;
+    const connState = controllerStatusState(status);
+    item.title = `${status.device_name || status.address || "Controller"} | ${connState} | last event ${lastEventLabel} ago`;
 
     const text = document.createElement("span");
     text.className = "controller-pill-label";
-    text.textContent = controllerStatusLabel(index, status);
+    const dot = document.createElement("span");
+    dot.className = `controller-conn-dot ${connState}`;
+    dot.setAttribute("aria-label", connState);
+    text.appendChild(dot);
+    text.appendChild(document.createTextNode(controllerPlayerTag(index)));
     item.appendChild(text);
 
     const battery = document.createElement("span");

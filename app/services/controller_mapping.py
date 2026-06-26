@@ -19,7 +19,8 @@ class ControllerBridgeState:
     cursor_y: float = 0.5
     ab_hold_start: float | None = None
     ab_fired: bool = False
-    pong_target_y: float = 0.5
+    pong_target_y_right: float = 0.5
+    pong_target_y_left: float = 0.5
 
 
 class ControllerInputBridge:
@@ -36,6 +37,8 @@ class ControllerInputBridge:
         self,
         *,
         snapshot: dict,
+        primary_snapshot: dict | None = None,
+        secondary_snapshot: dict | None = None,
         mode: str,
         input_hub,
         mode_manager,
@@ -154,12 +157,48 @@ class ControllerInputBridge:
             if "B" in just_pressed:
                 tetris_game.queue_controller_rotate_cw()
         elif mode == ModeManager.MODE_PONG:
-            if dpad_trigger["D-Up"]:
-                self._state.pong_target_y = max(0.0, self._state.pong_target_y - self.CURSOR_STEP_NORM)
-            if dpad_trigger["D-Down"]:
-                self._state.pong_target_y = min(1.0, self._state.pong_target_y + self.CURSOR_STEP_NORM)
-            if dpad_trigger["D-Up"] or dpad_trigger["D-Down"]:
-                pong_game.set_controller_target(self._state.pong_target_y)
+            primary_connected = bool(primary_snapshot and primary_snapshot.get("enabled") and primary_snapshot.get("connected"))
+            secondary_connected = bool(secondary_snapshot and secondary_snapshot.get("enabled") and secondary_snapshot.get("connected"))
+
+            primary_pressed = (
+                set(primary_snapshot.get("pressed_buttons", []))
+                if primary_connected and primary_snapshot is not None
+                else set()
+            )
+            secondary_pressed = (
+                set(secondary_snapshot.get("pressed_buttons", []))
+                if secondary_connected and secondary_snapshot is not None
+                else set()
+            )
+
+            if primary_connected and secondary_connected:
+                right_pressed = primary_pressed
+                left_pressed = secondary_pressed
+            elif primary_connected:
+                right_pressed = primary_pressed
+                left_pressed = set()
+            elif secondary_connected:
+                right_pressed = secondary_pressed
+                left_pressed = set()
+            else:
+                # Fall back to merged snapshot behavior for compatibility.
+                right_pressed = pressed
+                left_pressed = set()
+
+            if "D-Up" in right_pressed:
+                self._state.pong_target_y_right = max(0.0, self._state.pong_target_y_right - self.CURSOR_STEP_NORM)
+            if "D-Down" in right_pressed:
+                self._state.pong_target_y_right = min(1.0, self._state.pong_target_y_right + self.CURSOR_STEP_NORM)
+            if ("D-Up" in right_pressed) or ("D-Down" in right_pressed):
+                pong_game.set_controller_target(self._state.pong_target_y_right, side="right")
+
+            if "D-Up" in left_pressed:
+                self._state.pong_target_y_left = max(0.0, self._state.pong_target_y_left - self.CURSOR_STEP_NORM)
+            if "D-Down" in left_pressed:
+                self._state.pong_target_y_left = min(1.0, self._state.pong_target_y_left + self.CURSOR_STEP_NORM)
+            if ("D-Up" in left_pressed) or ("D-Down" in left_pressed):
+                pong_game.set_controller_target(self._state.pong_target_y_left, side="left")
+
             if "A" in just_pressed:
                 pong_game.restart_if_game_over()
         elif mode == ModeManager.MODE_AUTODRUM:

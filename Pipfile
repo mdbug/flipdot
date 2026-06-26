@@ -15,6 +15,7 @@ uvicorn = "*"
 python-multipart = "*"
 evdev = "*"
 flippydot = {editable = true, path = "./flipPyDot"}
+mcp = "*"
 
 [dev-packages]
 pytest = "*"

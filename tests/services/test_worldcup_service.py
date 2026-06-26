@@ -60,6 +60,7 @@ def test_normalize_event_maps_fields_and_helpers():
 
 
 def test_get_worldcup_scorecard_prefers_live(monkeypatch):
+    monkeypatch.setattr(worldcup_module, "_get_espn_scorecard", lambda: None)
     monkeypatch.setattr(worldcup_module, "_get_fifa_scorecard", lambda: None)
     monkeypatch.setattr(
         worldcup_module,
@@ -134,6 +135,7 @@ def test_update_rate_limit_state_parses_expected_headers():
 
 
 def test_get_worldcup_scorecard_uses_cache(monkeypatch):
+    monkeypatch.setattr(worldcup_module, "_get_espn_scorecard", lambda: None)
     monkeypatch.setattr(worldcup_module, "_get_fifa_scorecard", lambda: None)
     calls = {"count": 0}
 
@@ -183,6 +185,7 @@ def test_get_worldcup_scorecard_prefers_fifa_source(monkeypatch):
         "events": [{"event_id": "fifa-1", "status_bucket": "live"}],
         "rate_limit": {},
     }
+    monkeypatch.setattr(worldcup_module, "_get_espn_scorecard", lambda: None)
     monkeypatch.setattr(worldcup_module, "_get_fifa_scorecard", lambda: fifa_payload)
     monkeypatch.setattr(
         worldcup_module,
@@ -208,6 +211,7 @@ def test_get_worldcup_scorecard_prefers_api_live_when_fifa_not_live(monkeypatch)
         "rate_limit": {},
     }
 
+    monkeypatch.setattr(worldcup_module, "_get_espn_scorecard", lambda: None)
     monkeypatch.setattr(worldcup_module, "_get_fifa_scorecard", lambda: fifa_payload)
     monkeypatch.setattr(worldcup_module, "_get_api_football_scorecard", lambda: api_payload)
 
@@ -229,6 +233,7 @@ def test_get_worldcup_scorecard_falls_back_to_fifa_when_api_not_live(monkeypatch
         "rate_limit": {},
     }
 
+    monkeypatch.setattr(worldcup_module, "_get_espn_scorecard", lambda: None)
     monkeypatch.setattr(worldcup_module, "_get_fifa_scorecard", lambda: fifa_payload)
     monkeypatch.setattr(worldcup_module, "_get_api_football_scorecard", lambda: api_payload)
 
@@ -432,3 +437,150 @@ def test_choose_live_and_latest_finished():
 
     assert worldcup_module._choose_live([e1, e2, f1])["event_id"] == "2"
     assert worldcup_module._choose_latest_finished([e1, f1, f2])["event_id"] == "4"
+
+
+def _espn_event(event_id, state, home, away, *, home_score=None, away_score=None,
+                status_name="STATUS_IN_PROGRESS", display_clock="0'", date="2026-06-26T19:00Z",
+                home_shootout=None, away_shootout=None):
+    return {
+        "id": event_id,
+        "name": f"{home} vs {away}",
+        "date": date,
+        "competitions": [
+            {
+                "status": {
+                    "displayClock": display_clock,
+                    "type": {"state": state, "name": status_name},
+                },
+                "competitors": [
+                    {
+                        "homeAway": "home",
+                        "score": home_score,
+                        "shootoutScore": home_shootout,
+                        "team": {"displayName": home[0], "abbreviation": home[1]},
+                    },
+                    {
+                        "homeAway": "away",
+                        "score": away_score,
+                        "shootoutScore": away_shootout,
+                        "team": {"displayName": away[0], "abbreviation": away[1]},
+                    },
+                ],
+            }
+        ],
+    }
+
+
+def test_normalize_espn_event_live_maps_fields():
+    raw = _espn_event(
+        "401", "in", ("France", "FRA"), ("Norway", "NOR"),
+        home_score=2, away_score=1, status_name="STATUS_IN_PROGRESS", display_clock="67'",
+    )
+    event = worldcup_module._normalize_espn_event(raw)
+
+    assert event["event_id"] == "401"
+    assert event["home_code"] == "FRA"
+    assert event["away_code"] == "NOR"
+    assert event["home_team"] == "FRANCE"
+    assert event["home_score"] == 2
+    assert event["away_score"] == 1
+    assert event["status"] == "LIVE"
+    assert event["status_bucket"] == "live"
+    assert event["minute"] == "67"
+    assert event["kickoff_utc"] == datetime(2026, 6, 26, 19, 0, tzinfo=timezone.utc)
+
+
+def test_normalize_espn_event_halftime_and_scheduled():
+    ht = worldcup_module._normalize_espn_event(
+        _espn_event("1", "in", ("A", "AAA"), ("B", "BBB"), status_name="STATUS_HALFTIME")
+    )
+    assert ht["status"] == "HT"
+    assert ht["status_bucket"] == "live"
+
+    scheduled = worldcup_module._normalize_espn_event(
+        _espn_event("2", "pre", ("A", "AAA"), ("B", "BBB"), display_clock="0'")
+    )
+    assert scheduled["status"] == "NS"
+    assert scheduled["status_bucket"] == "scheduled"
+    assert scheduled["minute"] == ""
+
+
+def test_normalize_espn_event_finished_with_penalty_shootout():
+    raw = _espn_event(
+        "3", "post", ("Spain", "ESP"), ("Italy", "ITA"),
+        home_score=1, away_score=1, status_name="STATUS_FINAL_PENALTIES",
+        home_shootout=4, away_shootout=3,
+    )
+    event = worldcup_module._normalize_espn_event(raw)
+
+    assert event["status_bucket"] == "finished"
+    assert event["status"] == "FT"
+    assert event["home_penalty_score"] == 4
+    assert event["away_penalty_score"] == 3
+
+
+def test_normalize_espn_event_falls_back_to_team_code_without_abbreviation():
+    raw = _espn_event("4", "in", ("United States", ""), ("South Korea", ""))
+    event = worldcup_module._normalize_espn_event(raw)
+    assert event["home_code"] == "US"
+    assert event["away_code"] == "SK"
+
+
+def test_get_espn_scorecard_selects_live(monkeypatch):
+    payload = {
+        "events": [
+            _espn_event("10", "post", ("A", "AAA"), ("B", "BBB"),
+                        home_score=0, away_score=0, status_name="STATUS_FULL_TIME",
+                        date="2026-06-25T19:00Z"),
+            _espn_event("11", "in", ("C", "CCC"), ("D", "DDD"),
+                        home_score=1, away_score=0, display_clock="55'",
+                        date="2026-06-26T19:00Z"),
+        ]
+    }
+    monkeypatch.setattr(worldcup_module, "_fetch_espn_json", lambda url: payload)
+    worldcup_module._cached_espn_scorecard = None
+    worldcup_module._next_espn_fetch_after_mono = 0.0
+
+    card = worldcup_module._get_espn_scorecard()
+    assert card["selection"] == "live"
+    assert card["selected"]["event_id"] == "11"
+    assert len(card["events"]) == 2
+
+
+def test_get_worldcup_scorecard_prefers_espn_live(monkeypatch):
+    espn_payload = {
+        "selected": {"event_id": "espn-live"},
+        "selection": "live",
+        "events": [{"event_id": "espn-live", "status_bucket": "live"}],
+    }
+    monkeypatch.setattr(worldcup_module, "_get_espn_scorecard", lambda: espn_payload)
+
+    def fail(*args, **kwargs):
+        raise AssertionError("fallback sources must not be called when ESPN is live")
+
+    monkeypatch.setattr(worldcup_module, "_get_fifa_scorecard", fail)
+    monkeypatch.setattr(worldcup_module, "_get_api_football_scorecard", fail)
+
+    assert worldcup_module.get_worldcup_scorecard() is espn_payload
+
+
+def test_get_worldcup_scorecard_falls_back_when_espn_raises(monkeypatch):
+    fifa_payload = {
+        "selected": {"event_id": "fifa-live"},
+        "selection": "live",
+        "events": [{"event_id": "fifa-live", "status_bucket": "live"}],
+        "rate_limit": {},
+    }
+
+    def boom():
+        raise worldcup_module.requests.RequestException("ESPN down")
+
+    monkeypatch.setattr(worldcup_module, "_get_espn_scorecard", boom)
+    monkeypatch.setattr(worldcup_module, "_get_fifa_scorecard", lambda: fifa_payload)
+    monkeypatch.setattr(
+        worldcup_module,
+        "_get_api_football_scorecard",
+        lambda: {"selected": None, "selection": "none", "events": []},
+    )
+
+    assert worldcup_module.get_worldcup_scorecard() is fifa_payload

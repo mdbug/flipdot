@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
+import os
 from pathlib import Path
 import threading
 import time
@@ -13,7 +15,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import uvicorn
 
+from app.infrastructure.mcp_server import build_flipdot_mcp
 from app.services.settings_store import RuntimeSettingsStore
+
+
+def _mcp_enabled() -> bool:
+    return os.getenv("ENABLE_MCP", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 
 class PointerEventPayload(BaseModel):
@@ -135,13 +142,6 @@ class WebServer:
         self._settings_store = RuntimeSettingsStore(
             settings_path or (Path(__file__).resolve().parents[2] / "state" / "settings.json")
         )
-        self._app = FastAPI()
-        self._app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
 
         self._frame_lock = threading.Lock()
         self._latest_frame = [[0 for _ in range(28)] for _ in range(28)]
@@ -164,10 +164,63 @@ class WebServer:
         self._board = None
         self._transition_policy = None
         self._font_preview = None
+        self._mode_manager = None
+
+        # Build the MCP server (if enabled) before the FastAPI app so its
+        # streamable-HTTP session manager can be driven from the app lifespan.
+        self._mcp = None
+        if _mcp_enabled():
+            self._mcp = build_flipdot_mcp(
+                input_hub=self._input_hub,
+                snapshot_frame=self.snapshot_frame,
+                get_mode_manager=lambda: self._mode_manager,
+                get_board=lambda: self._board,
+                get_transition_policy=lambda: self._transition_policy,
+                settings_store=self._settings_store,
+                get_controller_status=self._mcp_controller_status,
+            )
+
+        self._app = FastAPI(lifespan=self._build_lifespan())
+        self._app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+        if self._mcp is not None:
+            self._app.mount("/mcp", self._mcp.streamable_http_app())
 
         self._server: Optional[uvicorn.Server] = None
         self._thread: Optional[threading.Thread] = None
         self._wire_routes()
+
+    def _build_lifespan(self):
+        mcp = self._mcp
+
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            if mcp is None:
+                yield
+                return
+            # Run the MCP streamable-HTTP session manager for the app's lifetime.
+            async with mcp.session_manager.run():
+                yield
+
+        return lifespan
+
+    def snapshot_frame(self) -> tuple[list[list[int]], str, int, int]:
+        """Return a cheap immutable snapshot of the latest published frame."""
+        with self._frame_lock:
+            return (
+                [list(row) for row in self._latest_frame],
+                self._current_mode,
+                self._frame_width,
+                self._frame_height,
+            )
+
+    def _mcp_controller_status(self):
+        status, _statuses = self._controller_status_payload()
+        return status
 
     def _wire_routes(self) -> None:
         static_dir = Path(__file__).resolve().parents[2] / "web_ui"
@@ -653,6 +706,9 @@ class WebServer:
 
     def attach_board(self, board) -> None:
         self._board = board
+
+    def attach_mode_manager(self, mode_manager) -> None:
+        self._mode_manager = mode_manager
 
     def attach_transition_policy(self, transition_policy) -> None:
         self._transition_policy = transition_policy
