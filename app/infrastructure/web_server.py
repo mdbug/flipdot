@@ -10,11 +10,12 @@ from typing import Callable, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import uvicorn
 
+from app.infrastructure import chat as chat_backend
 from app.infrastructure.mcp_server import build_flipdot_mcp
 from app.services.settings_store import RuntimeSettingsStore
 
@@ -120,6 +121,10 @@ class SleepSettingsPayload(BaseModel):
     end_hour: int = Field(ge=0, le=23)
 
 
+class ChatPayload(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+
+
 class FontPreviewVariantPayload(BaseModel):
     family: str
     size: int
@@ -165,6 +170,12 @@ class WebServer:
         self._transition_policy = None
         self._font_preview = None
         self._mode_manager = None
+
+        # Single shared conversation for the in-UI Claude chat (one physical
+        # display = one conversation). Serialized with a lock so overlapping
+        # requests can't interleave turns into the shared history.
+        self._chat_messages: list[dict] = []
+        self._chat_lock = asyncio.Lock()
 
         # Build the MCP server (if enabled) before the FastAPI app so its
         # streamable-HTTP session manager can be driven from the app lifespan.
@@ -237,6 +248,10 @@ class WebServer:
         @self._app.get("/controller-metrics")
         def controller_metrics_page() -> FileResponse:
             return FileResponse(static_dir / "controller_metrics.html")
+
+        @self._app.get("/chat")
+        def chat_page() -> FileResponse:
+            return FileResponse(static_dir / "chat.html")
 
         @self._app.get("/favicon.ico")
         def favicon() -> JSONResponse:
@@ -581,6 +596,32 @@ class WebServer:
 
         @self._app.get("/api/ping")
         def ping() -> dict[str, str]:
+            return {"status": "ok"}
+
+        @self._app.get("/api/chat/status")
+        def get_chat_status() -> dict[str, bool]:
+            return {"available": chat_backend.chat_available(self._mcp is not None)}
+
+        @self._app.post("/api/chat")
+        async def post_chat(payload: ChatPayload) -> StreamingResponse:
+            message = payload.message.strip()
+            if not message:
+                raise HTTPException(status_code=400, detail="message is required")
+
+            async def generate():
+                # Hold the lock for the whole turn so the shared history stays
+                # consistent if a second request arrives mid-stream.
+                async with self._chat_lock:
+                    self._chat_messages.append({"role": "user", "content": message})
+                    async for event in chat_backend.run_chat(self._mcp, self._chat_messages):
+                        yield event
+
+            return StreamingResponse(generate(), media_type="application/x-ndjson")
+
+        @self._app.post("/api/chat/reset")
+        async def post_chat_reset() -> dict[str, str]:
+            async with self._chat_lock:
+                self._chat_messages.clear()
             return {"status": "ok"}
 
         @self._app.websocket("/ws")

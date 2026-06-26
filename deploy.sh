@@ -60,6 +60,16 @@ then
   python3 -m pip install --user --disable-pip-version-check mcp
 fi
 
+if ! python3 - <<'PY'
+import importlib.util
+import sys
+
+sys.exit(0 if importlib.util.find_spec('anthropic') else 1)
+PY
+then
+  python3 -m pip install --user --disable-pip-version-check anthropic
+fi
+
 daemon_reload_needed=false
 if ! sudo cmp -s "${REMOTE_DIR}/ops/systemd/flipdot.service" /etc/systemd/system/flipdot.service; then
   sudo install -m 644 "${REMOTE_DIR}/ops/systemd/flipdot.service" /etc/systemd/system/flipdot.service

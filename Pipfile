@@ -16,6 +16,7 @@ python-multipart = "*"
 evdev = "*"
 flippydot = {editable = true, path = "./flipPyDot"}
 mcp = "*"
+anthropic = "*"
 
 [dev-packages]
 pytest = "*"

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Claude Chat</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/vendor/marked.min.js" defer></script>
+    <script src="/static/vendor/purify.min.js" defer></script>
+    <script src="/static/chat.js" defer></script>
+  </head>
+  <body class="metrics-body">
+    <main class="chat-shell">
+      <header class="metrics-topbar">
+        <div>
+          <p class="eyebrow">Assistant</p>
+          <h1>Claude Chat</h1>
+          <p class="metrics-subtitle">Talk to Claude; it drives the flip-dot display through the MCP tools.</p>
+        </div>
+        <nav class="metrics-nav" aria-label="Console pages">
+          <a class="console-link" href="/">Live Console</a>
+          <a class="console-link" href="/font-grid">Font Grid</a>
+          <a class="console-link" href="/controller-metrics">Controller Metrics</a>
+        </nav>
+      </header>
+
+      <section class="chat-card" aria-label="Claude chat">
+        <div class="section-head">
+          <p class="eyebrow">Conversation</p>
+          <button id="chatReset" type="button" class="icon-button" title="New conversation" aria-label="New conversation">
+            <span aria-hidden="true">&#x270E;</span>
+          </button>
+        </div>
+        <div id="chatLog" class="chat-log" aria-live="polite">
+          <div id="chatEmpty" class="chat-empty">
+            <p class="chat-empty-title">What should the display show?</p>
+            <p class="chat-empty-sub">Claude drives the 28×28 flip-dot panel through its tools.</p>
+            <div class="chat-chips">
+              <button type="button" class="chat-chip">Write “HELLO” on the display</button>
+              <button type="button" class="chat-chip">Draw a smiley face</button>
+              <button type="button" class="chat-chip">What's on the panel right now?</button>
+            </div>
+          </div>
+        </div>
+        <p id="chatNote" class="system-note hidden"></p>
+        <form id="chatForm" class="chat-input-row" autocomplete="off">
+          <textarea id="chatInput" rows="4" maxlength="2000" placeholder="Tell the display what to do…" autocomplete="off"></textarea>
+          <button id="chatStop" type="button" class="secondary hidden">Stop</button>
+          <button id="chatSend" type="submit" class="accent">Send</button>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>
