@@ -10,6 +10,7 @@ from app.modes.pong import Pong
 from app.modes.worldcup import WorldCup
 from app.modes.board import Board
 from app.modes.font_preview import FontPreview
+from app.modes.script_mode import ScriptMode
 
 
 def create_mode_instances(width, height, mode_manager):
@@ -28,4 +29,5 @@ def create_mode_instances(width, height, mode_manager):
         "worldcup": WorldCup(width, height, mode_manager),
         "board": Board(width, height, mode_manager),
         "font_preview": FontPreview(width, height, mode_manager),
+        "script": ScriptMode(width, height),
     }

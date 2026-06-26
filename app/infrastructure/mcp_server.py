@@ -50,6 +50,7 @@ def build_flipdot_mcp(
     snapshot_frame: Callable[[], tuple[list[list[int]], str, int, int]],
     get_mode_manager: Callable[[], Optional[object]],
     get_board: Callable[[], Optional[object]],
+    get_script_mode: Callable[[], Optional[object]] | None = None,
     get_transition_policy: Callable[[], Optional[object]],
     settings_store,
     get_controller_status: Callable[[], object] | None = None,
@@ -86,6 +87,12 @@ def build_flipdot_mcp(
         if mode_manager is None:
             raise ValueError("mode manager is not available yet")
         return mode_manager
+
+    def _require_script_mode():
+        script_mode = get_script_mode() if get_script_mode is not None else None
+        if script_mode is None:
+            raise ValueError("script mode is not available yet")
+        return script_mode
 
     def _require_transition_policy():
         policy = get_transition_policy()
@@ -131,6 +138,10 @@ def build_flipdot_mcp(
                 status["controllers"] = get_controller_status()
             except Exception:
                 status["controllers"] = None
+        if get_script_mode is not None:
+            script_mode = get_script_mode()
+            if script_mode is not None:
+                status["script"] = script_mode.status()
         return status
 
     # --- Mode & system control -------------------------------------------
@@ -331,5 +342,74 @@ def build_flipdot_mcp(
         if not loaded:
             raise ValueError(f"board '{name}' not found")
         return {"status": "ok", "loaded": True}
+
+    # --- Scripted animations (sandboxed code) ----------------------------
+
+    @mcp.tool()
+    def run_script(code: str, name: str = "") -> dict:
+        """Run a sandboxed Python animation on the display.
+
+        Use this for dynamic/animated effects (Game of Life, bouncing ball,
+        plasma, rain) that the drawing tools can't express. The code runs in an
+        isolated process with no filesystem or network access; it must be
+        self-contained and define a frame generator:
+
+            def setup(width: int, height: int) -> Any:
+                # return the initial state (optional)
+            def step(state: Any, t: float, width: int, height: int
+                     ) -> tuple[Any, np.ndarray]:
+                # return (new_state, frame); frame is a (height, width)
+                # numpy array of 0/1 values. t is elapsed seconds since the
+                # animation started (use it for time-based motion).
+
+        The display is 28 wide x 28 tall. `numpy` (as `np`), `math` and
+        `random` are available; no other imports are allowed. If `name` is
+        given the script is also saved for re-running later. On invalid or
+        unsafe code this returns an error explaining what to fix.
+        """
+        script_mode = _require_script_mode()
+        try:
+            result = script_mode.run_script(str(code), name=str(name or "").strip())
+        except (ValueError, RuntimeError) as exc:
+            raise ValueError(str(exc)) from exc
+        _require_mode_manager().set_mode(ModeManager.MODE_SCRIPT)
+        return {"status": "ok", **result}
+
+    @mcp.tool()
+    def stop_script() -> dict:
+        """Stop the running animation and return the display to the clock."""
+        stopped = _require_script_mode().stop_script()
+        _require_mode_manager().set_mode(ModeManager.MODE_CLOCK)
+        return {"status": "ok", "stopped": stopped}
+
+    @mcp.tool()
+    def list_scripts() -> dict:
+        """List saved animation scripts and the active one."""
+        return _require_script_mode().list_scripts()
+
+    @mcp.tool()
+    def save_script(name: str) -> dict:
+        """Save the running animation under a name ([A-Za-z0-9_-], up to 64)."""
+        saved = _require_script_mode().save_script(name)
+        return {"status": "ok", "name": saved}
+
+    @mcp.tool()
+    def load_script(name: str) -> dict:
+        """Load and run a previously saved animation by name."""
+        script_mode = _require_script_mode()
+        try:
+            result = script_mode.load_script(name)
+        except (ValueError, RuntimeError) as exc:
+            raise ValueError(str(exc)) from exc
+        _require_mode_manager().set_mode(ModeManager.MODE_SCRIPT)
+        return {"status": "ok", **result}
+
+    @mcp.tool()
+    def delete_script(name: str) -> dict:
+        """Delete a saved animation script by name."""
+        deleted = _require_script_mode().delete_script(name)
+        if not deleted:
+            raise ValueError(f"script '{name}' not found")
+        return {"status": "ok", "deleted": True}
 
     return mcp

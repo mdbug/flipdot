@@ -161,6 +161,7 @@ def main():
     worldcup = mode_instances["worldcup"]
     board = mode_instances["board"]
     font_preview = mode_instances["font_preview"]
+    script_mode = mode_instances["script"]
     img_sleep = image.load('sleep.png')
     mode_registry = build_mode_registry(
         clock=clock,
@@ -175,6 +176,7 @@ def main():
         worldcup=worldcup,
         board=board,
         font_preview=font_preview,
+        script_mode=script_mode,
         img_sleep=img_sleep,
         clock_resolve_time=CLOCK_RESOLVE_TIME,
         clock_disolve_time=CLOCK_DISOLVE_TIME,
@@ -272,7 +274,12 @@ def main():
                 and mode_manager.mode in CONTROLLER_DRIVEN_UI_MODES
             )
 
-            if transition_policy.is_sleep_hour() or controller_driving_ui:
+            # Scripted animations never read pose data, so skip MediaPipe inference
+            # entirely while they run — it's the main cost keeping the loop below
+            # the 30 FPS target and gives the script a steady, load-independent tick.
+            script_mode_active = mode_manager.mode == ModeManager.MODE_SCRIPT
+
+            if transition_policy.is_sleep_hour() or controller_driving_ui or script_mode_active:
                 pose_results = None
             else:
                 pose_results = human_pose.get_human_pose(frame)
@@ -360,6 +367,7 @@ def main():
 
                 web_server = WebServer(input_hub=input_hub, host=web_ui_host, port=web_ui_port)
                 web_server.attach_board(board)
+                web_server.attach_script_mode(script_mode)
                 web_server.attach_mode_manager(mode_manager)
                 web_server.attach_font_preview(font_preview)
                 web_server.attach_transition_policy(transition_policy)

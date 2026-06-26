@@ -1,0 +1,13 @@
+{
+  "font_preview": {
+    "phrase": "HELLO WORLD",
+    "spacing": 3,
+    "variants": [
+      {
+        "family": "classic",
+        "size": 6,
+        "style": "monospace"
+      }
+    ]
+  }
+}

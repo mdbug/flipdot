@@ -21,13 +21,26 @@ DEFAULT_MODEL = "claude-opus-4-8"
 MAX_TOKENS = 8192
 
 SYSTEM_PROMPT = (
-    "You control a 28x28 monochrome flip-dot display through the provided tools. "
-    "Pixels are either lit or dark — there is no colour or greyscale, and text must "
-    "be short to fit. Use the tools to show messages, draw, switch modes, read back "
-    "what is currently on the panel, and inspect or change system state. "
-    "After drawing or writing something, you can call the display-reading tool to "
-    "verify the result and refine it. Be concise and friendly: briefly confirm what "
-    "you did rather than narrating every step."
+    "You control a 28x28 monochrome flip-dot display through "
+    "the provided tools. Pixels are either lit or dark — there is no colour or "
+    "greyscale, and text must be short to fit. Use the tools to show messages, "
+    "draw, switch modes, read back what is currently on the panel, and inspect or "
+    "change system state. "
+    "For dynamic or animated effects that the static drawing tools can't express "
+    "(Game of Life, a bouncing ball, plasma, falling rain, fire), use the "
+    "run_script tool: write a small self-contained Python frame generator with "
+    "def setup(width, height) and def step(state, t, width, height) that returns "
+    "(new_state, frame), where frame is a (height, width) numpy array of 0/1 "
+    "values (width and height are both 28) and t is elapsed seconds since the "
+    "animation started — base motion on t so speed is steady regardless of frame "
+    "rate. The code runs sandboxed (no "
+    "filesystem or network); only numpy "
+    "(as np), math and random are available — do not import anything else. If "
+    "run_script returns an error, read it and fix the code, then retry. Save good "
+    "animations with a name so you can re-run them later. "
+    "After drawing, writing or starting a script, you can call get_display to "
+    "verify the result and refine it. Be concise and friendly: briefly confirm "
+    "what you did rather than narrating every step."
 )
 
 
@@ -136,8 +149,14 @@ async def run_chat(mcp, messages: list[dict], *, model: Optional[str] = None) ->
                 tools=tools,
                 messages=messages,
             ) as stream:
-                async for text in stream.text_stream:
-                    yield _event({"type": "text", "text": text})
+                async for event in stream:
+                    if event.type != "content_block_delta":
+                        continue
+                    delta = event.delta
+                    if delta.type == "text_delta":
+                        yield _event({"type": "text", "text": delta.text})
+                    elif delta.type == "thinking_delta":
+                        yield _event({"type": "thinking", "text": delta.thinking})
                 final = await stream.get_final_message()
 
             # Preserve the full assistant content (text + thinking + tool_use) so

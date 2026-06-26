@@ -58,6 +58,7 @@ def test_build_mode_registry_maps_core_renderers(monkeypatch):
     worldcup = _FakeMode(np.full((28, 28), 10, dtype=np.uint8))
     board = _FakeMode(np.full((28, 28), 11, dtype=np.uint8))
     font_preview = _FakeMode(np.full((28, 28), 12, dtype=np.uint8))
+    script_mode = _FakeMode(np.full((28, 28), 13, dtype=np.uint8))
     sleep = np.zeros((28, 28), dtype=np.uint8)
 
     registry = registry_module.build_mode_registry(
@@ -73,6 +74,7 @@ def test_build_mode_registry_maps_core_renderers(monkeypatch):
         worldcup=worldcup,
         board=board,
         font_preview=font_preview,
+        script_mode=script_mode,
         img_sleep=sleep,
         clock_resolve_time=0.5,
         clock_disolve_time=0.5,
@@ -85,6 +87,7 @@ def test_build_mode_registry_maps_core_renderers(monkeypatch):
     assert registry.render(mm.ModeManager.MODE_WORLDCUP, c)[0, 0] == 10
     assert registry.render(mm.ModeManager.MODE_BOARD, c)[0, 0] == 11
     assert registry.render(mm.ModeManager.MODE_FONT_PREVIEW, c)[0, 0] == 12
+    assert registry.render(mm.ModeManager.MODE_SCRIPT, c)[0, 0] == 13
 
 
 def test_pose_and_clock_transition_paths(monkeypatch):
@@ -106,6 +109,7 @@ def test_pose_and_clock_transition_paths(monkeypatch):
         worldcup=blank,
         board=blank,
         font_preview=blank,
+        script_mode=blank,
         img_sleep=np.zeros((28, 28), dtype=np.uint8),
         clock_resolve_time=1.0,
         clock_disolve_time=1.0,

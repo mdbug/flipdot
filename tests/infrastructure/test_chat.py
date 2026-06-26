@@ -120,9 +120,23 @@ class _FakeFinal:
         self.stop_reason = stop_reason
 
 
+class _FakeDelta:
+    def __init__(self, type, **kwargs):
+        self.type = type
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
+class _FakeEvent:
+    def __init__(self, type, delta=None):
+        self.type = type
+        self.delta = delta
+
+
 class _FakeStream:
-    def __init__(self, texts, final):
+    def __init__(self, texts, final, thoughts=None):
         self._texts = texts
+        self._thoughts = thoughts or []
         self._final = final
 
     async def __aenter__(self):
@@ -131,13 +145,11 @@ class _FakeStream:
     async def __aexit__(self, *exc):
         return False
 
-    @property
-    def text_stream(self):
-        async def gen():
-            for chunk in self._texts:
-                yield chunk
-
-        return gen()
+    async def __aiter__(self):
+        for chunk in self._thoughts:
+            yield _FakeEvent("content_block_delta", _FakeDelta("thinking_delta", thinking=chunk))
+        for chunk in self._texts:
+            yield _FakeEvent("content_block_delta", _FakeDelta("text_delta", text=chunk))
 
     async def get_final_message(self):
         return self._final
@@ -151,7 +163,7 @@ class _FakeMessages:
     def stream(self, **kwargs):
         turn = self._script[self._turn]
         self._turn += 1
-        return _FakeStream(turn["texts"], turn["final"])
+        return _FakeStream(turn["texts"], turn["final"], turn.get("thoughts"))
 
 
 class _FakeClient:
@@ -166,6 +178,7 @@ def test_run_chat_full_loop_executes_tool(monkeypatch):
 
     script = [
         {
+            "thoughts": ["I should ", "call show_message."],
             "texts": ["Showing it. "],
             "final": _FakeFinal(
                 content=[
@@ -198,8 +211,9 @@ def test_run_chat_full_loop_executes_tool(monkeypatch):
     events = asyncio.run(collect())
     types = [e["type"] for e in events]
 
-    assert types == ["text", "tool", "text", "done"]
-    assert events[1]["name"] == "show_message"
+    assert types == ["thinking", "thinking", "text", "tool", "text", "done"]
+    assert "".join(e["text"] for e in events if e["type"] == "thinking") == "I should call show_message."
+    assert events[3]["name"] == "show_message"
     # The tool actually ran against the MCP server.
     assert mode_manager.mode == "board"
     assert board.text_objects[-1]["text"] == "HELLO"

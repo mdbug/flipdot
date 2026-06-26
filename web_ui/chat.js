@@ -24,7 +24,7 @@ function renderMarkdown(raw) {
 }
 
 function hasMessages() {
-  return chatLog.querySelector(".chat-bubble, .chat-tool") !== null;
+  return chatLog.querySelector(".chat-bubble, .chat-tool, .chat-thinking-block") !== null;
 }
 
 function updateEmptyState() {
@@ -112,6 +112,41 @@ function hideThinking() {
   }
 }
 
+// --- Streamed reasoning (extended thinking) ---------------------------------
+
+let thinkingBlock = null;
+
+function appendThinking(text) {
+  if (!thinkingBlock) {
+    thinkingBlock = document.createElement("details");
+    thinkingBlock.className = "chat-thinking-block";
+    thinkingBlock.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = "\u{1F4AD} Thinking…";
+    const body = document.createElement("div");
+    body.className = "chat-thinking-body";
+    body.dataset.raw = "";
+    thinkingBlock.append(summary, body);
+    chatLog.appendChild(thinkingBlock);
+    updateEmptyState();
+  }
+  const body = thinkingBlock.querySelector(".chat-thinking-body");
+  body.dataset.raw += text;
+  body.innerHTML = renderMarkdown(body.dataset.raw);
+  scrollToBottom();
+}
+
+// Collapse the live reasoning into a "Thought for a moment" toggle once the
+// real answer (or a tool call) begins. Leaves the next thinking segment fresh.
+function settleThinking() {
+  if (thinkingBlock) {
+    thinkingBlock.open = false;
+    const summary = thinkingBlock.querySelector("summary");
+    if (summary) summary.textContent = "Thought for a moment";
+    thinkingBlock = null;
+  }
+}
+
 // --- Tool pills -------------------------------------------------------------
 
 let lastToolPill = null;
@@ -196,6 +231,7 @@ async function submitMessage(message) {
   let assistantBubble = null;
   const ensureAssistant = () => {
     hideThinking();
+    settleThinking();
     settleLastTool();
     if (!assistantBubble) assistantBubble = addBubble("assistant", "");
     return assistantBubble;
@@ -230,10 +266,14 @@ async function submitMessage(message) {
         } catch (_err) {
           continue;
         }
-        if (event.type === "text") {
+        if (event.type === "thinking") {
+          hideThinking();
+          appendThinking(event.text);
+        } else if (event.type === "text") {
           appendAssistantText(ensureAssistant(), event.text);
         } else if (event.type === "tool") {
           hideThinking();
+          settleThinking();
           assistantBubble = null; // start a fresh bubble after a tool call
           addTool(event.name, event.input);
           showThinking();
@@ -251,6 +291,7 @@ async function submitMessage(message) {
     }
   } finally {
     hideThinking();
+    settleThinking();
     settleLastTool();
     activeController = null;
     setEnabled(true);
@@ -288,9 +329,10 @@ chatReset.addEventListener("click", async () => {
   } catch (_err) {
     /* ignore */
   }
-  chatLog.querySelectorAll(".chat-bubble, .chat-tool, .chat-thinking").forEach((el) => el.remove());
+  chatLog.querySelectorAll(".chat-bubble, .chat-tool, .chat-thinking, .chat-thinking-block").forEach((el) => el.remove());
   lastToolPill = null;
   thinkingEl = null;
+  thinkingBlock = null;
   updateEmptyState();
   chatInput.focus();
 });

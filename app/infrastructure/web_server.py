@@ -167,6 +167,7 @@ class WebServer:
         self._controller_metrics_last_latency_sequence: dict[str, int] = {}
         self._controller_metrics_last_sample_monotonic = 0.0
         self._board = None
+        self._script_mode = None
         self._transition_policy = None
         self._font_preview = None
         self._mode_manager = None
@@ -186,6 +187,7 @@ class WebServer:
                 snapshot_frame=self.snapshot_frame,
                 get_mode_manager=lambda: self._mode_manager,
                 get_board=lambda: self._board,
+                get_script_mode=lambda: self._script_mode,
                 get_transition_policy=lambda: self._transition_policy,
                 settings_store=self._settings_store,
                 get_controller_status=self._mcp_controller_status,
@@ -747,6 +749,9 @@ class WebServer:
 
     def attach_board(self, board) -> None:
         self._board = board
+
+    def attach_script_mode(self, script_mode) -> None:
+        self._script_mode = script_mode
 
     def attach_mode_manager(self, mode_manager) -> None:
         self._mode_manager = mode_manager

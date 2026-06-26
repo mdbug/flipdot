@@ -1479,6 +1479,45 @@ input:disabled {
   40% { opacity: 1; transform: translateY(-2px); }
 }
 
+/* Streamed reasoning (extended thinking) */
+.chat-thinking-block {
+  align-self: flex-start;
+  max-width: 92%;
+  font-size: 0.82rem;
+  color: var(--dim);
+  border-left: 2px solid var(--line);
+  padding: 0.1rem 0 0.1rem 0.7rem;
+}
+
+.chat-thinking-block > summary {
+  cursor: pointer;
+  list-style: none;
+  font-weight: 600;
+  color: var(--muted);
+  user-select: none;
+}
+
+.chat-thinking-block > summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-thinking-block:not([open]) > summary::before {
+  content: "\25B8 ";
+}
+
+.chat-thinking-block[open] > summary::before {
+  content: "\25BE ";
+}
+
+.chat-thinking-body {
+  margin-top: 0.3rem;
+  font-style: italic;
+  line-height: 1.45;
+}
+
+.chat-thinking-body > :first-child { margin-top: 0; }
+.chat-thinking-body > :last-child { margin-bottom: 0; }
+
 /* Empty / welcome state */
 .chat-empty {
   margin: auto;
