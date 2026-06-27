@@ -22,7 +22,7 @@ DEFAULT_MODEL = "claude-opus-4-8"
 # Models the in-UI selector may choose. Both support the adaptive-thinking
 # request shape used below, so no per-model thinking handling is needed.
 ALLOWED_MODELS = ("claude-opus-4-8", "claude-sonnet-4-6")
-MAX_TOKENS = 8192
+MAX_TOKENS = 32768
 
 SYSTEM_PROMPT = (
     "You control a 28x28 monochrome flip-dot display through "

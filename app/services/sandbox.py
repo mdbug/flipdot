@@ -146,7 +146,7 @@ DEFAULT_FRAME_TIMEOUT = float(os.getenv("SANDBOX_FRAME_TIMEOUT", "0.25"))
 DEFAULT_STARTUP_TIMEOUT = float(os.getenv("SANDBOX_STARTUP_TIMEOUT", "8.0"))
 # CPU-seconds and process-count ceilings applied inside the worker as defence in
 # depth behind bubblewrap's read-only, network-less namespace.
-DEFAULT_CPU_SECONDS = int(os.getenv("SANDBOX_CPU_SECONDS", "10"))
+DEFAULT_CPU_SECONDS = int(os.getenv("SANDBOX_CPU_SECONDS", "600"))
 DEFAULT_NPROC = int(os.getenv("SANDBOX_NPROC", "256"))
 # Reject pathologically large source before parsing it into an AST. A real
 # animation script is a few KB; this is a wide margin that still bounds the
