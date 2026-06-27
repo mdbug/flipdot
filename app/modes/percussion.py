@@ -1,6 +1,11 @@
-import numpy as np
 import time
+from typing import Any
+
+import numpy as np
+
 import app.services.human_pose as human_pose
+from app.core.mode_manager import ModeManager
+from app.modes.contracts import Frame
 
 
 class Percussion:
@@ -16,22 +21,27 @@ class Percussion:
     DECAY_TICK = 0.05  # seconds between decay-tail flips
 
     # 8-step patterns; each step lists the regions to flip (empty = rest).
-    PATTERNS = [
+    PATTERNS: list[list[tuple[str, ...]]] = [
         # Four on the floor
-        [('kick',), ('hat',), ('kick',), ('hat',),
-         ('kick',), ('hat',), ('kick',), ('hat',)],
+        [("kick",), ("hat",), ("kick",), ("hat",), ("kick",), ("hat",), ("kick",), ("hat",)],
         # Rock backbeat
-        [('kick',), ('hat',), ('snare',), ('hat',),
-         ('kick',), ('kick',), ('snare',), ('hat',)],
+        [("kick",), ("hat",), ("snare",), ("hat",), ("kick",), ("kick",), ("snare",), ("hat",)],
         # Syncopated breakbeat
-        [('kick',), ('hat',), ('snare',), ('kick',),
-         (), ('kick',), ('snare',), ('tom',)],
+        [("kick",), ("hat",), ("snare",), ("kick",), (), ("kick",), ("snare",), ("tom",)],
         # Roll around the kit
-        [('kick',), ('snare',), ('tom',), ('hat',),
-         ('kick', 'snare'), ('tom',), ('hat',), ('kick', 'tom')],
+        [
+            ("kick",),
+            ("snare",),
+            ("tom",),
+            ("hat",),
+            ("kick", "snare"),
+            ("tom",),
+            ("hat",),
+            ("kick", "tom"),
+        ],
     ]
 
-    def __init__(self, width, height, mode_manager):
+    def __init__(self, width: int, height: int, mode_manager: ModeManager) -> None:
         self.width = width
         self.height = height
         self.mode_manager = mode_manager
@@ -39,63 +49,62 @@ class Percussion:
         self.rng = np.random.default_rng()
         # Instruments: area, density (loudness/texture), decay tail densities.
         h, w = height, width
-        self.instruments = {
+        self.instruments: dict[str, dict[str, Any]] = {
             # solid thump, no tail – the loudest single clack
-            'kick':  {'area': (h // 2, h, 0, w),           'density': 1.0,
-                      'decay': []},
+            "kick": {"area": (h // 2, h, 0, w), "density": 1.0, "decay": []},
             # scattered crack with a short rattle
-            'snare': {'area': (0, h // 2, 0, w // 2),      'density': 0.6,
-                      'decay': [0.25]},
+            "snare": {"area": (0, h // 2, 0, w // 2), "density": 0.6, "decay": [0.25]},
             # sparse tick – the quietest instrument
-            'hat':   {'area': (0, h // 4, w // 2, w),      'density': 0.2,
-                      'decay': []},
+            "hat": {"area": (0, h // 4, w // 2, w), "density": 0.2, "decay": []},
             # dense punch with a slightly longer ring
-            'tom':   {'area': (h // 4, h // 2, w // 2, w), 'density': 0.9,
-                      'decay': [0.35, 0.15]},
+            "tom": {"area": (h // 4, h // 2, w // 2, w), "density": 0.9, "decay": [0.35, 0.15]},
         }
         self.pattern_index = 0
         self.step = 0
-        self.bpm = 120
+        self.bpm: float = 120
         self.next_step_time = time.time()
-        self._decay_events = []  # (due_time, instrument_name, density)
+        self._decay_events: list[tuple[float, str, float]] = []  # (due, instrument, density)
 
-    def _scatter_flip(self, name, density):
+    def _scatter_flip(self, name: str, density: float) -> None:
         """XOR a random subset of the instrument's area; density 1.0 = solid."""
-        r0, r1, c0, c1 = self.instruments[name]['area']
+        r0, r1, c0, c1 = self.instruments[name]["area"]
         if density >= 1.0:
             self.state[r0:r1, c0:c1] ^= 1
         else:
             mask = self.rng.random((r1 - r0, c1 - c0)) < density
             self.state[r0:r1, c0:c1] ^= mask.astype(np.uint8)
 
-    def _hit(self, name, now):
+    def _hit(self, name: str, now: float) -> None:
+        """Trigger an instrument now and schedule its decay-tail flips."""
         inst = self.instruments[name]
-        self._scatter_flip(name, inst['density'])
-        for i, tail_density in enumerate(inst['decay']):
-            self._decay_events.append(
-                (now + (i + 1) * self.DECAY_TICK, name, tail_density))
+        self._scatter_flip(name, inst["density"])
+        for i, tail_density in enumerate(inst["decay"]):
+            self._decay_events.append((now + (i + 1) * self.DECAY_TICK, name, tail_density))
 
-    def adjust_bpm(self, delta):
+    def adjust_bpm(self, delta: float) -> None:
+        """Nudge the tempo by ``delta`` BPM, clamped to [MIN_BPM, MAX_BPM]."""
         self.bpm = max(self.MIN_BPM, min(self.MAX_BPM, float(self.bpm) + float(delta)))
 
-    def cycle_pattern(self, delta):
+    def cycle_pattern(self, delta: int) -> None:
+        """Advance the active pattern by ``delta`` steps (wrapping)."""
         if not self.PATTERNS:
             return
         self.pattern_index = (self.pattern_index + int(delta)) % len(self.PATTERNS)
 
-    def trigger_accent(self):
+    def trigger_accent(self) -> None:
+        """Fire a kick+snare accent immediately."""
         now = time.time()
-        self._hit('kick', now)
-        self._hit('snare', now)
+        self._hit("kick", now)
+        self._hit("snare", now)
 
-    def get_frame(self, pose_results):
+    def get_frame(self, pose_results: Any) -> Frame:
+        """Advance the sequencer (hand x = tempo, hand y = pattern) and render the panel."""
         finger_x, finger_y = human_pose.get_right_index_finger_position(pose_results)
         if finger_x is not None and finger_y is not None:
             # Display is mirrored, so flip x for intuitive control.
             mirrored_x = min(max(1.0 - finger_x, 0.0), 1.0)
             self.bpm = self.MIN_BPM + mirrored_x * (self.MAX_BPM - self.MIN_BPM)
-            self.pattern_index = min(
-                int(finger_y * len(self.PATTERNS)), len(self.PATTERNS) - 1)
+            self.pattern_index = min(int(finger_y * len(self.PATTERNS)), len(self.PATTERNS) - 1)
 
         pattern = self.PATTERNS[self.pattern_index]
         step_interval = 60.0 / self.bpm / 2  # eighth notes
@@ -123,13 +132,13 @@ class Percussion:
         # Step cursor along the bottom row.
         frame[-1, :] = 0
         seg = self.width // len(pattern)
-        frame[-1, self.step * seg:(self.step + 1) * seg] = 1
+        frame[-1, self.step * seg : (self.step + 1) * seg] = 1
 
         # Pattern indicator: one block per pattern on the left edge.
         frame[:, 0] = 0
         block = self.height // (len(self.PATTERNS) + 1)
         for i in range(self.pattern_index + 1):
-            frame[i * block + 1:i * block + block, 0] = 1
+            frame[i * block + 1 : i * block + block, 0] = 1
 
         frame = human_pose.draw_right_index_pointer(frame, pose_results, size=2)
         return frame

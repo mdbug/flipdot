@@ -69,7 +69,9 @@ def test_menuitem_hover_triggers_click_after_dwell(monkeypatch):
     monkeypatch.setattr(menu_module.time, "time", lambda: now["value"])
 
     calls = {"count": 0}
-    item = menu_module.MenuItem("A", row=0, width=28, on_click=lambda: calls.__setitem__("count", calls["count"] + 1))
+    item = menu_module.MenuItem(
+        "A", row=0, width=28, on_click=lambda: calls.__setitem__("count", calls["count"] + 1)
+    )
 
     item.hover(True)
     assert item.hovered is True

@@ -1,7 +1,12 @@
-import numpy as np
 import time
-import app.services.text as text
+from typing import Any
+
+import numpy as np
+
 import app.services.human_pose as human_pose
+import app.services.text as text
+from app.core.mode_manager import ModeManager
+from app.modes.contracts import Frame
 
 
 class Pong:
@@ -49,14 +54,14 @@ class Pong:
 
     AI_TAKEOVER_DELAY = 15.0
     WIN_SCORE = 5
-    PAD_H = 6          # paddle height in px
-    PAD_W = 2          # paddle width in px
-    BALL = 2           # ball is BALL×BALL px
-    PLAYER_SPEED = 24.0      # px/s
+    PAD_H = 6  # paddle height in px
+    PAD_W = 2  # paddle width in px
+    BALL = 2  # ball is BALL×BALL px
+    PLAYER_SPEED = 24.0  # px/s
     CONTROLLER_SPEED = 100.0  # px/s when driven by controller
-    AI_SPEED = 16.0          # px/s
-    BASE_BALL_SPEED = 15.5   # px/s
-    MAX_DT = 0.05            # clamp dt to avoid tunneling on hitches
+    AI_SPEED = 16.0  # px/s
+    BASE_BALL_SPEED = 15.5  # px/s
+    MAX_DT = 0.05  # clamp dt to avoid tunneling on hitches
     INITIAL_SERVE_DELAY = 1.0
     POINT_SERVE_DELAY = 1.5
     POINT_CELEBRATION_TIME = 1.25
@@ -64,7 +69,7 @@ class Pong:
     MODE_NAME_TIME = 2.0
     WIN_RESTART_TIME = 8.0
 
-    def __init__(self, width, height, mode_manager):
+    def __init__(self, width: int, height: int, mode_manager: ModeManager) -> None:
         self.width = width
         self.height = height
         self.mode_manager = mode_manager
@@ -74,24 +79,20 @@ class Pong:
         # Drum-like panel hits used by score/win celebrations.
         h, w = height, width
         self._instruments = {
-            'kick':  {'area': (h // 2, h, 0, w),           'density': 1.0,
-                      'decay': []},
-            'tom':   {'area': (h // 4, h // 2, w // 2, w), 'density': 0.9,
-                      'decay': [0.35, 0.15]},
-            'crash': {'area': (0, h, 0, w),                'density': 0.8,
-                      'decay': [0.45, 0.3, 0.18, 0.1, 0.05]},
-            'clap':  {'area': (0, h // 2, 0, w),           'density': 0.5,
-                      'decay': [0.3, 0.18, 0.1]},
+            "kick": {"area": (h // 2, h, 0, w), "density": 1.0, "decay": []},
+            "tom": {"area": (h // 4, h // 2, w // 2, w), "density": 0.9, "decay": [0.35, 0.15]},
+            "crash": {"area": (0, h, 0, w), "density": 0.8, "decay": [0.45, 0.3, 0.18, 0.1, 0.05]},
+            "clap": {"area": (0, h // 2, 0, w), "density": 0.5, "decay": [0.3, 0.18, 0.1]},
         }
-        self._decay_events = []
+        self._decay_events: list[tuple[float, str, float]] = []
 
-        self._celebration_hits = []
+        self._celebration_hits: list[tuple[float, str]] = []
         self._left_raise_armed = True
-        self._human_target = None
-        self._left_controller_target = None
-        self._last_person_time = None
-        self._last_controller_input_time = None
-        self._last_left_controller_input_time = None
+        self._human_target: float | None = None
+        self._left_controller_target: float | None = None
+        self._last_person_time: float | None = None
+        self._last_controller_input_time: float | None = None
+        self._last_left_controller_input_time: float | None = None
         now = time.time()
         self.song_start_time = now
         self._last_frame_time = now
@@ -114,23 +115,23 @@ class Pong:
         self.state[:, :] = 0
         center_pad = (h - self.PAD_H) / 2.0
         self._pong = {
-            'ft': 0,
-            'fb': h,
-            'ball': [w / 2.0 - self.BALL / 2.0, (h - self.BALL) / 2.0],
-            'v': [0.0, 0.0],
-            'lpad': center_pad,
-            'rpad': center_pad,
-            'aim_l': 0,
-            'aim_r': 0,
-            'score': [0, 0],
-            'rally': 0,
-            'fx': [],
-            'serve_until': now + self.INITIAL_SERVE_DELAY,
-            'serve_dir': 1 if self.rng.random() < 0.5 else -1,
-            'celebration': None,
-            'winner': None,
-            'win_time': None,
-            'win_text': '',
+            "ft": 0,
+            "fb": h,
+            "ball": [w / 2.0 - self.BALL / 2.0, (h - self.BALL) / 2.0],
+            "v": [0.0, 0.0],
+            "lpad": center_pad,
+            "rpad": center_pad,
+            "aim_l": 0,
+            "aim_r": 0,
+            "score": [0, 0],
+            "rally": 0,
+            "fx": [],
+            "serve_until": now + self.INITIAL_SERVE_DELAY,
+            "serve_dir": 1 if self.rng.random() < 0.5 else -1,
+            "celebration": None,
+            "winner": None,
+            "win_time": None,
+            "win_text": "",
         }
         self._center_paddles()
         if initial:
@@ -139,9 +140,9 @@ class Pong:
 
     def _center_paddles(self):
         p = self._pong
-        center_pad = (p['ft'] + p['fb'] - self.PAD_H) / 2.0
-        p['lpad'] = center_pad
-        p['rpad'] = center_pad
+        center_pad = (p["ft"] + p["fb"] - self.PAD_H) / 2.0
+        p["lpad"] = center_pad
+        p["rpad"] = center_pad
 
     # ------------------------------------------------------------------
     # Core update
@@ -172,19 +173,19 @@ class Pong:
     def _ai_paddle_target(self, side):
         """Where the AI wants its paddle top.  side: 0 = left, 1 = right."""
         p = self._pong
-        x, y = p['ball']
+        x, y = p["ball"]
         w = self.width
-        centre = (p['ft'] + p['fb'] - self.PAD_H) / 2.0
-        approaching = p['v'][0] < 0 if side == 0 else p['v'][0] > 0
+        centre = (p["ft"] + p["fb"] - self.PAD_H) / 2.0
+        approaching = p["v"][0] < 0 if side == 0 else p["v"][0] > 0
         on_my_half = x < w // 2 if side == 0 else x + self.BALL > w // 2
-        if p['v'][0] != 0 and approaching and on_my_half:
-            aim = p['aim_l'] if side == 0 else p['aim_r']
+        if p["v"][0] != 0 and approaching and on_my_half:
+            aim = p["aim_l"] if side == 0 else p["aim_r"]
             return y + self.BALL // 2 - self.PAD_H // 2 + aim
         return centre
 
     def _move_paddle(self, key, target, speed, dt):
         p = self._pong
-        target = max(p['ft'], min(p['fb'] - self.PAD_H, float(target)))
+        target = max(p["ft"], min(p["fb"] - self.PAD_H, float(target)))
         max_move = speed * dt
         delta = max(-max_move, min(max_move, target - p[key]))
         p[key] += delta
@@ -199,7 +200,7 @@ class Pong:
 
     def _scatter_flip(self, name, density):
         inst = self._instruments[name]
-        r0, r1, c0, c1 = inst['area']
+        r0, r1, c0, c1 = inst["area"]
         if density >= 1.0:
             self.state[r0:r1, c0:c1] ^= 1
             return
@@ -210,8 +211,8 @@ class Pong:
         inst = self._instruments.get(name)
         if inst is None:
             return
-        self._scatter_flip(name, inst['density'])
-        for i, tail_density in enumerate(inst['decay']):
+        self._scatter_flip(name, inst["density"])
+        for i, tail_density in enumerate(inst["decay"]):
             self._decay_events.append((now + (i + 1) * 0.05, name, tail_density))
 
     def _update_match(self, now, dt):
@@ -220,91 +221,106 @@ class Pong:
         self._tick_decay(now)
 
         # Age and prune impact effects.
-        p['fx'] = [f for f in p['fx'] if f['until'] > now]
+        p["fx"] = [f for f in p["fx"] if f["until"] > now]
 
-        if p['winner'] is not None:
+        if p["winner"] is not None:
             return
 
-        if p['serve_until'] is not None:
+        if p["serve_until"] is not None:
             # Keep both paddles centered while waiting for the next serve.
             self._center_paddles()
-            if now >= p['serve_until'] and p['v'][0] == 0.0 and p['v'][1] == 0.0:
+            if now >= p["serve_until"] and p["v"][0] == 0.0 and p["v"][1] == 0.0:
                 # Clear celebration/percussion residue in the launch frame.
                 self.state[:, :] = 0
                 self._decay_events = []
-                p['celebration'] = None
-                p['ball'] = [self.width / 2.0 - self.BALL / 2.0,
-                             (p['ft'] + p['fb'] - self.BALL) / 2.0]
-                speed = self.BASE_BALL_SPEED * (1.0 + 0.05 * min(p['rally'], 10))
-                p['v'] = [speed * p['serve_dir'],
-                          float(self.rng.integers(-1, 2)) * speed * 0.5]
-                p['aim_l'], p['aim_r'] = self._new_aim(), self._new_aim()
-                p['fx'].append({'kind': 'serve', 'start': now, 'until': now + 0.12})
-                p['serve_until'] = None
+                p["celebration"] = None
+                p["ball"] = [
+                    self.width / 2.0 - self.BALL / 2.0,
+                    (p["ft"] + p["fb"] - self.BALL) / 2.0,
+                ]
+                speed = self.BASE_BALL_SPEED * (1.0 + 0.05 * min(p["rally"], 10))
+                p["v"] = [speed * p["serve_dir"], float(self.rng.integers(-1, 2)) * speed * 0.5]
+                p["aim_l"], p["aim_r"] = self._new_aim(), self._new_aim()
+                p["fx"].append({"kind": "serve", "start": now, "until": now + 0.12})
+                p["serve_until"] = None
             return
 
         if self._left_controller_active(now):
-            self._move_paddle('lpad', self._left_controller_target, self.CONTROLLER_SPEED, dt)
+            self._move_paddle("lpad", self._left_controller_target, self.CONTROLLER_SPEED, dt)
         else:
-            self._move_paddle('lpad', self._ai_paddle_target(0), self.AI_SPEED, dt)
+            self._move_paddle("lpad", self._ai_paddle_target(0), self.AI_SPEED, dt)
         if self._human_active(now) and self._human_target is not None:
             controller_active = (
                 self._last_controller_input_time is not None
                 and now - self._last_controller_input_time < self.AI_TAKEOVER_DELAY
             )
             speed = self.CONTROLLER_SPEED if controller_active else self.PLAYER_SPEED
-            self._move_paddle('rpad', self._human_target, speed, dt)
+            self._move_paddle("rpad", self._human_target, speed, dt)
         else:
-            self._move_paddle('rpad', self._ai_paddle_target(1), self.AI_SPEED, dt)
+            self._move_paddle("rpad", self._ai_paddle_target(1), self.AI_SPEED, dt)
 
         # Ball flight (continuous).
-        x, y = p['ball']
-        vx, vy = p['v']
+        x, y = p["ball"]
+        vx, vy = p["v"]
         x_old = x
         y += vy * dt
         x = x_old + vx * dt
 
         # Walls
-        if y < p['ft']:
-            y = 2 * p['ft'] - y
+        if y < p["ft"]:
+            y = 2 * p["ft"] - y
             vy = -vy
-            p['fx'].append({'kind': 'wall', 'x': x, 'top': True,
-                            'start': now, 'until': now + 0.08})
-        elif y + self.BALL > p['fb']:
-            y = 2 * (p['fb'] - self.BALL) - y
+            p["fx"].append({"kind": "wall", "x": x, "top": True, "start": now, "until": now + 0.08})
+        elif y + self.BALL > p["fb"]:
+            y = 2 * (p["fb"] - self.BALL) - y
             vy = -vy
-            p['fx'].append({'kind': 'wall', 'x': x, 'top': False,
-                            'start': now, 'until': now + 0.08})
+            p["fx"].append(
+                {"kind": "wall", "x": x, "top": False, "start": now, "until": now + 0.08}
+            )
 
         # Left paddle plane.
         lplane = self.PAD_W
         if vx < 0 and x_old > lplane >= x:
-            if y + self.BALL > p['lpad'] and y < p['lpad'] + self.PAD_H:
+            if y + self.BALL > p["lpad"] and y < p["lpad"] + self.PAD_H:
                 x = lplane
                 vx = -vx
-                p['rally'] += 1
-                speed = self.BASE_BALL_SPEED * (1.0 + 0.05 * min(p['rally'], 10))
+                p["rally"] += 1
+                speed = self.BASE_BALL_SPEED * (1.0 + 0.05 * min(p["rally"], 10))
                 vx = speed
-                vy = self._english(y, p['lpad'], speed)
-                p['aim_r'] = self._new_aim()
-                p['fx'].append({'kind': 'pad', 'start': now, 'until': now + 0.18,
-                                'side': 0, 'y': p['lpad'],
-                                'cy': y + self.BALL // 2})
+                vy = self._english(y, p["lpad"], speed)
+                p["aim_r"] = self._new_aim()
+                p["fx"].append(
+                    {
+                        "kind": "pad",
+                        "start": now,
+                        "until": now + 0.18,
+                        "side": 0,
+                        "y": p["lpad"],
+                        "cy": y + self.BALL // 2,
+                    }
+                )
 
         # Right paddle plane.
         rplane = self.width - self.PAD_W
         if vx > 0 and x_old + self.BALL < rplane <= x + self.BALL:
-            if y + self.BALL > p['rpad'] and y < p['rpad'] + self.PAD_H:
+            if y + self.BALL > p["rpad"] and y < p["rpad"] + self.PAD_H:
                 x = rplane - self.BALL
                 vx = -vx
-                p['rally'] += 1
-                speed = self.BASE_BALL_SPEED * (1.0 + 0.05 * min(p['rally'], 10))
+                p["rally"] += 1
+                speed = self.BASE_BALL_SPEED * (1.0 + 0.05 * min(p["rally"], 10))
                 vx = -speed
-                vy = self._english(y, p['rpad'], speed)
-                p['aim_l'] = self._new_aim()
-                p['fx'].append({'kind': 'pad', 'start': now, 'until': now + 0.18,
-                                'side': 1, 'y': p['rpad'],
-                                'cy': y + self.BALL // 2})
+                vy = self._english(y, p["rpad"], speed)
+                p["aim_l"] = self._new_aim()
+                p["fx"].append(
+                    {
+                        "kind": "pad",
+                        "start": now,
+                        "until": now + 0.18,
+                        "side": 1,
+                        "y": p["rpad"],
+                        "cy": y + self.BALL // 2,
+                    }
+                )
 
         # Goals
         if x + self.BALL <= 0:
@@ -312,8 +328,8 @@ class Pong:
         elif x >= self.width:
             self._point(0, now, self.width - 1, y + self.BALL // 2)
         else:
-            p['ball'] = [x, y]
-            p['v'] = [vx, vy]
+            p["ball"] = [x, y]
+            p["v"] = [vx, vy]
 
     def _english(self, ball_y, pad_y, speed):
         """Bounce angle from where the ball met the paddle."""
@@ -328,33 +344,33 @@ class Pong:
     def _point(self, side, now, exit_x, exit_y):
         """side scored: shockwave rings roll out of the goal mouth."""
         p = self._pong
-        p['score'][side] += 1
-        p['rally'] = 0
-        p['fx'].append({'kind': 'burst', 'start': now, 'until': now + 0.95,
-                        'cx': exit_x, 'cy': exit_y})
-        self._start_celebration('point', side, now, exit_x, exit_y)
-        if p['score'][side] >= self.WIN_SCORE:
+        p["score"][side] += 1
+        p["rally"] = 0
+        p["fx"].append(
+            {"kind": "burst", "start": now, "until": now + 0.95, "cx": exit_x, "cy": exit_y}
+        )
+        self._start_celebration("point", side, now, exit_x, exit_y)
+        if p["score"][side] >= self.WIN_SCORE:
             self._trigger_win(side, now)
             return
 
         # Serve toward the player who just lost the point
-        p['serve_dir'] = -1 if side == 1 else 1
+        p["serve_dir"] = -1 if side == 1 else 1
         self._center_paddles()
-        self._human_target = (p['ft'] + p['fb'] - self.PAD_H) / 2.0
-        p['ball'] = [self.width / 2.0 - self.BALL / 2.0,
-                     (p['ft'] + p['fb'] - self.BALL) / 2.0]
-        p['v'] = [0.0, 0.0]
-        p['serve_until'] = now + self.POINT_SERVE_DELAY
+        self._human_target = (p["ft"] + p["fb"] - self.PAD_H) / 2.0
+        p["ball"] = [self.width / 2.0 - self.BALL / 2.0, (p["ft"] + p["fb"] - self.BALL) / 2.0]
+        p["v"] = [0.0, 0.0]
+        p["serve_until"] = now + self.POINT_SERVE_DELAY
 
     def _trigger_win(self, side, now):
         p = self._pong
-        p['winner'] = side
-        p['win_time'] = now
+        p["winner"] = side
+        p["win_time"] = now
         human_won = side == 1 and self._human_active(now)
-        p['win_text'] = 'YOU WIN' if human_won else 'AI WINS'
+        p["win_text"] = "YOU WIN" if human_won else "AI WINS"
         exit_x = 0 if side == 1 else self.width - 1
-        exit_y = p['ball'][1] + self.BALL // 2
-        self._start_celebration('win', side, now, exit_x, exit_y)
+        exit_y = p["ball"][1] + self.BALL // 2
+        self._start_celebration("win", side, now, exit_x, exit_y)
 
     def _restart_match(self):
         self._left_raise_armed = False
@@ -362,87 +378,85 @@ class Pong:
         self._reset_match(self.song_start_time)
 
     def _start_celebration(self, kind, side, now, exit_x, exit_y):
-        duration = (self.WIN_FANFARE_TIME if kind == 'win'
-                    else self.POINT_CELEBRATION_TIME)
-        self._pong['celebration'] = {
-            'kind': kind,
-            'side': side,
-            'start': now,
-            'duration': duration,
-            'cx': int(exit_x),
-            'cy': int(max(0, min(self.height - 1, exit_y))),
-            'score': tuple(self._pong['score']),
+        duration = self.WIN_FANFARE_TIME if kind == "win" else self.POINT_CELEBRATION_TIME
+        self._pong["celebration"] = {
+            "kind": kind,
+            "side": side,
+            "start": now,
+            "duration": duration,
+            "cx": int(exit_x),
+            "cy": int(max(0, min(self.height - 1, exit_y))),
+            "score": tuple(self._pong["score"]),
         }
-        if kind == 'win':
-            names = (['crash', 'clap', 'tom', 'kick', 'clap', 'crash']
-                     if side == 1
-                     else ['crash', 'kick', 'tom', 'clap', 'kick', 'crash'])
+        if kind == "win":
+            names = (
+                ["crash", "clap", "tom", "kick", "clap", "crash"]
+                if side == 1
+                else ["crash", "kick", "tom", "clap", "kick", "crash"]
+            )
             offsets = [0.0, 0.16, 0.32, 0.50, 0.72, 1.02]
         else:
-            names = (['crash', 'clap', 'tom', 'crash'] if side == 1
-                     else ['crash', 'kick', 'tom', 'clap'])
+            names = (
+                ["crash", "clap", "tom", "crash"] if side == 1 else ["crash", "kick", "tom", "clap"]
+            )
             offsets = [0.0, 0.14, 0.30, 0.48]
-        self._celebration_hits = [(now + offset, name)
-                                  for offset, name in zip(offsets, names)]
+        self._celebration_hits = [
+            (now + offset, name) for offset, name in zip(offsets, names, strict=True)
+        ]
 
     def _render_celebration(self, now):
-        celebration = self._pong.get('celebration')
+        celebration = self._pong.get("celebration")
         if celebration is None:
             return None
-        elapsed = now - celebration['start']
-        if elapsed >= celebration['duration']:
-            if celebration['kind'] != 'win':
-                self._pong['celebration'] = None
+        elapsed = now - celebration["start"]
+        if elapsed >= celebration["duration"]:
+            if celebration["kind"] != "win":
+                self._pong["celebration"] = None
             return None
 
         height, width = self.height, self.width
         frame = np.zeros((height, width), dtype=np.uint8)
         yy, xx = np.ogrid[:height, :width]
-        origin_x, origin_y = celebration['cx'], celebration['cy']
-        progress = max(0.0, min(1.0, elapsed / celebration['duration']))
-        score_side = celebration['side']
+        origin_x, origin_y = celebration["cx"], celebration["cy"]
+        progress = max(0.0, min(1.0, elapsed / celebration["duration"]))
+        score_side = celebration["side"]
         human_scored = score_side == 1
 
         distance2 = (yy - origin_y) ** 2 + (xx - origin_x) ** 2
         lead = 3 + int(progress * (width + height))
         for radius in (lead, lead - 7, lead - 14):
             if radius > 1:
-                frame[(distance2 >= (radius - 1) ** 2)
-                      & (distance2 <= (radius + 1) ** 2)] = 1
+                frame[(distance2 >= (radius - 1) ** 2) & (distance2 <= (radius + 1) ** 2)] = 1
 
-        if celebration['kind'] == 'point':
-            self._draw_point_celebration(frame, celebration, elapsed,
-                                         progress, human_scored)
+        if celebration["kind"] == "point":
+            self._draw_point_celebration(frame, celebration, elapsed, progress, human_scored)
         else:
-            self._draw_win_celebration(frame, celebration, elapsed,
-                                       progress, human_scored)
+            self._draw_win_celebration(frame, celebration, elapsed, progress, human_scored)
         return frame
 
-    def _draw_point_celebration(self, frame, celebration, elapsed, progress,
-                                human_scored):
+    def _draw_point_celebration(self, frame, celebration, elapsed, progress, human_scored):
         height, width = self.height, self.width
         yy, xx = np.indices((height, width))
         sweep = int(progress * (height + 8))
         if human_scored:
-            frame[height - min(height, sweep):height, :] = 1
+            frame[height - min(height, sweep) : height, :] = 1
             frame[((yy + xx + int(elapsed * 18)) % 6) < 2] ^= 1
         else:
-            frame[:min(height, sweep), :] = 1
+            frame[: min(height, sweep), :] = 1
             frame[((yy - xx + int(elapsed * 18)) % 6) < 2] ^= 1
 
         band_width = max(3, int(width * (1.0 - progress)))
         if human_scored:
-            frame[:, max(0, width - band_width):width] = 1
+            frame[:, max(0, width - band_width) : width] = 1
         else:
-            frame[:, 0:min(width, band_width)] = 1
+            frame[:, 0 : min(width, band_width)] = 1
 
         if 0.28 <= elapsed <= 0.75:
-            self._draw_big_score(frame, celebration['score'])
+            self._draw_big_score(frame, celebration["score"])
         if elapsed >= 0.75 and int(elapsed * 12) % 2 == 0:
-            frame[height // 2 - 2:height // 2 + 2, :] = 1
+            frame[height // 2 - 2 : height // 2 + 2, :] = 1
 
-    def _draw_win_celebration(self, frame, celebration, elapsed, progress,
-                              human_won):
+    def _draw_win_celebration(self, frame, celebration, elapsed, progress, human_won):
         height, width = self.height, self.width
         yy, xx = np.indices((height, width))
         center_y, center_x = height // 2, width // 2
@@ -462,7 +476,7 @@ class Pong:
             frame[(yy - xx + beat) % 4 == 0] = 1
 
         if elapsed >= 1.05:
-            msg = self._pong['win_text']
+            msg = self._pong["win_text"]
             text.write_centered(frame, msg, y=6, size=5, style="regular")
         if elapsed >= 1.45 and int(elapsed * 12) % 2 == 0:
             frame[:, :] ^= 1
@@ -473,7 +487,7 @@ class Pong:
 
     @staticmethod
     def _score_text(scores):
-        return '%d:%d' % (scores[0], scores[1])
+        return f"{scores[0]}:{scores[1]}"
 
     # ------------------------------------------------------------------
     # Rendering
@@ -484,65 +498,63 @@ class Pong:
         p = self._pong
         bg = np.zeros((h, w), dtype=np.uint8)
 
-        lpad = int(round(p['lpad']))
-        rpad = int(round(p['rpad']))
+        lpad = int(round(p["lpad"]))
+        rpad = int(round(p["rpad"]))
 
         # Paddles
-        bg[lpad:lpad + self.PAD_H, 0:self.PAD_W] = 1
-        bg[rpad:rpad + self.PAD_H, w - self.PAD_W:w] = 1
+        bg[lpad : lpad + self.PAD_H, 0 : self.PAD_W] = 1
+        bg[rpad : rpad + self.PAD_H, w - self.PAD_W : w] = 1
 
         # Ball blinks at centre during serve count-in.
         draw_ball = True
-        if p['serve_until'] is not None and now < p['serve_until']:
+        if p["serve_until"] is not None and now < p["serve_until"]:
             draw_ball = int(now * 8.0) % 2 == 0
-        if p['winner'] is None and draw_ball:
-            x, y = p['ball']
+        if p["winner"] is None and draw_ball:
+            x, y = p["ball"]
             xi = int(round(x))
             yi = int(round(y))
-            bg[max(0, yi):yi + self.BALL, max(0, xi):max(0, xi + self.BALL)] = 1
+            bg[max(0, yi) : yi + self.BALL, max(0, xi) : max(0, xi + self.BALL)] = 1
 
         # Impact effects, drawn where they happened.
-        for f in p['fx']:
-            if f['kind'] == 'pad':
-                face = self.PAD_W if f['side'] == 0 else w - self.PAD_W - 1
-                direction = 1 if f['side'] == 0 else -1
-                elapsed = now - f['start']
+        for f in p["fx"]:
+            if f["kind"] == "pad":
+                face = self.PAD_W if f["side"] == 0 else w - self.PAD_W - 1
+                direction = 1 if f["side"] == 0 else -1
+                elapsed = now - f["start"]
                 if elapsed < 0.08:
-                    r0 = max(p['ft'], int(round(f['y'])) - 2)
-                    r1 = min(p['fb'], int(round(f['y'])) + self.PAD_H + 2)
+                    r0 = max(p["ft"], int(round(f["y"])) - 2)
+                    r1 = min(p["fb"], int(round(f["y"])) + self.PAD_H + 2)
                     c0 = face if direction == 1 else face - 1
-                    bg[r0:r1, max(0, c0):c0 + 2] = 1
+                    bg[r0:r1, max(0, c0) : c0 + 2] = 1
                 else:
                     rad = 5
                     for dr in range(-rad, rad + 1):
                         dc = int(round((rad * rad - dr * dr) ** 0.5))
-                        rr = int(round(f['cy'])) + dr
-                        for cc in (face + direction * dc,
-                                   face + direction * max(0, dc - 1)):
-                            if p['ft'] <= rr < p['fb'] and 0 <= cc < w:
+                        rr = int(round(f["cy"])) + dr
+                        for cc in (face + direction * dc, face + direction * max(0, dc - 1)):
+                            if p["ft"] <= rr < p["fb"] and 0 <= cc < w:
                                 bg[rr, cc] = 1
-            elif f['kind'] == 'wall':
-                c0 = max(0, int(round(f['x'])) - 4)
-                if f['top']:
-                    bg[p['ft']:p['ft'] + 2, c0:c0 + 10] = 1
+            elif f["kind"] == "wall":
+                c0 = max(0, int(round(f["x"])) - 4)
+                if f["top"]:
+                    bg[p["ft"] : p["ft"] + 2, c0 : c0 + 10] = 1
                 else:
-                    bg[p['fb'] - 2:p['fb'], c0:c0 + 10] = 1
-            elif f['kind'] == 'burst':
+                    bg[p["fb"] - 2 : p["fb"], c0 : c0 + 10] = 1
+            elif f["kind"] == "burst":
                 # Double shockwave from the goal mouth.
-                progress = max(0.0, min(1.0, (now - f['start']) / (f['until'] - f['start'])))
+                progress = max(0.0, min(1.0, (now - f["start"]) / (f["until"] - f["start"])))
                 yy, xx = np.ogrid[:h, :w]
-                d2 = (yy - f['cy']) ** 2 + (xx - f['cx']) ** 2
+                d2 = (yy - f["cy"]) ** 2 + (xx - f["cx"]) ** 2
                 lead = 4 + int(progress * (w + h))
                 for rad in (lead, lead - 9):
                     if rad > 2:
-                        bg[(d2 >= (rad - 1) ** 2)
-                           & (d2 <= (rad + 1) ** 2)] = 1
-            elif f['kind'] == 'serve':
-                mr = (p['ft'] + p['fb']) // 2
-                bg[mr - 3:mr + 3, w // 2 - 3:w // 2 + 3] = 1
+                        bg[(d2 >= (rad - 1) ** 2) & (d2 <= (rad + 1) ** 2)] = 1
+            elif f["kind"] == "serve":
+                mr = (p["ft"] + p["fb"]) // 2
+                bg[mr - 3 : mr + 3, w // 2 - 3 : w // 2 + 3] = 1
 
         # Score digits at the top (drawn last, over the ball — classic)
-        score_str = self._score_text(p['score'])
+        score_str = self._score_text(p["score"])
         text.write_centered(bg, score_str, y=1, size=5, style="regular")
         return bg
 
@@ -552,19 +564,18 @@ class Pong:
 
     def _handle_gestures(self, pose_results, now):
         p = self._pong
-        if p['winner'] is not None:
+        if p["winner"] is not None:
             left_raised = human_pose.is_left_hand_raised(pose_results)
             if left_raised and self._left_raise_armed:
                 self._restart_match()
             elif not left_raised:
                 self._left_raise_armed = True
-            if p['win_time'] is not None and now - p['win_time'] >= self.WIN_RESTART_TIME:
+            if p["win_time"] is not None and now - p["win_time"] >= self.WIN_RESTART_TIME:
                 self._restart_match()
             return
 
         person_present = (
-            pose_results is not None
-            and getattr(pose_results, 'pose_landmarks', None) is not None
+            pose_results is not None and getattr(pose_results, "pose_landmarks", None) is not None
         )
         if not person_present:
             return
@@ -572,10 +583,10 @@ class Pong:
         _, finger_y = human_pose.get_right_index_finger_position(pose_results)
         if finger_y is not None:
             # Finger height -> paddle center target.
-            self._human_target = (finger_y * (p['fb'] - p['ft'])
-                                  + p['ft'] - self.PAD_H / 2)
+            self._human_target = finger_y * (p["fb"] - p["ft"]) + p["ft"] - self.PAD_H / 2
 
-    def get_frame(self, pose_results):
+    def get_frame(self, pose_results: Any) -> Frame:
+        """Step physics, fire celebration percussion, and render the court."""
         now = time.time()
         dt = min(self.MAX_DT, max(0.0, now - self._last_frame_time))
         self._last_frame_time = now
@@ -586,8 +597,7 @@ class Pong:
         self._update_match(now, dt)
 
         due = [e for e in self._celebration_hits if e[0] <= now]
-        self._celebration_hits = [e for e in self._celebration_hits
-                                  if e[0] > now]
+        self._celebration_hits = [e for e in self._celebration_hits if e[0] > now]
         for _, instrument_name in due:
             self._hit(instrument_name, now)
 
@@ -601,24 +611,25 @@ class Pong:
         # Mode name overlay for the first 2 s
         if celebration_frame is None and now - self.song_start_time < self.MODE_NAME_TIME:
             frame[:6, :] = 0
-            text.write(frame, 'PONG', x=1, y=0, size=5, style="regular")
+            text.write(frame, "PONG", x=1, y=0, size=5, style="regular")
 
         # Win screen: fanfare plays over the final court for a moment,
         # then the static result
-        if p['winner'] is not None and now - p['win_time'] >= self.WIN_FANFARE_TIME:
+        if p["winner"] is not None and now - p["win_time"] >= self.WIN_FANFARE_TIME:
             frame[:, :] = 0
-            msg = p['win_text']
+            msg = p["win_text"]
             text.write_centered(frame, msg, y=6, size=5, style="regular")
-            score_str = self._score_text(p['score'])
+            score_str = self._score_text(p["score"])
             text.write_centered(frame, score_str, y=15, size=6, style="regular")
 
         return frame
 
-    def set_controller_target(self, norm_y, side="right"):
+    def set_controller_target(self, norm_y: float, side: str = "right") -> None:
+        """Aim a paddle from the controller; ``side`` is ``"left"`` or ``"right"``."""
         p = self._pong
         normalized = max(0.0, min(1.0, float(norm_y)))
-        playable_span = p['fb'] - p['ft']
-        target = (normalized * playable_span) + p['ft'] - self.PAD_H / 2
+        playable_span = p["fb"] - p["ft"]
+        target = (normalized * playable_span) + p["ft"] - self.PAD_H / 2
         now = time.time()
         if side == "left":
             self._left_controller_target = target
@@ -628,6 +639,7 @@ class Pong:
         self._human_target = target
         self._last_controller_input_time = now
 
-    def restart_if_game_over(self):
-        if self._pong.get('winner') is not None:
+    def restart_if_game_over(self) -> None:
+        """Start a fresh match if the current one has already been won."""
+        if self._pong.get("winner") is not None:
             self._restart_match()

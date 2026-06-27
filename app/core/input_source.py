@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import threading
 import time
-from typing import Iterable, List, Optional
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any
 
 import app.services.human_pose as human_pose
 
 
 @dataclass(frozen=True)
 class PointerSample:
+    """A normalized (0..1) pointer position reported by an input source."""
+
     source: str
     x: float
     y: float
@@ -18,6 +21,8 @@ class PointerSample:
 
 @dataclass(frozen=True)
 class InputAction:
+    """A named action (e.g. a button press) reported by an input source."""
+
     source: str
     action: str
     timestamp: float
@@ -25,6 +30,8 @@ class InputAction:
 
 @dataclass(frozen=True)
 class PointerClick:
+    """A discrete click at a normalized (0..1) position from an input source."""
+
     source: str
     x: float
     y: float
@@ -38,10 +45,13 @@ class InputHub:
         self._lock = threading.Lock()
         self._latest_pointer_by_source: dict[str, PointerSample] = {}
         self._button_down_by_source: dict[str, bool] = {}
-        self._actions: List[InputAction] = []
-        self._clicks: List[PointerClick] = []
+        self._actions: list[InputAction] = []
+        self._clicks: list[PointerClick] = []
 
-    def submit_pointer(self, *, source: str, x: float, y: float, timestamp: Optional[float] = None) -> None:
+    def submit_pointer(
+        self, *, source: str, x: float, y: float, timestamp: float | None = None
+    ) -> None:
+        """Record the latest pointer position for ``source`` (coords clamped to 0..1)."""
         ts = time.monotonic() if timestamp is None else timestamp
         clamped_x = max(0.0, min(1.0, float(x)))
         clamped_y = max(0.0, min(1.0, float(y)))
@@ -50,23 +60,30 @@ class InputHub:
             self._latest_pointer_by_source[source] = sample
 
     def clear_pointer(self, source: str) -> None:
+        """Forget the last pointer position reported by ``source``."""
         with self._lock:
             self._latest_pointer_by_source.pop(source, None)
 
-    def submit_action(self, *, source: str, action: str, timestamp: Optional[float] = None) -> None:
+    def submit_action(self, *, source: str, action: str, timestamp: float | None = None) -> None:
+        """Queue a named action from ``source`` for the next ``pop_actions`` read."""
         ts = time.monotonic() if timestamp is None else timestamp
         with self._lock:
             self._actions.append(InputAction(source=source, action=action, timestamp=ts))
 
     def set_button_down(self, *, source: str, is_down: bool) -> None:
+        """Set the held/released state of ``source``'s primary button."""
         with self._lock:
             self._button_down_by_source[source] = bool(is_down)
 
     def is_button_down(self, *, source: str) -> bool:
+        """Return whether ``source``'s primary button is currently held."""
         with self._lock:
             return self._button_down_by_source.get(source, False)
 
-    def submit_click(self, *, source: str, x: float, y: float, timestamp: Optional[float] = None) -> None:
+    def submit_click(
+        self, *, source: str, x: float, y: float, timestamp: float | None = None
+    ) -> None:
+        """Queue a discrete click from ``source`` for the next ``pop_clicks`` read."""
         ts = time.monotonic() if timestamp is None else timestamp
         click = PointerClick(
             source=source,
@@ -77,7 +94,8 @@ class InputHub:
         with self._lock:
             self._clicks.append(click)
 
-    def ingest_pose(self, pose_results) -> None:
+    def ingest_pose(self, pose_results: Any) -> None:
+        """Update the ``"pose"`` pointer from the right index finger, or clear it if absent."""
         finger_x, finger_y = human_pose.get_right_index_finger_position(pose_results)
         if finger_x is None or finger_y is None:
             self.clear_pointer("pose")
@@ -88,18 +106,17 @@ class InputHub:
         self,
         *,
         max_age_sec: float = 1.0,
-        allowed_sources: Optional[Iterable[str]] = None,
-    ) -> Optional[PointerSample]:
+        allowed_sources: Iterable[str] | None = None,
+    ) -> PointerSample | None:
+        """Return the newest fresh pointer (within ``max_age_sec``), optionally source-filtered."""
         now = time.monotonic()
         allowed = set(allowed_sources) if allowed_sources is not None else None
         with self._lock:
             if not self._latest_pointer_by_source:
                 return None
-            samples = self._latest_pointer_by_source.values()
+            samples = list(self._latest_pointer_by_source.values())
             if allowed is not None:
                 samples = [sample for sample in samples if sample.source in allowed]
-            else:
-                samples = list(samples)
             if not samples:
                 return None
             newest = max(samples, key=lambda sample: sample.timestamp)
@@ -111,15 +128,16 @@ class InputHub:
         self,
         *,
         max_age_sec: float = 2.0,
-        allowed_sources: Optional[Iterable[str]] = None,
-    ) -> List[InputAction]:
+        allowed_sources: Iterable[str] | None = None,
+    ) -> list[InputAction]:
+        """Drain and return actions newer than ``max_age_sec``, optionally source-filtered."""
         now = time.monotonic()
         allowed = set(allowed_sources) if allowed_sources is not None else None
         with self._lock:
             actions = self._actions
             self._actions = []
 
-        fresh_actions: List[InputAction] = []
+        fresh_actions: list[InputAction] = []
         for action in actions:
             if now - action.timestamp <= max_age_sec:
                 if allowed is not None and action.source not in allowed:
@@ -131,15 +149,16 @@ class InputHub:
         self,
         *,
         max_age_sec: float = 1.0,
-        allowed_sources: Optional[Iterable[str]] = None,
-    ) -> List[PointerClick]:
+        allowed_sources: Iterable[str] | None = None,
+    ) -> list[PointerClick]:
+        """Drain and return clicks newer than ``max_age_sec``, optionally source-filtered."""
         now = time.monotonic()
         allowed = set(allowed_sources) if allowed_sources is not None else None
         with self._lock:
             clicks = self._clicks
             self._clicks = []
 
-        fresh_clicks: List[PointerClick] = []
+        fresh_clicks: list[PointerClick] = []
         for click in clicks:
             if now - click.timestamp <= max_age_sec:
                 if allowed is not None and click.source not in allowed:

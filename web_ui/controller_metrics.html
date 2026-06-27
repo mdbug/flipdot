@@ -7,7 +7,10 @@
     <link rel="stylesheet" href="/static/styles.css" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js" defer></script>
     <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js" defer></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js" defer></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"
+      defer
+    ></script>
     <script src="/static/controller_metrics.js?v=20260621-ble-quality-suite" defer></script>
   </head>
   <body class="metrics-body">
@@ -16,7 +19,9 @@
         <div>
           <p class="eyebrow">Controller telemetry</p>
           <h1>Connection Metrics</h1>
-          <p class="metrics-subtitle">Rolling in-memory history from the running flipdot process.</p>
+          <p class="metrics-subtitle">
+            Rolling in-memory history from the running flipdot process.
+          </p>
         </div>
         <nav class="metrics-nav" aria-label="Console pages">
           <a class="console-link" href="/">Live Console</a>
@@ -27,15 +32,23 @@
       <section id="metricsSummary" class="metrics-summary" aria-live="polite"></section>
 
       <div id="metricsLibraryWarning" class="metrics-warning hidden">
-        Chart library unavailable. Connect this browser to the internet or vendor Chart.js locally to enable graphs.
+        Chart library unavailable. Connect this browser to the internet or vendor Chart.js locally
+        to enable graphs.
       </div>
 
       <section class="metrics-toolbar" aria-label="Timeline controls">
         <div class="metrics-toolbar-controls">
           <button id="metricsResetZoom" class="secondary" type="button">Reset Window</button>
-          <div id="metricsWindowPresets" class="metrics-window-presets" role="group" aria-label="Rolling window presets"></div>
+          <div
+            id="metricsWindowPresets"
+            class="metrics-window-presets"
+            role="group"
+            aria-label="Rolling window presets"
+          ></div>
         </div>
-        <span class="metrics-note">Mouse wheel adjusts window size. Right edge always tracks current time.</span>
+        <span class="metrics-note"
+          >Mouse wheel adjusts window size. Right edge always tracks current time.</span
+        >
       </section>
 
       <section class="metrics-grid" aria-label="Controller graphs">

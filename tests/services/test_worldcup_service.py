@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+
 import app.services.worldcup as worldcup_module
 
 
@@ -439,9 +440,20 @@ def test_choose_live_and_latest_finished():
     assert worldcup_module._choose_latest_finished([e1, f1, f2])["event_id"] == "4"
 
 
-def _espn_event(event_id, state, home, away, *, home_score=None, away_score=None,
-                status_name="STATUS_IN_PROGRESS", display_clock="0'", date="2026-06-26T19:00Z",
-                home_shootout=None, away_shootout=None):
+def _espn_event(
+    event_id,
+    state,
+    home,
+    away,
+    *,
+    home_score=None,
+    away_score=None,
+    status_name="STATUS_IN_PROGRESS",
+    display_clock="0'",
+    date="2026-06-26T19:00Z",
+    home_shootout=None,
+    away_shootout=None,
+):
     return {
         "id": event_id,
         "name": f"{home} vs {away}",
@@ -473,8 +485,14 @@ def _espn_event(event_id, state, home, away, *, home_score=None, away_score=None
 
 def test_normalize_espn_event_live_maps_fields():
     raw = _espn_event(
-        "401", "in", ("France", "FRA"), ("Norway", "NOR"),
-        home_score=2, away_score=1, status_name="STATUS_IN_PROGRESS", display_clock="67'",
+        "401",
+        "in",
+        ("France", "FRA"),
+        ("Norway", "NOR"),
+        home_score=2,
+        away_score=1,
+        status_name="STATUS_IN_PROGRESS",
+        display_clock="67'",
     )
     event = worldcup_module._normalize_espn_event(raw)
 
@@ -507,9 +525,15 @@ def test_normalize_espn_event_halftime_and_scheduled():
 
 def test_normalize_espn_event_finished_with_penalty_shootout():
     raw = _espn_event(
-        "3", "post", ("Spain", "ESP"), ("Italy", "ITA"),
-        home_score=1, away_score=1, status_name="STATUS_FINAL_PENALTIES",
-        home_shootout=4, away_shootout=3,
+        "3",
+        "post",
+        ("Spain", "ESP"),
+        ("Italy", "ITA"),
+        home_score=1,
+        away_score=1,
+        status_name="STATUS_FINAL_PENALTIES",
+        home_shootout=4,
+        away_shootout=3,
     )
     event = worldcup_module._normalize_espn_event(raw)
 
@@ -529,12 +553,26 @@ def test_normalize_espn_event_falls_back_to_team_code_without_abbreviation():
 def test_get_espn_scorecard_selects_live(monkeypatch):
     payload = {
         "events": [
-            _espn_event("10", "post", ("A", "AAA"), ("B", "BBB"),
-                        home_score=0, away_score=0, status_name="STATUS_FULL_TIME",
-                        date="2026-06-25T19:00Z"),
-            _espn_event("11", "in", ("C", "CCC"), ("D", "DDD"),
-                        home_score=1, away_score=0, display_clock="55'",
-                        date="2026-06-26T19:00Z"),
+            _espn_event(
+                "10",
+                "post",
+                ("A", "AAA"),
+                ("B", "BBB"),
+                home_score=0,
+                away_score=0,
+                status_name="STATUS_FULL_TIME",
+                date="2026-06-25T19:00Z",
+            ),
+            _espn_event(
+                "11",
+                "in",
+                ("C", "CCC"),
+                ("D", "DDD"),
+                home_score=1,
+                away_score=0,
+                display_clock="55'",
+                date="2026-06-26T19:00Z",
+            ),
         ]
     }
     monkeypatch.setattr(worldcup_module, "_fetch_espn_json", lambda url: payload)

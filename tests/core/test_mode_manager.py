@@ -82,7 +82,10 @@ def test_get_fps_limit_warmup_then_mode_specific(monkeypatch):
     assert manager.get_fps_limit() == 30
 
     fake.now = 56.0
-    assert manager.get_fps_limit() == mode_manager_module.ModeManager.MAX_FPS[mode_manager_module.ModeManager.MODE_CLOCK]
+    assert (
+        manager.get_fps_limit()
+        == mode_manager_module.ModeManager.MAX_FPS[mode_manager_module.ModeManager.MODE_CLOCK]
+    )
 
 
 def test_set_mode_updates_control_source_when_entered_via(monkeypatch):

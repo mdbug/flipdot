@@ -114,7 +114,8 @@ def test_set_mode_tool_drives_mode_manager():
 def test_set_mode_rejects_unknown_mode():
     mcp = _build(DummyModeManager(), DummyBoard(), DummyTransitionPolicy(), DummySettingsStore())
 
-    with pytest.raises(Exception):
+    # MCP wraps the rejection; only that it fails is the contract, not the wrapped type.
+    with pytest.raises(Exception):  # noqa: B017
         asyncio.run(mcp.call_tool("set_mode", {"mode": "not-a-real-mode"}))
 
 

@@ -1,13 +1,18 @@
 import numpy as np
 
-from app.services.fonts import available_sizes, available_styles, get_font_definition
+from app.services.fonts import (
+    FontDefinition,
+    available_sizes,
+    available_styles,
+    get_font_definition,
+)
 
 DEFAULT_FONT_FAMILY = "classic"
 DEFAULT_FONT_SIZE = 6
 DEFAULT_FONT_STYLE = "regular"
 
 
-def _get_font(font: str, size: int, style: str):
+def _get_font(font: str, size: int, style: str) -> FontDefinition:
     return get_font_definition(font, size, style)
 
 
@@ -23,15 +28,19 @@ def _get_glyph(font: str, size: int, style: str, char: str) -> np.ndarray:
 def write(
     frame: np.ndarray,
     text: str,
-    x=0,
-    y=0,
+    x: int = 0,
+    y: int = 0,
     *,
-    font=DEFAULT_FONT_FAMILY,
-    size=DEFAULT_FONT_SIZE,
-    style=DEFAULT_FONT_STYLE,
-    spacing=1,
-    color=1,
-):
+    font: str = DEFAULT_FONT_FAMILY,
+    size: int = DEFAULT_FONT_SIZE,
+    style: str = DEFAULT_FONT_STYLE,
+    spacing: int = 1,
+    color: int = 1,
+) -> None:
+    """Draw ``text`` onto ``frame`` at top-left (x, y), clipping at the edges.
+
+    ``color`` of 1 lights glyph pixels; any other value writes the inverse.
+    """
     font_def = _get_font(font, size, style)
     cell_w = font_def.cell_width
     cursor_x = int(x)
@@ -76,11 +85,12 @@ def write(
 def width(
     value: str,
     *,
-    font=DEFAULT_FONT_FAMILY,
-    size=DEFAULT_FONT_SIZE,
-    style=DEFAULT_FONT_STYLE,
-    spacing=1,
-):
+    font: str = DEFAULT_FONT_FAMILY,
+    size: int = DEFAULT_FONT_SIZE,
+    style: str = DEFAULT_FONT_STYLE,
+    spacing: int = 1,
+) -> int:
+    """Return the rendered pixel width of ``value`` in the given font."""
     if not value:
         return 0
 
@@ -88,9 +98,8 @@ def width(
     if font_def.cell_width is not None:
         return len(value) * font_def.cell_width + spacing * (len(value) - 1)
 
-    return (
-        sum(_get_glyph(font, size, style, ch).shape[1] for ch in value)
-        + spacing * (len(value) - 1)
+    return sum(_get_glyph(font, size, style, ch).shape[1] for ch in value) + spacing * (
+        len(value) - 1
     )
 
 
@@ -98,18 +107,15 @@ def center_x(
     frame_width: int,
     value: str,
     *,
-    font=DEFAULT_FONT_FAMILY,
-    size=DEFAULT_FONT_SIZE,
-    style=DEFAULT_FONT_STYLE,
-    spacing=1,
-):
+    font: str = DEFAULT_FONT_FAMILY,
+    size: int = DEFAULT_FONT_SIZE,
+    style: str = DEFAULT_FONT_STYLE,
+    spacing: int = 1,
+) -> int:
+    """Return the x offset that horizontally centers ``value`` in ``frame_width``."""
     return max(
         0,
-        (
-            frame_width
-            - width(value, font=font, size=size, style=style, spacing=spacing)
-        )
-        // 2,
+        (frame_width - width(value, font=font, size=size, style=style, spacing=spacing)) // 2,
     )
 
 
@@ -117,13 +123,14 @@ def write_centered(
     frame: np.ndarray,
     value: str,
     *,
-    y=0,
-    font=DEFAULT_FONT_FAMILY,
-    size=DEFAULT_FONT_SIZE,
-    style=DEFAULT_FONT_STYLE,
-    spacing=1,
-    color=1,
-):
+    y: int = 0,
+    font: str = DEFAULT_FONT_FAMILY,
+    size: int = DEFAULT_FONT_SIZE,
+    style: str = DEFAULT_FONT_STYLE,
+    spacing: int = 1,
+    color: int = 1,
+) -> None:
+    """Draw ``value`` horizontally centered on ``frame`` at row ``y``."""
     x = center_x(
         frame.shape[1],
         value,
@@ -147,14 +154,15 @@ def write_centered(
 
 def supported_characters(
     *,
-    font=DEFAULT_FONT_FAMILY,
-    sizes=None,
-    styles=None,
-):
+    font: str = DEFAULT_FONT_FAMILY,
+    sizes: list[int] | tuple[int, ...] | None = None,
+    styles: list[str] | tuple[str, ...] | None = None,
+) -> frozenset[str]:
+    """Return the set of characters renderable across the given sizes/styles."""
     if sizes is None:
         sizes = available_sizes(font)
 
-    chars = set()
+    chars: set[str] = set()
     for size in sizes:
         requested_styles = styles if styles is not None else available_styles(font, size)
         for style in requested_styles:

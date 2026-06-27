@@ -1,10 +1,13 @@
-import time
+import logging
 import re
 import threading
-import logging
+import time
+from typing import Any
 
 import numpy as np
 
+from app.core.mode_manager import ModeManager
+from app.modes.contracts import Frame
 from app.services.text import center_x, supported_characters, width, write, write_centered
 from app.services.worldcup import get_worldcup_scorecard
 
@@ -12,22 +15,29 @@ logger = logging.getLogger(__name__)
 
 
 class WorldCup:
+    """Display live World Cup scores, polling ESPN and flashing on goals.
+
+    An information mode (no pose interaction): it refreshes a scorecard on
+    a background thread, renders the selected match, and plays a brief goal
+    animation and score flash whenever a tracked score changes.
+    """
+
     REFRESH_INTERVAL = 20
     GOAL_ANIMATION_SEC = 5.0
     SCORE_FLASH_SEC = 5.0
     SCORE_FLASH_HZ = 1
 
-    def __init__(self, width, height, mode_manager):
+    def __init__(self, width: int, height: int, mode_manager: ModeManager) -> None:
         self.width = width
         self.height = height
         self.mode_manager = mode_manager
         self.allowed_chars = supported_characters(sizes=(5, 6), styles=("regular", "monospace"))
         self.last_refresh = 0.0
-        self.last_payload = None
-        self.known_scores = {}
+        self.last_payload: Any = None
+        self.known_scores: dict[Any, tuple[Any, Any]] = {}
         self.goal_animation_until = 0.0
         self.score_flash_until = 0.0
-        self.flashing_score_sides = {}
+        self.flashing_score_sides: dict[Any, tuple[bool, bool]] = {}
         self.frame = np.zeros((height, width), dtype=np.uint8)
         self._refresh_lock = threading.Lock()
         self._refresh_in_flight = False
@@ -338,7 +348,8 @@ class WorldCup:
                     with self._refresh_lock:
                         self._refresh_in_flight = False
 
-    def get_frame(self, pose_results):
+    def get_frame(self, pose_results: object) -> Frame:
+        """Refresh the scorecard if due and render the selected match."""
         del pose_results  # Pose is not needed for this information mode.
 
         self._refresh_if_needed()

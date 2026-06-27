@@ -19,7 +19,23 @@ const chartEls = {
 };
 
 const COLORS = ["#2ab7a9", "#ef6b55", "#7fb069", "#e2bf52"];
-const BUTTONS = ["A", "B", "X", "Y", "L1", "R1", "L2", "R2", "Start", "Select", "D-Up", "D-Down", "D-Left", "D-Right", "Home"];
+const BUTTONS = [
+  "A",
+  "B",
+  "X",
+  "Y",
+  "L1",
+  "R1",
+  "L2",
+  "R2",
+  "Start",
+  "Select",
+  "D-Up",
+  "D-Down",
+  "D-Left",
+  "D-Right",
+  "Home",
+];
 const charts = {};
 const MIN_WINDOW_SEC = 10;
 const WHEEL_ZOOM_FACTOR = 1.2;
@@ -33,17 +49,32 @@ const WINDOW_PRESETS = [
 let selectedWindowSec = null;
 let latestMetrics = null;
 
+/** Clamp a number to [min, max]. @param {number} value @param {number} min @param {number} max @returns {number} */
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+/**
+ * Format a Unix timestamp (seconds) as a local HH:MM:SS string.
+ * @param {number} timestamp - Seconds since the epoch.
+ * @returns {string} The formatted time, or "--" if invalid.
+ */
 function fmtTime(timestamp) {
   if (!Number.isFinite(timestamp)) {
     return "--";
   }
-  return new Date(timestamp * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return new Date(timestamp * 1000).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
+/**
+ * Format a duration in seconds compactly (e.g. "45s", "3m", "1.5h").
+ * @param {number} seconds
+ * @returns {string}
+ */
 function fmtDuration(seconds) {
   if (!Number.isFinite(seconds) || seconds <= 0) {
     return "0s";
@@ -57,6 +88,7 @@ function fmtDuration(seconds) {
   return `${(seconds / 3600).toFixed(1)}h`;
 }
 
+/** Format a millisecond value as "Nms" or "N.Ns". @param {number} value @returns {string} */
 function fmtMs(value) {
   if (!Number.isFinite(value)) {
     return "--";
@@ -67,6 +99,7 @@ function fmtMs(value) {
   return `${(value / 1000).toFixed(1)}s`;
 }
 
+/** Format a per-second rate as "N.NN/s". @param {number} value @returns {string} */
 function fmtRate(value) {
   if (!Number.isFinite(value)) {
     return "--";
@@ -74,6 +107,7 @@ function fmtRate(value) {
   return `${Number(value).toFixed(2)}/s`;
 }
 
+/** Format an idle duration in ms as "<1s" or a compact duration. @param {number} value @returns {string} */
 function fmtIdleMs(value) {
   if (!Number.isFinite(value)) {
     return "--";
@@ -84,6 +118,11 @@ function fmtIdleMs(value) {
   return fmtDuration(Number(value) / 1000);
 }
 
+/**
+ * Coerce a value to a finite number, or null if it isn't one.
+ * @param {*} value
+ * @returns {number|null}
+ */
 function metricNumber(value) {
   if (value === null || value === undefined || value === "") {
     return null;
@@ -92,6 +131,11 @@ function metricNumber(value) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+/**
+ * Coerce a raw metrics payload into a shape with guaranteed array fields.
+ * @param {Object} payload - The raw API payload.
+ * @returns {Object} Normalized metrics.
+ */
 function normalizeMetrics(payload) {
   return {
     generated_at: Number(payload.generated_at),
@@ -100,10 +144,17 @@ function normalizeMetrics(payload) {
     samples: Array.isArray(payload.samples) ? payload.samples : [],
     events: Array.isArray(payload.events) ? payload.events : [],
     button_events: Array.isArray(payload.button_events) ? payload.button_events : [],
-    panel_latency_events: Array.isArray(payload.panel_latency_events) ? payload.panel_latency_events : [],
+    panel_latency_events: Array.isArray(payload.panel_latency_events)
+      ? payload.panel_latency_events
+      : [],
   };
 }
 
+/**
+ * Collect the distinct controller keys present in summaries and samples.
+ * @param {Object} metrics - Normalized metrics.
+ * @returns {string[]} Ordered, deduplicated controller keys.
+ */
 function controllerKeys(metrics) {
   const keys = [];
   for (const controller of metrics.controllers) {
@@ -123,19 +174,35 @@ function controllerKeys(metrics) {
   return keys;
 }
 
+/**
+ * Resolve a human label for a controller key, falling back to "P{n}".
+ * @param {Object} metrics @param {string} key @param {number} index
+ * @returns {string}
+ */
 function controllerLabel(metrics, key, index) {
   const summary = metrics.controllers.find((item) => item.key === key);
   return summary && summary.label ? summary.label : `P${index + 1}`;
 }
 
+/**
+ * Find a controller's status within a sample.
+ * @param {Object} sample @param {string} key
+ * @returns {Object|null}
+ */
 function sampleStatus(sample, key) {
   return (sample.controllers || []).find((item) => item.key === key) || null;
 }
 
+/** @returns {boolean} Whether the Chart.js library is loaded. */
 function chartAvailable() {
   return typeof window.Chart === "function";
 }
 
+/**
+ * Return the active rolling-window length in seconds (selection clamped to data).
+ * @param {Object} metrics
+ * @returns {number}
+ */
 function effectiveWindowSec(metrics) {
   const maxWindowSec = Number(metrics.window_sec) > 0 ? Number(metrics.window_sec) : 3600;
   if (!Number.isFinite(selectedWindowSec)) {
@@ -144,6 +211,7 @@ function effectiveWindowSec(metrics) {
   return clamp(selectedWindowSec, MIN_WINDOW_SEC, maxWindowSec);
 }
 
+/** Render the window-length preset buttons, highlighting the active one. @param {Object} metrics */
 function renderWindowPresets(metrics) {
   if (!windowPresetsEl) {
     return;
@@ -171,12 +239,18 @@ function renderWindowPresets(metrics) {
   }
 }
 
+/**
+ * Compute the chart x-axis bounds (ms) for the active window.
+ * @param {Object} metrics
+ * @returns {{min: number, max: number}}
+ */
 function chartBounds(metrics) {
   const now = Number.isFinite(metrics.generated_at) ? metrics.generated_at : Date.now() / 1000;
   const start = now - effectiveWindowSec(metrics);
   return { min: start * 1000, max: now * 1000 };
 }
 
+/** Build a Chart.js time (linear, ms) x-axis config for the active window. @param {Object} metrics @returns {Object} */
 function timeScale(metrics) {
   const bounds = chartBounds(metrics);
   return {
@@ -192,6 +266,11 @@ function timeScale(metrics) {
   };
 }
 
+/**
+ * Build the shared Chart.js options with the given y-axis settings.
+ * @param {Object} metrics @param {Object} yOptions - y-axis scale config.
+ * @returns {Object} Chart.js options object.
+ */
 function baseOptions(metrics, yOptions) {
   return {
     responsive: true,
@@ -214,6 +293,14 @@ function baseOptions(metrics, yOptions) {
   };
 }
 
+/**
+ * Create a chart, or update an existing one in place by name.
+ * @param {string} name - Cache key for the chart.
+ * @param {HTMLCanvasElement} canvas - Target canvas.
+ * @param {string} type - Chart.js chart type.
+ * @param {Object} data - Chart datasets.
+ * @param {Object} options - Chart options.
+ */
 function upsertChart(name, canvas, type, data, options) {
   const nextFullBounds = {
     min: Number(options.scales.x.min),
@@ -233,10 +320,22 @@ function upsertChart(name, canvas, type, data, options) {
   chart.update("none");
 }
 
+/**
+ * Build a Chart.js data point from a timestamp (seconds) and value.
+ * @param {number} timestamp @param {number} value @param {Object} [extra]
+ * @returns {Object} A {x, y, ...extra} point with x in ms.
+ */
 function point(timestamp, value, extra = {}) {
   return { x: Number(timestamp) * 1000, y: value, ...extra };
 }
 
+/**
+ * Build one line dataset per controller from a per-status value getter.
+ * @param {Object} metrics
+ * @param {(status: Object) => *} valueGetter - Extracts the y value from a status.
+ * @param {Object} [options] - Styling/label options.
+ * @returns {Object[]} Chart.js datasets.
+ */
 function lineDatasets(metrics, valueGetter, options = {}) {
   const keys = controllerKeys(metrics);
   return keys.map((key, index) => ({
@@ -261,8 +360,14 @@ function lineDatasets(metrics, valueGetter, options = {}) {
   }));
 }
 
+/** Render the connected/down step chart. @param {Object} metrics */
 function renderConnectionChart(metrics) {
-  const data = { datasets: lineDatasets(metrics, (status) => (status.connected ? 1 : 0), { stepped: true, pointRadius: 2 }) };
+  const data = {
+    datasets: lineDatasets(metrics, (status) => (status.connected ? 1 : 0), {
+      stepped: true,
+      pointRadius: 2,
+    }),
+  };
   const options = baseOptions(metrics, {
     min: -0.05,
     max: 1.05,
@@ -272,8 +377,15 @@ function renderConnectionChart(metrics) {
   upsertChart("connection", chartEls.connection, "line", data, options);
 }
 
+/**
+ * Compute a rolling button-press rate (presses/sec) series for one controller.
+ * @param {Object} metrics @param {string} key @param {number} [windowSec] - Rolling window.
+ * @returns {Object[]} Chart.js points of rate over time.
+ */
 function buildButtonRateSeries(metrics, key, windowSec = 10) {
-  const sampleTimestamps = metrics.samples.map((sample) => Number(sample.timestamp)).filter(Number.isFinite);
+  const sampleTimestamps = metrics.samples
+    .map((sample) => Number(sample.timestamp))
+    .filter(Number.isFinite);
   if (sampleTimestamps.length === 0) {
     return [];
   }
@@ -300,6 +412,7 @@ function buildButtonRateSeries(metrics, key, windowSec = 10) {
   return points;
 }
 
+/** Render the per-controller button-activity rate chart. @param {Object} metrics */
 function renderActivityRateChart(metrics) {
   const keys = controllerKeys(metrics);
   const datasets = keys.map((key, index) => ({
@@ -320,12 +433,18 @@ function renderActivityRateChart(metrics) {
     grid: { color: "#343841" },
     ticks: { color: "#a8adb7", callback: (value) => fmtRate(Number(value)) },
   });
-  options.plugins.tooltip.callbacks.label = (context) => `${context.dataset.label}: ${fmtRate(Number(context.parsed.y))}`;
+  options.plugins.tooltip.callbacks.label = (context) =>
+    `${context.dataset.label}: ${fmtRate(Number(context.parsed.y))}`;
   upsertChart("freshness", chartEls.freshness, "line", data, options);
 }
 
+/** Render the per-controller battery percentage chart. @param {Object} metrics */
 function renderBatteryChart(metrics) {
-  const data = { datasets: lineDatasets(metrics, (status) => status.battery_percentage, { labelSuffix: "battery" }) };
+  const data = {
+    datasets: lineDatasets(metrics, (status) => status.battery_percentage, {
+      labelSuffix: "battery",
+    }),
+  };
   const options = baseOptions(metrics, {
     min: 0,
     max: 100,
@@ -335,6 +454,7 @@ function renderBatteryChart(metrics) {
   upsertChart("battery", chartEls.battery, "line", data, options);
 }
 
+/** Render RSSI and TX-power signal chart; hides the panel when no data. @param {Object} metrics */
 function renderSignalChart(metrics) {
   const keys = controllerKeys(metrics);
   const datasets = [];
@@ -397,6 +517,7 @@ function renderSignalChart(metrics) {
   upsertChart("signal", chartEls.signal, "line", { datasets }, options);
 }
 
+/** Render the BLE connection-interval and supervision-timeout chart. @param {Object} metrics */
 function renderConnectionParamsChart(metrics) {
   const keys = controllerKeys(metrics);
   const datasets = [];
@@ -472,6 +593,7 @@ function renderConnectionParamsChart(metrics) {
   upsertChart("connectionParams", chartEls.connectionParams, "line", { datasets }, options);
 }
 
+/** Render the disconnect-reason histogram aggregated across controllers. @param {Object} metrics */
 function renderDisconnectReasons(metrics) {
   if (!disconnectReasonHistogramEl) {
     return;
@@ -513,6 +635,7 @@ function renderDisconnectReasons(metrics) {
   }
 }
 
+/** Render the scatter chart of button-press events over time. @param {Object} metrics */
 function renderButtonChart(metrics) {
   const keys = controllerKeys(metrics);
   const datasets = keys.map((key, index) => ({
@@ -549,6 +672,7 @@ function renderButtonChart(metrics) {
   upsertChart("button", chartEls.button, "scatter", { datasets }, options);
 }
 
+/** Render the per-controller summary cards (uptime, latency, battery, etc.). @param {Object} metrics */
 function renderSummary(metrics) {
   summaryEl.innerHTML = "";
   if (metrics.controllers.length === 0) {
@@ -574,11 +698,12 @@ function renderSummary(metrics) {
     const latencySamples = metricNumber(controller.panel_latency_samples);
     const reconnectAttempts = metricNumber(latest.bluetooth_connect_attempts);
     const reconnectFailures = metricNumber(latest.bluetooth_connect_failures);
-    const reconnectFailRate = (
-      Number.isFinite(reconnectAttempts) && reconnectAttempts > 0 && Number.isFinite(reconnectFailures)
+    const reconnectFailRate =
+      Number.isFinite(reconnectAttempts) &&
+      reconnectAttempts > 0 &&
+      Number.isFinite(reconnectFailures)
         ? `${Math.round((reconnectFailures / reconnectAttempts) * 100)}%`
-        : "--"
-    );
+        : "--";
     const batterySourceRaw = String(latest.battery_source || "").trim();
     const batterySource = batterySourceRaw || "--";
     const batteryAgeMs = metricNumber(latest.battery_age_ms);
@@ -632,10 +757,13 @@ function renderSummary(metrics) {
   }
 }
 
+/** Render the recent connection/button event log (newest first). @param {Object} metrics */
 function renderEvents(metrics) {
   eventsEl.innerHTML = "";
   const connectionEvents = metrics.events.map((event) => ({ ...event, kind: "connection" }));
-  const buttonEvents = metrics.button_events.slice(-80).map((event) => ({ ...event, kind: "button" }));
+  const buttonEvents = metrics.button_events
+    .slice(-80)
+    .map((event) => ({ ...event, kind: "button" }));
   const recent = [...connectionEvents, ...buttonEvents]
     .sort((a, b) => Number(b.timestamp) - Number(a.timestamp))
     .slice(0, 80);
@@ -659,10 +787,12 @@ function renderEvents(metrics) {
   }
 }
 
+/** Normalize a raw payload and render the full dashboard. @param {Object} payload */
 function renderMetrics(payload) {
   renderMetricsFromNormalized(normalizeMetrics(payload));
 }
 
+/** Render every summary, event list, and chart from normalized metrics. @param {Object} metrics */
 function renderMetricsFromNormalized(metrics) {
   latestMetrics = metrics;
   renderSummary(metrics);
@@ -685,18 +815,24 @@ function renderMetricsFromNormalized(metrics) {
   renderBatteryChart(metrics);
 }
 
+/**
+ * Zoom the rolling window in/out on mouse wheel over a chart.
+ * @param {WheelEvent} event
+ */
 function handleWheelZoom(event) {
   if (!latestMetrics) {
     return;
   }
   event.preventDefault();
   const currentWindowSec = effectiveWindowSec(latestMetrics);
-  const maxWindowSec = Number(latestMetrics.window_sec) > 0 ? Number(latestMetrics.window_sec) : 3600;
+  const maxWindowSec =
+    Number(latestMetrics.window_sec) > 0 ? Number(latestMetrics.window_sec) : 3600;
   const factor = event.deltaY > 0 ? WHEEL_ZOOM_FACTOR : 1 / WHEEL_ZOOM_FACTOR;
   selectedWindowSec = clamp(currentWindowSec * factor, MIN_WINDOW_SEC, maxWindowSec);
   renderMetricsFromNormalized(latestMetrics);
 }
 
+/** Fetch the controller metrics from the backend and render them. */
 async function loadMetrics() {
   try {
     const response = await fetch("/api/controller/metrics", { cache: "no-store" });

@@ -18,48 +18,62 @@ if (window.marked) {
   marked.setOptions({ breaks: true, gfm: true });
 }
 
+/**
+ * Render Markdown to sanitized HTML.
+ * @param {string} raw - Raw Markdown (or plain) text.
+ * @returns {string} Sanitized HTML safe to inject.
+ */
 function renderMarkdown(raw) {
   const html = window.marked ? marked.parse(raw) : raw;
   return window.DOMPurify ? DOMPurify.sanitize(html) : html;
 }
 
+/** @returns {boolean} Whether the chat log contains any message, tool, or thinking block. */
 function hasMessages() {
   return chatLog.querySelector(".chat-bubble, .chat-tool, .chat-thinking-block") !== null;
 }
 
+/** Show or hide the empty-state placeholder based on whether messages exist. */
 function updateEmptyState() {
   if (!chatEmpty) return;
   chatEmpty.classList.toggle("hidden", hasMessages());
 }
 
+/** Scroll the chat log to the most recent message. */
 function scrollToBottom() {
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
+/** Grow the input textarea to fit its content, capped at 9 lines. */
 function autoGrow() {
   chatInput.style.height = "auto";
   chatInput.style.height = `${Math.min(chatInput.scrollHeight, 9 * 16)}px`;
 }
 
+/** Reset the input textarea back to its default single-line height. */
 function resetInputHeight() {
   chatInput.style.height = "auto";
 }
 
+/**
+ * Append a hover "copy to clipboard" button to a message bubble.
+ * @param {HTMLElement} bubble - The bubble element to attach the button to.
+ */
 function addCopyButton(bubble) {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "chat-copy";
   btn.title = "Copy message";
   btn.setAttribute("aria-label", "Copy message");
-  btn.innerHTML = "<span aria-hidden=\"true\">⧉</span>";
+  btn.innerHTML = '<span aria-hidden="true">⧉</span>';
   btn.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(bubble.dataset.raw || bubble.textContent);
       btn.classList.add("copied");
-      btn.innerHTML = "<span aria-hidden=\"true\">✓</span>";
+      btn.innerHTML = '<span aria-hidden="true">✓</span>';
       setTimeout(() => {
         btn.classList.remove("copied");
-        btn.innerHTML = "<span aria-hidden=\"true\">⧉</span>";
+        btn.innerHTML = '<span aria-hidden="true">⧉</span>';
       }, 1200);
     } catch (_err) {
       /* clipboard unavailable */
@@ -68,6 +82,12 @@ function addCopyButton(bubble) {
   bubble.appendChild(btn);
 }
 
+/**
+ * Create and append a message bubble to the chat log.
+ * @param {string} role - "user", "assistant", or "error".
+ * @param {string} [text] - Initial message text.
+ * @returns {HTMLElement} The created bubble element.
+ */
 function addBubble(role, text = "") {
   const bubble = document.createElement("div");
   bubble.className = `chat-bubble chat-${role}`;
@@ -84,6 +104,11 @@ function addBubble(role, text = "") {
   return bubble;
 }
 
+/**
+ * Append streamed text to an assistant bubble and re-render its Markdown.
+ * @param {HTMLElement} bubble - The assistant bubble being streamed into.
+ * @param {string} text - The text chunk to append.
+ */
 function appendAssistantText(bubble, text) {
   bubble.dataset.raw = (bubble.dataset.raw || "") + text;
   bubble.innerHTML = renderMarkdown(bubble.dataset.raw);
@@ -95,6 +120,7 @@ function appendAssistantText(bubble, text) {
 
 let thinkingEl = null;
 
+/** Show the animated "Claude is thinking" indicator (idempotent). */
 function showThinking() {
   if (thinkingEl) return;
   thinkingEl = document.createElement("div");
@@ -105,6 +131,7 @@ function showThinking() {
   scrollToBottom();
 }
 
+/** Remove the animated "thinking" indicator if present. */
 function hideThinking() {
   if (thinkingEl) {
     thinkingEl.remove();
@@ -116,6 +143,10 @@ function hideThinking() {
 
 let thinkingBlock = null;
 
+/**
+ * Append streamed extended-thinking text to the collapsible reasoning block.
+ * @param {string} text - The reasoning chunk to append.
+ */
 function appendThinking(text) {
   if (!thinkingBlock) {
     thinkingBlock = document.createElement("details");
@@ -136,8 +167,10 @@ function appendThinking(text) {
   scrollToBottom();
 }
 
-// Collapse the live reasoning into a "Thought for a moment" toggle once the
-// real answer (or a tool call) begins. Leaves the next thinking segment fresh.
+/**
+ * Collapse the live reasoning into a "Thought for a moment" toggle once the
+ * real answer (or a tool call) begins. Leaves the next thinking segment fresh.
+ */
 function settleThinking() {
   if (thinkingBlock) {
     thinkingBlock.open = false;
@@ -151,6 +184,11 @@ function settleThinking() {
 
 let lastToolPill = null;
 
+/**
+ * Format a tool's input object into a short "key: value" summary string.
+ * @param {Object} input - The tool input arguments.
+ * @returns {string} A truncated, comma-joined summary.
+ */
 function formatToolInput(input) {
   if (!input || typeof input !== "object") return "";
   const parts = [];
@@ -162,6 +200,7 @@ function formatToolInput(input) {
   return parts.join(", ");
 }
 
+/** Mark the most recent tool pill as finished (stops its running animation). */
 function settleLastTool() {
   if (lastToolPill) {
     lastToolPill.classList.remove("running");
@@ -170,6 +209,11 @@ function settleLastTool() {
   }
 }
 
+/**
+ * Append a running tool-call pill to the chat log.
+ * @param {string} name - The tool name.
+ * @param {Object} input - The tool input arguments.
+ */
 function addTool(name, input) {
   settleLastTool();
   const pill = document.createElement("div");
@@ -193,6 +237,11 @@ function addTool(name, input) {
 
 // --- Input enable/disable ---------------------------------------------------
 
+/**
+ * Enable or disable the chat input controls, optionally showing a note.
+ * @param {boolean} enabled - Whether input is allowed.
+ * @param {string} [note] - Optional status note to display.
+ */
 function setEnabled(enabled, note) {
   chatBusy = !enabled;
   chatInput.disabled = !enabled;
@@ -206,6 +255,7 @@ function setEnabled(enabled, note) {
   }
 }
 
+/** Poll the backend chat status and enable/disable the UI accordingly. */
 async function refreshStatus() {
   try {
     const response = await fetch("/api/chat/status", { cache: "no-store" });
@@ -222,6 +272,11 @@ async function refreshStatus() {
   }
 }
 
+/**
+ * Send a user message and stream the NDJSON response, rendering text,
+ * reasoning, tool calls, and errors as they arrive.
+ * @param {string} message - The user's message text.
+ */
 async function submitMessage(message) {
   addBubble("user", message);
   setEnabled(false);
@@ -329,7 +384,9 @@ chatReset.addEventListener("click", async () => {
   } catch (_err) {
     /* ignore */
   }
-  chatLog.querySelectorAll(".chat-bubble, .chat-tool, .chat-thinking, .chat-thinking-block").forEach((el) => el.remove());
+  chatLog
+    .querySelectorAll(".chat-bubble, .chat-tool, .chat-thinking, .chat-thinking-block")
+    .forEach((el) => el.remove());
   lastToolPill = null;
   thinkingEl = null;
   thinkingBlock = null;

@@ -1,20 +1,39 @@
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from app.services.fonts import available_families, available_sizes, available_styles, get_font_definition
+from app.modes.contracts import Frame
+from app.services.fonts import (
+    available_families,
+    available_sizes,
+    available_styles,
+    get_font_definition,
+)
 from app.services.text import width, write
+
+if TYPE_CHECKING:
+    from app.core.mode_manager import ModeManager
 
 
 class FontPreview:
+    """Compare bitmap font variants side by side on the panel.
+
+    Renders the configured phrase in up to four font variants stacked in
+    horizontal bands (scrolling any that overflow), and lets the viewer
+    dwell-click left/right zones to page through additional variants. The
+    web UI configures the phrase, spacing, and variant list via the public
+    settings methods.
+    """
+
     CLICK_TIME_SEC = 0.8
     SCROLL_SPEED_PX_PER_SEC = 10.0
     MAX_COMPARE_VARIANTS = 4
     MAX_SPACING_PX = 6
 
-    def __init__(self, width: int, height: int, mode_manager) -> None:
+    def __init__(self, width: int, height: int, mode_manager: ModeManager) -> None:
         self.width = width
         self.height = height
         self.mode_manager = mode_manager
@@ -46,7 +65,11 @@ class FontPreview:
             family = raw.get("family")
             size = raw.get("size")
             style = raw.get("style")
-            if not isinstance(family, str) or not isinstance(style, str):
+            if (
+                not isinstance(family, str)
+                or not isinstance(style, str)
+                or not isinstance(size, (int, str, float))
+            ):
                 continue
             try:
                 size_int = int(size)
@@ -73,6 +96,7 @@ class FontPreview:
         return list(self._variants[: self.MAX_COMPARE_VARIANTS])
 
     def get_settings(self) -> dict[str, object]:
+        """Return the current phrase, spacing, and configured variants."""
         return {
             "phrase": self._phrase,
             "spacing": self._spacing_px,
@@ -89,6 +113,7 @@ class FontPreview:
         variants: list[dict[str, object]] | None = None,
         spacing: int | None = None,
     ) -> dict[str, object]:
+        """Update the preview phrase, spacing, and/or variants; return the result."""
         cleaned = " ".join(str(phrase).split())
         if not cleaned:
             cleaned = "FLIPDOT"
@@ -101,6 +126,7 @@ class FontPreview:
         return self.get_settings()
 
     def get_variant_catalog(self) -> dict[str, dict[str, list[str]]]:
+        """Return all available variants as {family: {size: [styles]}}."""
         catalog: dict[str, dict[str, list[str]]] = {}
         for family in available_families():
             catalog[family] = {}
@@ -109,7 +135,8 @@ class FontPreview:
         return catalog
 
     def get_glyph_grid(self) -> dict[str, object]:
-        variants_payload: list[dict[str, object]] = []
+        """Return every variant's glyph bitmaps plus the sorted character set."""
+        variants_payload: list[dict[str, Any]] = []
         all_chars: set[str] = set()
 
         for family in available_families():
@@ -132,7 +159,9 @@ class FontPreview:
                         }
                     )
 
-        variants_payload.sort(key=lambda item: (str(item["family"]), int(item["size"]), str(item["style"])))
+        variants_payload.sort(
+            key=lambda item: (str(item["family"]), int(item["size"]), str(item["style"]))
+        )
         characters = sorted(all_chars, key=lambda value: (ord(value), value))
         return {
             "variants": variants_payload,
@@ -151,18 +180,21 @@ class FontPreview:
         return out
 
     def previous_variant(self) -> None:
+        """Scroll the visible comparison window back by one variant."""
         total = len(self._configured_variants)
         if total <= self.MAX_COMPARE_VARIANTS:
             return
         self._window_start = (self._window_start - 1) % total
 
     def next_variant(self) -> None:
+        """Scroll the visible comparison window forward by one variant."""
         total = len(self._configured_variants)
         if total <= self.MAX_COMPARE_VARIANTS:
             return
         self._window_start = (self._window_start + 1) % total
 
     def adjust_spacing(self, delta: int) -> None:
+        """Change inter-glyph spacing by ``delta`` px, clamped to the valid range."""
         self._spacing_px = max(0, min(self.MAX_SPACING_PX, self._spacing_px + int(delta)))
 
     def _pointer_to_panel(self, source: str | None, x: float, y: float) -> tuple[int, int]:
@@ -234,7 +266,8 @@ class FontPreview:
         elif zone == "next":
             frame[self.height - 1, self.width - bar : self.width] = 1
 
-    def get_frame(self, pose_results=None, input_hub=None) -> np.ndarray:
+    def get_frame(self, pose_results: Any = None, input_hub: Any = None) -> Frame:
+        """Render the comparison bands and dwell-click progress bar."""
         del pose_results
         frame = np.zeros((self.height, self.width), dtype=np.uint8)
 

@@ -6,6 +6,11 @@ import numpy as np
 
 
 def _load_registry_module(monkeypatch):
+    # registry binds these via `import app.services.x as x`, i.e. attribute access on
+    # the package, so stub both sys.modules and the package attributes. Patching only
+    # sys.modules leaks the real module whenever it was imported earlier in the suite.
+    services_pkg = importlib.import_module("app.services")
+
     human_pose_stub = types.SimpleNamespace(
         display_human_pose=lambda pose, w, h, dist, face: np.ones((h, w), dtype=np.uint8)
     )
@@ -16,6 +21,8 @@ def _load_registry_module(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "app.services.human_pose", human_pose_stub)
     monkeypatch.setitem(sys.modules, "app.services.transition", transition_stub)
+    monkeypatch.setattr(services_pkg, "human_pose", human_pose_stub, raising=False)
+    monkeypatch.setattr(services_pkg, "transition", transition_stub, raising=False)
     sys.modules.pop("app.modes.registry", None)
     return importlib.import_module("app.modes.registry")
 

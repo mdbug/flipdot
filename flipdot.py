@@ -1,29 +1,31 @@
-import numpy as np
-import time
 import logging
-from dotenv import load_dotenv
 import os
+import time
+
+import numpy as np
+from dotenv import load_dotenv
+
 from app.services.logging_setup import setup_logging
 
 load_dotenv()
 setup_logging()
 logger = logging.getLogger(__name__)
 
-from app.services.fps import FPSTracker
-from app.services.controller import ControllerHub
-from app.services.controller_mapping import ControllerInputBridge
-from app.infrastructure.camera import Camera
-from app.infrastructure.panel import Panel
-from app.core.input_source import InputHub
-from app.core.action_dispatch import dispatch_actions
 import app.services.human_pose as human_pose
 import app.services.image as image
 import app.services.text as text
+from app.core.action_dispatch import dispatch_actions
+from app.core.input_source import InputHub
 from app.core.mode_manager import ModeManager
 from app.core.transition_policy import TransitionPolicy
+from app.infrastructure.camera import Camera
+from app.infrastructure.panel import Panel
 from app.modes.contracts import RenderContext
-from app.modes.registry import build_mode_registry
 from app.modes.factory import create_mode_instances
+from app.modes.registry import build_mode_registry
+from app.services.controller import ControllerHub
+from app.services.controller_mapping import ControllerInputBridge
+from app.services.fps import FPSTracker
 
 PRINT_INTERVAL = 1.0
 POSE_TIMEOUT = 2.0
@@ -40,19 +42,22 @@ SECONDARY_CONTROLLER_ADDRESS = os.getenv("SECONDARY_CONTROLLER_ADDRESS", "AA:BB:
 # When the controller is the active control source, pose inference can be
 # skipped for these modes so the render/input loop is not starved by the
 # expensive per-frame MediaPipe call (keeping controller input responsive).
-CONTROLLER_DRIVEN_UI_MODES = frozenset({
-    ModeManager.MODE_MENU,
-    ModeManager.MODE_PAINT,
-    ModeManager.MODE_BOARD,
-    ModeManager.MODE_TETRIS,
-    ModeManager.MODE_PONG,
-    ModeManager.MODE_PERCUSSION,
-    ModeManager.MODE_AUTODRUM,
-    ModeManager.MODE_FONT_PREVIEW,
-})
+CONTROLLER_DRIVEN_UI_MODES = frozenset(
+    {
+        ModeManager.MODE_MENU,
+        ModeManager.MODE_PAINT,
+        ModeManager.MODE_BOARD,
+        ModeManager.MODE_TETRIS,
+        ModeManager.MODE_PONG,
+        ModeManager.MODE_PERCUSSION,
+        ModeManager.MODE_AUTODRUM,
+        ModeManager.MODE_FONT_PREVIEW,
+    }
+)
 
 
 def get_web_controls(mode: str) -> list[dict[str, str]]:
+    """Return the web-UI button definitions for the given mode."""
     controls: list[dict[str, str]] = [
         {
             "id": "toggle_menu",
@@ -111,16 +116,18 @@ def get_web_controls(mode: str) -> list[dict[str, str]]:
     controls.extend(mode_controls.get(mode, []))
     return controls
 
-def main():
-    camera_index = int(os.getenv('CAMERA_INDEX', 0))
-    preview = os.getenv('PREVIEW', 'false').lower() == 'true'
-    debug = os.getenv('DEBUG', 'false').lower() == 'true'
-    sleep_hour_start = int(os.getenv('SLEEP_HOUR_START', '0'))
-    sleep_hour_end = int(os.getenv('SLEEP_HOUR_END', '7'))
-    face_mesh_max_fps = float(os.getenv('FACE_MESH_MAX_FPS', '12'))
-    enable_web_ui = os.getenv('ENABLE_WEB_UI', 'false').lower() == 'true'
-    web_ui_host = os.getenv('WEB_UI_HOST', '0.0.0.0')
-    web_ui_port = int(os.getenv('WEB_UI_PORT', '8000'))
+
+def main() -> None:
+    """Run the main capture → pose → render → display loop until interrupted."""
+    camera_index = int(os.getenv("CAMERA_INDEX", 0))
+    preview = os.getenv("PREVIEW", "false").lower() == "true"
+    debug = os.getenv("DEBUG", "false").lower() == "true"
+    sleep_hour_start = int(os.getenv("SLEEP_HOUR_START", "0"))
+    sleep_hour_end = int(os.getenv("SLEEP_HOUR_END", "7"))
+    face_mesh_max_fps = float(os.getenv("FACE_MESH_MAX_FPS", "12"))
+    enable_web_ui = os.getenv("ENABLE_WEB_UI", "false").lower() == "true"
+    web_ui_host = os.getenv("WEB_UI_HOST", "0.0.0.0")
+    web_ui_port = int(os.getenv("WEB_UI_PORT", "8000"))
 
     logger.info(
         "Starting flipdot app camera_index=%s preview=%s debug=%s sleep_window=%s-%s",
@@ -162,7 +169,7 @@ def main():
     board = mode_instances["board"]
     font_preview = mode_instances["font_preview"]
     script_mode = mode_instances["script"]
-    img_sleep = image.load('sleep.png')
+    img_sleep = image.load("sleep.png")
     mode_registry = build_mode_registry(
         clock=clock,
         menu=menu,
@@ -240,7 +247,9 @@ def main():
 
             controller_snapshots = get_controller_statuses()
             controller_snapshot = merge_controller_snapshots(controller_snapshots)
-            controller_active = bool(controller_snapshot.get("enabled")) and bool(controller_snapshot.get("connected"))
+            controller_active = bool(controller_snapshot.get("enabled")) and bool(
+                controller_snapshot.get("connected")
+            )
             mode_manager.update_controller_connected(controller_active)
 
             controller_pressed_events = (
@@ -250,7 +259,9 @@ def main():
             controller_bridge.process(
                 snapshot=controller_snapshot,
                 primary_snapshot=controller_snapshots[0] if controller_snapshots else None,
-                secondary_snapshot=controller_snapshots[1] if len(controller_snapshots) > 1 else None,
+                secondary_snapshot=controller_snapshots[1]
+                if len(controller_snapshots) > 1
+                else None,
                 mode=mode_manager.mode,
                 input_hub=input_hub,
                 mode_manager=mode_manager,
@@ -291,7 +302,10 @@ def main():
                 if human_pose.is_left_hand_raised(pose_results):
                     if paint_clear_gesture_start is None:
                         paint_clear_gesture_start = time.time()
-                    elif paint_clear_gesture_armed and (time.time() - paint_clear_gesture_start) >= PAINT_CLEAR_HOLD_SEC:
+                    elif (
+                        paint_clear_gesture_armed
+                        and (time.time() - paint_clear_gesture_start) >= PAINT_CLEAR_HOLD_SEC
+                    ):
                         paint.clear()
                         paint_clear_gesture_armed = False
                 else:
@@ -345,7 +359,9 @@ def main():
                 dots[-1, -1] = fps_tracker.total_frames % 2
                 estimated_distance = transition_state.estimated_distance
                 angle = transition_state.angle
-                estimated_distance_str = f"{estimated_distance:.1f}" if estimated_distance is not None else " "
+                estimated_distance_str = (
+                    f"{estimated_distance:.1f}" if estimated_distance is not None else " "
+                )
                 angle_str = f"{angle:02.0f}°" if angle is not None else " "
                 text.write(
                     dots,
@@ -404,20 +420,22 @@ def main():
             if current_time - last_log_time >= PRINT_INTERVAL:
                 stats = fps_tracker.get_stats()
                 estimated_distance = transition_state.estimated_distance
-                estimated_distance_str = f"{estimated_distance:.1f}" if estimated_distance is not None else "None"
+                estimated_distance_str = (
+                    f"{estimated_distance:.1f}" if estimated_distance is not None else "None"
+                )
                 logger.debug(
                     "mode=%s eyes=%s reason=%s dist=%s fps=%.1f avg_fps=%.1f cap_ms=%.0f proc_ms=%.0f panel_ms=%.0f sleep_ms=%.0f total_ms=%.0f",
                     mode_manager.mode,
                     transition_state.eyes_visible,
                     transition_state.reason,
                     estimated_distance_str,
-                    stats['fps'],
-                    stats['avg_fps'],
-                    stats['capture_ms'],
-                    stats['process_ms'],
-                    stats['panel_ms'],
-                    stats['sleep_ms'],
-                    stats['total_ms'],
+                    stats["fps"],
+                    stats["avg_fps"],
+                    stats["capture_ms"],
+                    stats["process_ms"],
+                    stats["panel_ms"],
+                    stats["sleep_ms"],
+                    stats["total_ms"],
                 )
                 last_log_time = current_time
     finally:

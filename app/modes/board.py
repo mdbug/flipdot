@@ -5,15 +5,25 @@ import re
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 import app.services.fonts as fonts
 import app.services.image as image_service
 import app.services.text as text
+from app.core.mode_manager import ModeManager
+from app.modes.contracts import Frame
 
 
 class Board:
+    """Persistent editable board: a draw layer plus movable text and image objects.
+
+    The web UI and MCP tools mutate it through the public methods (thread-safe via
+    an internal lock); ``get_frame`` composites the draw layer, images, and text
+    (including scrolling) into a 1-bit frame each tick.
+    """
+
     DEFAULT_STATE_PATH = Path(__file__).resolve().parents[2] / "state" / "board_state.json"
     DEFAULT_BOARDS_DIR = Path(__file__).resolve().parents[2] / "state" / "boards"
     MAX_UNDO = 20
@@ -26,42 +36,42 @@ class Board:
     MAX_TEXT_LENGTH = 64
     NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
-    def __init__(self, width, height, mode_manager):
+    def __init__(self, width: int, height: int, mode_manager: ModeManager) -> None:
         self.width = width
         self.height = height
         self.mode_manager = mode_manager
         self._lock = threading.Lock()
         self._draw_layer = np.zeros((height, width), dtype=np.uint8)
-        self._text_objects = []
-        self._image_objects = []
+        self._text_objects: list[dict[str, Any]] = []
+        self._image_objects: list[dict[str, Any]] = []
         self._selected_text_id = ""
         self._selected_image_id = ""
-        self._selected_text_ids = set()
-        self._selected_image_ids = set()
-        self._scroll_offsets = {}
+        self._selected_text_ids: set[str] = set()
+        self._selected_image_ids: set[str] = set()
+        self._scroll_offsets: dict[str, float] = {}
         self._last_frame_time = time.monotonic()
         self._legacy_text_id = ""
         self._next_object_seq = 1
         self._active_board = "default"
-        self._undo_stack = []
+        self._undo_stack: list[dict[str, Any]] = []
         self._state_path = Path(os.getenv("BOARD_STATE_PATH", str(Board.DEFAULT_STATE_PATH)))
         default_boards_dir = self._state_path.parent / "boards"
         self._boards_dir = Path(os.getenv("BOARD_STATES_DIR", str(default_boards_dir)))
-        self._supported_chars_cache = {}
+        self._supported_chars_cache: dict[tuple[str, int, str], Any] = {}
         self._load_state()
 
-    def _new_id(self, prefix):
+    def _new_id(self, prefix: str) -> str:
         object_id = f"{prefix}_{self._next_object_seq}"
         self._next_object_seq += 1
         return object_id
 
-    def _sanitize_name(self, value):
-        name = (str(value or "").strip() or "default")
+    def _sanitize_name(self, value: Any) -> str:
+        name = str(value or "").strip() or "default"
         if not Board.NAME_RE.match(name):
             raise ValueError("board name must match [A-Za-z0-9_-]{1,64}")
         return name
 
-    def _supported_chars(self, font, size, style):
+    def _supported_chars(self, font: str, size: int, style: str) -> Any:
         key = (font, int(size), style)
         if key not in self._supported_chars_cache:
             self._supported_chars_cache[key] = text.supported_characters(
@@ -180,9 +190,13 @@ class Board:
         ]
         self._selected_text_id = snapshot.get("selected_text_id", "")
         self._selected_image_id = snapshot.get("selected_image_id", "")
-        self._selected_text_ids = set(snapshot.get("selected_text_ids") or ([] if not self._selected_text_id else [self._selected_text_id]))
+        self._selected_text_ids = set(
+            snapshot.get("selected_text_ids")
+            or ([] if not self._selected_text_id else [self._selected_text_id])
+        )
         self._selected_image_ids = set(
-            snapshot.get("selected_image_ids") or ([] if not self._selected_image_id else [self._selected_image_id])
+            snapshot.get("selected_image_ids")
+            or ([] if not self._selected_image_id else [self._selected_image_id])
         )
         self._legacy_text_id = snapshot.get("legacy_text_id", "")
         self._active_board = snapshot.get("active_board", "default")
@@ -317,14 +331,14 @@ class Board:
     def _load_state(self):
         try:
             if os.path.exists(self._state_path):
-                with open(self._state_path, "r", encoding="utf-8") as f:
+                with open(self._state_path, encoding="utf-8") as f:
                     payload = json.load(f)
                 self._load_board_payload(payload)
                 return
 
             default_board = self._board_path(self._active_board)
             if os.path.exists(default_board):
-                with open(default_board, "r", encoding="utf-8") as f:
+                with open(default_board, encoding="utf-8") as f:
                     payload = json.load(f)
                 self._load_board_payload(payload)
                 return
@@ -492,18 +506,26 @@ class Board:
 
     def _select(self, *, text_id=None, image_id=None, text_ids=None, image_ids=None):
         if text_ids is not None:
-            self._selected_text_ids = {str(item) for item in text_ids if self._find_text(str(item))[1] is not None}
+            self._selected_text_ids = {
+                str(item) for item in text_ids if self._find_text(str(item))[1] is not None
+            }
         elif text_id is not None:
             text_value = str(text_id)
-            self._selected_text_ids = {text_value} if self._find_text(text_value)[1] is not None else set()
+            self._selected_text_ids = (
+                {text_value} if self._find_text(text_value)[1] is not None else set()
+            )
         else:
             self._selected_text_ids = set()
 
         if image_ids is not None:
-            self._selected_image_ids = {str(item) for item in image_ids if self._find_image(str(item))[1] is not None}
+            self._selected_image_ids = {
+                str(item) for item in image_ids if self._find_image(str(item))[1] is not None
+            }
         elif image_id is not None:
             image_value = str(image_id)
-            self._selected_image_ids = {image_value} if self._find_image(image_value)[1] is not None else set()
+            self._selected_image_ids = (
+                {image_value} if self._find_image(image_value)[1] is not None else set()
+            )
         else:
             self._selected_image_ids = set()
 
@@ -557,15 +579,17 @@ class Board:
         hits = self._all_hits_unlocked(x, y)
         return hits[0] if hits else None
 
-    def get_font_catalog(self):
-        catalog = {}
+    def get_font_catalog(self) -> dict[str, dict[str, list[str]]]:
+        """Return available font families mapped to their sizes and styles."""
+        catalog: dict[str, dict[str, list[str]]] = {}
         for family in fonts.available_families():
             catalog[family] = {}
             for size in fonts.available_sizes(family):
                 catalog[family][str(size)] = list(fonts.available_styles(family, size))
         return catalog
 
-    def list_boards(self):
+    def list_boards(self) -> dict[str, Any]:
+        """Return saved board names and the active board."""
         with self._lock:
             self._boards_dir.mkdir(parents=True, exist_ok=True)
             names = []
@@ -578,20 +602,22 @@ class Board:
                 "active": self._active_board,
             }
 
-    def save_board(self, name):
+    def save_board(self, name: str) -> dict[str, str]:
+        """Persist the current board under ``name`` and make it active."""
         with self._lock:
             board_name = self._sanitize_name(name)
             self._active_board = board_name
             self._save_state()
             return {"name": board_name, "active": self._active_board}
 
-    def load_board(self, name):
+    def load_board(self, name: str) -> bool:
+        """Load the named board (pushing an undo point); return False if it doesn't exist."""
         with self._lock:
             board_name = self._sanitize_name(name)
             path = self._board_path(board_name)
             if not os.path.exists(path):
                 return False
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 payload = json.load(f)
             self._push_undo()
             self._active_board = board_name
@@ -600,7 +626,8 @@ class Board:
             self._save_state()
             return True
 
-    def delete_board(self, name):
+    def delete_board(self, name: str) -> bool:
+        """Delete a named board (never ``default``); return whether it was removed."""
         with self._lock:
             board_name = self._sanitize_name(name)
             if board_name == "default":
@@ -615,7 +642,8 @@ class Board:
                 self._save_state()
             return True
 
-    def rename_board(self, old_name, new_name):
+    def rename_board(self, old_name: str, new_name: str) -> bool:
+        """Rename a saved board; return False if the source is missing or target exists."""
         with self._lock:
             source = self._sanitize_name(old_name)
             target = self._sanitize_name(new_name)
@@ -631,7 +659,8 @@ class Board:
                 self._save_state()
             return True
 
-    def add_text_object(self, payload):
+    def add_text_object(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Add a text object from ``payload``, select it, and return its serialized form."""
         with self._lock:
             self._push_undo()
             item = self._normalize_text_object(payload)
@@ -640,7 +669,10 @@ class Board:
             self._save_state()
             return self._serialize_text_object(item)
 
-    def update_text_object(self, object_id, payload):
+    def update_text_object(
+        self, object_id: str, payload: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Update a text object in place; return its serialized form or None if missing."""
         with self._lock:
             index, existing = self._find_text(object_id)
             if existing is None:
@@ -655,7 +687,10 @@ class Board:
             self._save_state()
             return self._serialize_text_object(normalized)
 
-    def move_text_object(self, object_id, x, y, *, persist=True):
+    def move_text_object(
+        self, object_id: str, x: int, y: int, *, persist: bool = True
+    ) -> dict[str, Any] | None:
+        """Move a text object to ``(x, y)``; return its serialized form or None if missing."""
         with self._lock:
             index, existing = self._find_text(object_id)
             if existing is None:
@@ -669,7 +704,8 @@ class Board:
                 self._save_state()
             return self._serialize_text_object(self._text_objects[index])
 
-    def delete_text_object(self, object_id):
+    def delete_text_object(self, object_id: str) -> bool:
+        """Delete a text object; return whether it existed."""
         with self._lock:
             index, _existing = self._find_text(object_id)
             if index < 0:
@@ -684,7 +720,8 @@ class Board:
             self._save_state()
             return True
 
-    def add_image_object(self, pixels, x=0, y=0):
+    def add_image_object(self, pixels: Any, x: int = 0, y: int = 0) -> dict[str, Any]:
+        """Add an image object at ``(x, y)``, select it, and return its serialized form."""
         with self._lock:
             self._push_undo()
             item = self._normalize_image_object(
@@ -699,7 +736,10 @@ class Board:
             self._save_state()
             return self._serialize_image_object(item)
 
-    def move_image_object(self, object_id, x, y, *, persist=True):
+    def move_image_object(
+        self, object_id: str, x: int, y: int, *, persist: bool = True
+    ) -> dict[str, Any] | None:
+        """Move an image object to ``(x, y)``; return its serialized form or None if missing."""
         with self._lock:
             index, existing = self._find_image(object_id)
             if existing is None:
@@ -713,7 +753,8 @@ class Board:
                 self._save_state()
             return self._serialize_image_object(self._image_objects[index])
 
-    def delete_image_object(self, object_id):
+    def delete_image_object(self, object_id: str) -> bool:
+        """Delete an image object; return whether it existed."""
         with self._lock:
             index, _existing = self._find_image(object_id)
             if index < 0:
@@ -725,7 +766,8 @@ class Board:
             self._save_state()
             return True
 
-    def hit_test(self, x, y, *, select=True, all_hits=False):
+    def hit_test(self, x: float, y: float, *, select: bool = True, all_hits: bool = False) -> Any:
+        """Return the object(s) under normalized point ``(x, y)``, optionally selecting the top hit."""
         with self._lock:
             hits = self._all_hits_unlocked(x, y)
             hit = hits[0] if hits else None
@@ -742,7 +784,10 @@ class Board:
                 return [dict(item) for item in hits]
             return dict(hit) if hit is not None else None
 
-    def move_object(self, kind, object_id, x, y, *, persist=True):
+    def move_object(
+        self, kind: str, object_id: str, x: int, y: int, *, persist: bool = True
+    ) -> dict[str, Any] | None:
+        """Move a text or image object by ``kind``; raise on an unknown kind."""
         kind_value = str(kind or "").strip().lower()
         if kind_value == "text":
             return self.move_text_object(object_id, x, y, persist=persist)
@@ -750,8 +795,11 @@ class Board:
             return self.move_image_object(object_id, x, y, persist=persist)
         raise ValueError("unsupported object kind")
 
-    def move_objects(self, moves, *, persist=True):
-        normalized = []
+    def move_objects(
+        self, moves: list[dict[str, Any]] | None, *, persist: bool = True
+    ) -> list[dict[str, Any]] | None:
+        """Move several objects atomically; return None if any target is missing."""
+        normalized: list[dict[str, Any]] = []
         for move in moves or []:
             if not isinstance(move, dict):
                 continue
@@ -801,7 +849,16 @@ class Board:
                 self._save_state()
             return moved
 
-    def place_uploaded_image(self, image_bytes, *, mode="stamp", x=0, y=0, threshold=128):
+    def place_uploaded_image(
+        self,
+        image_bytes: bytes,
+        *,
+        mode: str = "stamp",
+        x: int = 0,
+        y: int = 0,
+        threshold: int = 128,
+    ) -> dict[str, Any]:
+        """Decode and threshold uploaded image bytes, then stamp it or add it as an object."""
         matrix = image_service.binary_from_bytes(
             image_bytes,
             max_width=self.width,
@@ -826,7 +883,16 @@ class Board:
             "height": int(matrix.shape[0]),
         }
 
-    def draw_shape(self, tool, start, end, *, line_width=1, color="on"):
+    def draw_shape(
+        self,
+        tool: str,
+        start: dict[str, float],
+        end: dict[str, float],
+        *,
+        line_width: int = 1,
+        color: str = "on",
+    ) -> None:
+        """Draw a line, rectangle, or circle onto the draw layer between two points."""
         tool_name = str(tool or "line").strip().lower()
         if tool_name not in {"line", "rectangle", "circle"}:
             raise ValueError("unsupported shape tool")
@@ -844,7 +910,8 @@ class Board:
                 self._draw_circle(p0, p1, line_width=width, color=draw_color)
             self._save_state()
 
-    def set_text(self, value):
+    def set_text(self, value: str) -> None:
+        """Set the single legacy text object's content (creating it if needed)."""
         with self._lock:
             self._push_undo()
             if not self._legacy_text_id:
@@ -892,7 +959,10 @@ class Board:
                     self._text_objects[index] = item
             self._save_state()
 
-    def apply_stroke(self, points, *, line_width=1, color="on"):
+    def apply_stroke(
+        self, points: list[dict[str, float]] | None, *, line_width: int = 1, color: str = "on"
+    ) -> None:
+        """Paint a freehand stroke through ``points`` onto the draw layer."""
         normalized_points = list(points or [])
         if not normalized_points:
             return
@@ -911,11 +981,14 @@ class Board:
                 self._paint_point(x, y, line_width=width, color=draw_color)
             else:
                 for idx in range(1, len(pixel_points)):
-                    self._draw_line(pixel_points[idx - 1], pixel_points[idx], line_width=width, color=draw_color)
+                    self._draw_line(
+                        pixel_points[idx - 1], pixel_points[idx], line_width=width, color=draw_color
+                    )
 
             self._save_state()
 
-    def clear(self):
+    def clear(self) -> None:
+        """Wipe the draw layer and all objects (pushing an undo point)."""
         with self._lock:
             self._push_undo()
             self._draw_layer[:, :] = 0
@@ -929,7 +1002,8 @@ class Board:
             self._scroll_offsets = {}
             self._save_state()
 
-    def undo(self):
+    def undo(self) -> bool:
+        """Restore the most recent snapshot; return False if the undo stack is empty."""
         with self._lock:
             if not self._undo_stack:
                 return False
@@ -938,7 +1012,8 @@ class Board:
             self._save_state()
             return True
 
-    def export_state(self):
+    def export_state(self) -> dict[str, Any]:
+        """Return a JSON-serializable snapshot of the full board for the web UI."""
         with self._lock:
             return {
                 "schema_version": Board.SCHEMA_VERSION,
@@ -948,14 +1023,17 @@ class Board:
                 "pixels": self._draw_layer.astype(np.uint8).tolist(),
                 "active_board": self._active_board,
                 "text_objects": [self._serialize_text_object(item) for item in self._text_objects],
-                "image_objects": [self._serialize_image_object(item) for item in self._image_objects],
+                "image_objects": [
+                    self._serialize_image_object(item) for item in self._image_objects
+                ],
                 "selected_text_id": self._selected_text_id,
                 "selected_image_id": self._selected_image_id,
                 "selected_text_ids": self._ordered_selected_ids("text"),
                 "selected_image_ids": self._ordered_selected_ids("image"),
             }
 
-    def get_frame(self, pose_results, input_hub=None):
+    def get_frame(self, pose_results: Any = None, input_hub: Any = None) -> Frame:
+        """Composite the draw layer, image objects, and (scrolling) text into a 1-bit frame."""
         del pose_results
         del input_hub
         with self._lock:
@@ -980,7 +1058,9 @@ class Board:
                 render_x = int(item["x"])
                 if item.get("scroll", False) and text_width > self.width:
                     cycle = float(self.width + text_width + 2)
-                    next_offset = (self._scroll_offsets.get(item["id"], 0.0) + dt * item["scroll_speed"]) % cycle
+                    next_offset = (
+                        self._scroll_offsets.get(item["id"], 0.0) + dt * item["scroll_speed"]
+                    ) % cycle
                     self._scroll_offsets[item["id"]] = next_offset
                     render_x = self.width - int(next_offset)
 

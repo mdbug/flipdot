@@ -39,7 +39,14 @@ body {
   min-height: 100vh;
   color: var(--text);
   background: var(--bg);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
   overscroll-behavior: none;
 }
 
@@ -695,7 +702,11 @@ h1 {
 .shape-btn {
   min-height: 2.5rem;
   border-radius: var(--radius);
-  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, transform 0.14s ease;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease,
+    transform 0.14s ease;
 }
 
 .mode-control-btn,
@@ -898,7 +909,9 @@ h1 {
   top: 0.27rem;
   border-radius: 50%;
   background: var(--muted);
-  transition: transform 0.16s ease, background 0.16s ease;
+  transition:
+    transform 0.16s ease,
+    background 0.16s ease;
 }
 
 .switch input:checked + span {
@@ -1292,9 +1305,15 @@ input:disabled {
   line-height: 1.2;
 }
 
-.chat-assistant h1 { font-size: 1.15rem; }
-.chat-assistant h2 { font-size: 1.05rem; }
-.chat-assistant h3 { font-size: 0.98rem; }
+.chat-assistant h1 {
+  font-size: 1.15rem;
+}
+.chat-assistant h2 {
+  font-size: 1.05rem;
+}
+.chat-assistant h3 {
+  font-size: 0.98rem;
+}
 
 .chat-assistant ul,
 .chat-assistant ol {
@@ -1366,7 +1385,9 @@ input:disabled {
   color: var(--dim);
   font-size: 0.85rem;
   opacity: 0;
-  transition: opacity 0.12s ease, color 0.12s ease;
+  transition:
+    opacity 0.12s ease,
+    color 0.12s ease;
 }
 
 .chat-bubble:hover .chat-copy {
@@ -1451,7 +1472,9 @@ input:disabled {
 }
 
 @keyframes chat-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Thinking dots */
@@ -1471,12 +1494,24 @@ input:disabled {
   animation: chat-pulse 1.2s ease-in-out infinite;
 }
 
-.chat-thinking span:nth-child(2) { animation-delay: 0.2s; }
-.chat-thinking span:nth-child(3) { animation-delay: 0.4s; }
+.chat-thinking span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.chat-thinking span:nth-child(3) {
+  animation-delay: 0.4s;
+}
 
 @keyframes chat-pulse {
-  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
-  40% { opacity: 1; transform: translateY(-2px); }
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
 }
 
 /* Streamed reasoning (extended thinking) */
@@ -1515,8 +1550,12 @@ input:disabled {
   line-height: 1.45;
 }
 
-.chat-thinking-body > :first-child { margin-top: 0; }
-.chat-thinking-body > :last-child { margin-bottom: 0; }
+.chat-thinking-body > :first-child {
+  margin-top: 0;
+}
+.chat-thinking-body > :last-child {
+  margin-bottom: 0;
+}
 
 /* Empty / welcome state */
 .chat-empty {
@@ -1555,7 +1594,9 @@ input:disabled {
   border-radius: 999px;
   padding: 0.35rem 0.8rem;
   font-size: 0.82rem;
-  transition: border-color 0.14s ease, color 0.14s ease;
+  transition:
+    border-color 0.14s ease,
+    color 0.14s ease;
 }
 
 .chat-chip:hover {

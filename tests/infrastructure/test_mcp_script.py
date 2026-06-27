@@ -9,7 +9,6 @@ from app.infrastructure.mcp_server import build_flipdot_mcp
 from app.modes.script_mode import ScriptMode
 from app.services.script_store import ScriptStore
 
-
 GAME_OF_LIFE = """
 def setup(width, height):
     rng = np.random.default_rng(0)
@@ -71,8 +70,11 @@ def test_run_script_switches_to_script_mode(tmp_path):
 def test_run_script_rejects_unsafe_code(tmp_path):
     script_mode = _script_mode(tmp_path)
     mcp = _build(DummyModeManager(), script_mode)
-    with pytest.raises(Exception):
-        asyncio.run(mcp.call_tool("run_script", {"code": "import os\ndef step(s,t,w,h):\n    return 0"}))
+    # MCP wraps the rejection; only that it fails is the contract, not the wrapped type.
+    with pytest.raises(Exception):  # noqa: B017
+        asyncio.run(
+            mcp.call_tool("run_script", {"code": "import os\ndef step(s,t,w,h):\n    return 0"})
+        )
 
 
 def test_save_load_list_round_trip(tmp_path):

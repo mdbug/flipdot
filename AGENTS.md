@@ -21,6 +21,39 @@ Modes (`ModeManager.MODE_*`): `sleep`, `clock`, `pose`, `menu`, `paint`. Each ha
 - **Interaction is dwell-based**, not clicks: hover the right index finger over a `MenuItem` for `CLICK_TIME` (2s) to trigger `on_click`. `human_pose.is_arms_crossed` held for 2s opens the menu from pose, clock, and paint modes (via `mode_manager.click_menu()`/`reset_menu_click()` in the main loop).
 - Mode classes that need to switch modes take `mode_manager` in their constructor and call `mode_manager.set_mode(...)` from `on_click` lambdas (see `Menu.__init__`).
 
+## Code quality standards
+
+These apply to all new and modified code; tooling enforces them (see "Quality gate" below).
+
+**Documentation**
+- Every module, public class, and public function/method has a docstring: a concise one-line imperative summary (e.g. "Decide the active mode from pose state."). Add `Args:`/`Returns:`/`Raises:` blocks only when the signature isn't self-explanatory. Private helpers (`_name`) may skip docstrings when the name and types are obvious.
+- JS: document every exported/top-level function with a JSDoc block (`@param`, `@returns`). Trivial DOM-wiring one-liners may be skipped.
+- Comments explain **why**, not what. Delete commented-out code rather than shipping it.
+
+**Type hints (Python)**
+- Annotate every function signature — all parameters and the return type (including `-> None`). Annotate non-obvious module/class attributes.
+- Reuse the `Frame = np.ndarray` alias from `app/modes/contracts.py` instead of bare `np.ndarray`; add new aliases for other repeated shapes.
+- Prefer precise types. Reserve `Any` for genuinely dynamic third-party objects (MediaPipe pose/face results). Use `Optional[...]` / `| None` for nullable values — pose results can be `None` (see Gotchas).
+
+**Formatting & style**
+- Python is formatted and linted by **Ruff** (line length 100, double quotes; rules pyflakes/pycodestyle/isort/pyupgrade/bugbear). Imports group stdlib / third-party / local.
+- JS/CSS/HTML are formatted by **Prettier**; JS is linted by **ESLint**. `web_ui/vendor/` is excluded.
+- No magic numbers in logic — name constants as class/module-level uppercase (follow `ModeManager.MAX_FPS`, `Paint.CLICK_TIME`). Never hardcode panel dimensions; use `Panel.WIDTH`/`Panel.HEIGHT`.
+
+**Logging & errors**
+- Use the module logger (`logger = logging.getLogger(__name__)`); never `print` in `app/`. Choose levels deliberately: DEBUG per-frame, INFO lifecycle, WARNING/ERROR for failures.
+- Catch specific exceptions, not bare `except:`. Don't swallow errors silently — log with context.
+
+**Structure & tests**
+- Keep functions small and single-purpose; extract when a function does several things or exceeds ~50 lines.
+- New behavior ships with a `tests/` test mirroring the source layout; tests must run without hardware, network, or model files (see `tests/conftest.py`).
+
+**Quality gate** — run before considering work done:
+```bash
+ruff check . && ruff format --check . && mypy app && pipenv run pytest
+npx --prefix web_ui prettier --check web_ui && npx --prefix web_ui eslint web_ui
+```
+
 ## Hardware & environment
 
 - **Device:** NVIDIA Jetson Orin Nano (aarch64), JetPack R36.4.7, running Ubuntu with Python 3.10.
@@ -57,6 +90,7 @@ sudo logrotate -f /etc/logrotate.d/flipdot # force log rotation check
 - **Run tests locally:** `pipenv run pytest` (from repo root).
   - Current suite covers core state/policy modules, deterministic services, and selected mode/registry behavior under `tests/`.
   - Tests are designed to run without hardware/network and avoid hard dependency on MediaPipe model files.
+- **Lint / format / type-check:** `ruff check .` and `ruff format --check .` (Python), `mypy app` (types), `npx --prefix web_ui prettier --check web_ui` and `npx --prefix web_ui eslint web_ui` (JS). See "Code quality standards" for the full gate. `ruff check --fix .` and `ruff format .` auto-apply most fixes.
 - **Run on device:** `sudo systemctl start flipdot.service`; the service auto-restarts on crash (`Restart=always`).
 - **Deploy:** `./deploy.sh [--debug]` — rsyncs to `flipdot@flipdot:/home/flipdot/flipdot` (with `--delete`, but `models/` and `.env` are excluded), sets `DEBUG` in `.env`, ensures `/var/log/flipdot` exists, installs `ops/systemd/flipdot.service` and `ops/logrotate/flipdot` on the device, then reloads and restarts `flipdot.service`.
   - **Important:** the `models/` directory is excluded from rsync. MediaPipe `.task` model files must be downloaded manually once:

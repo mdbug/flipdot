@@ -15,7 +15,9 @@
         <div>
           <p class="eyebrow">Assistant</p>
           <h1>Claude Chat</h1>
-          <p class="metrics-subtitle">Talk to Claude; it drives the flip-dot display through the MCP tools.</p>
+          <p class="metrics-subtitle">
+            Talk to Claude; it drives the flip-dot display through the MCP tools.
+          </p>
         </div>
         <nav class="metrics-nav" aria-label="Console pages">
           <a class="console-link" href="/">Live Console</a>
@@ -27,7 +29,13 @@
       <section class="chat-card" aria-label="Claude chat">
         <div class="section-head">
           <p class="eyebrow">Conversation</p>
-          <button id="chatReset" type="button" class="icon-button" title="New conversation" aria-label="New conversation">
+          <button
+            id="chatReset"
+            type="button"
+            class="icon-button"
+            title="New conversation"
+            aria-label="New conversation"
+          >
             <span aria-hidden="true">&#x270E;</span>
           </button>
         </div>
@@ -44,7 +52,13 @@
         </div>
         <p id="chatNote" class="system-note hidden"></p>
         <form id="chatForm" class="chat-input-row" autocomplete="off">
-          <textarea id="chatInput" rows="4" maxlength="2000" placeholder="Tell the display what to do…" autocomplete="off"></textarea>
+          <textarea
+            id="chatInput"
+            rows="4"
+            maxlength="2000"
+            placeholder="Tell the display what to do…"
+            autocomplete="off"
+          ></textarea>
           <button id="chatStop" type="button" class="secondary hidden">Stop</button>
           <button id="chatSend" type="submit" class="accent">Send</button>
         </form>

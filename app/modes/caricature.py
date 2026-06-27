@@ -1,9 +1,9 @@
 import base64
 import io
+import logging
 import os
 import threading
 import time
-import logging
 
 import cv2
 import numpy as np
@@ -12,35 +12,38 @@ import requests
 
 import app.services.text as text_module
 from app.core.mode_manager import ModeManager
-
+from app.modes.contracts import Frame
 
 logger = logging.getLogger(__name__)
 
 
 class Caricature:
-    STATE_COUNTDOWN = 'countdown'
-    STATE_CAPTURING = 'capturing'
-    STATE_LOADING = 'loading'
-    STATE_DISPLAYING = 'displaying'
-    STATE_ERROR = 'error'
+    """Captures a camera frame, generates a 1-bit caricature via an API, and displays it."""
+
+    STATE_COUNTDOWN = "countdown"
+    STATE_CAPTURING = "capturing"
+    STATE_LOADING = "loading"
+    STATE_DISPLAYING = "displaying"
+    STATE_ERROR = "error"
 
     COUNTDOWN_DURATION = 3  # seconds of countdown before capture
-    DISPLAY_DURATION = 30   # seconds before auto-returning to clock
+    DISPLAY_DURATION = 30  # seconds before auto-returning to clock
 
-    def __init__(self, width, height, mode_manager):
+    def __init__(self, width: int, height: int, mode_manager: ModeManager) -> None:
         self.width = width
         self.height = height
         self.mode_manager = mode_manager
         self._lock = threading.Lock()
         self._generation = 0
-        self._last_mode_start_time = None
-        self.state = None
-        self.caricature_dots = None
-        self.countdown_start = None
-        self.display_start_time = None
-        self.error_msg = None
+        self._last_mode_start_time: float | None = None
+        self.state: str | None = None
+        self.caricature_dots: np.ndarray | None = None
+        self.countdown_start: float | None = None
+        self.display_start_time: float | None = None
+        self.error_msg: str | None = None
 
-    def _reset(self):
+    def _reset(self) -> None:
+        """Bump the generation counter and restart the countdown state machine."""
         with self._lock:
             self._generation += 1
             self.state = self.STATE_COUNTDOWN
@@ -49,9 +52,10 @@ class Caricature:
             self.display_start_time = None
             self.error_msg = None
 
-    def _call_pixellab_api(self, image_b64, generation):
+    def _call_pixellab_api(self, image_b64: str, generation: int) -> None:
+        """Background worker: submit the photo, poll for the caricature, and store the result."""
         try:
-            api_token = os.getenv('PIXELLAB_API_TOKEN') or os.getenv('PIXELLAB_API_KEY')
+            api_token = os.getenv("PIXELLAB_API_TOKEN") or os.getenv("PIXELLAB_API_KEY")
             if not api_token:
                 raise ValueError("Missing PIXELLAB_API_TOKEN")
 
@@ -59,14 +63,14 @@ class Caricature:
 
             # Encode reference image (camera frame)
             img_bytes = base64.b64decode(image_b64)
-            src_pil = PIL.Image.open(io.BytesIO(img_bytes)).convert('RGB')
+            src_pil = PIL.Image.open(io.BytesIO(img_bytes)).convert("RGB")
             src_w, src_h = src_pil.size
             ref_w, ref_h = self._fit_within_limit(src_w, src_h, 1024)
             if (ref_w, ref_h) != (src_w, src_h):
                 src_pil = src_pil.resize((ref_w, ref_h), PIL.Image.LANCZOS)
             ref_buf = io.BytesIO()
-            src_pil.save(ref_buf, format='JPEG', quality=85)
-            ref_b64 = base64.b64encode(ref_buf.getvalue()).decode('utf-8')
+            src_pil.save(ref_buf, format="JPEG", quality=85)
+            ref_b64 = base64.b64encode(ref_buf.getvalue()).decode("utf-8")
 
             payload = {
                 "description": "Create a monochromatic (1bit only black and white, no grey!) caricature of that person! The background should be black.",
@@ -87,7 +91,11 @@ class Caricature:
                 timeout=30,
             )
             if not resp.ok:
-                logger.error("Caricature API generate-image-v2 error status=%s body=%s", resp.status_code, resp.text[:2000])
+                logger.error(
+                    "Caricature API generate-image-v2 error status=%s body=%s",
+                    resp.status_code,
+                    resp.text[:2000],
+                )
             resp.raise_for_status()
 
             job_id = resp.json()["background_job_id"]
@@ -120,7 +128,7 @@ class Caricature:
                         if img_b64_raw.startswith("data:"):
                             img_b64_raw = img_b64_raw.split(",", 1)[1]
                         pil = PIL.Image.open(io.BytesIO(base64.b64decode(img_b64_raw)))
-                        pil.save(f'caricature_result_raw_{i}.png')
+                        pil.save(f"caricature_result_raw_{i}.png")
                         pil_images.append(pil)
                     best = self._pick_best_image(pil_images, ref_b64)
                     result_pil = pil_images[best]
@@ -141,7 +149,7 @@ class Caricature:
                     self.caricature_dots = dots
                     self.state = self.STATE_DISPLAYING
                     self.display_start_time = time.time()
-                    cv2.imwrite('caricature_result.png', self.caricature_dots * 255)
+                    cv2.imwrite("caricature_result.png", self.caricature_dots * 255)
                     logger.info("Saved caricature result to caricature_result.png")
 
         except Exception:
@@ -151,7 +159,8 @@ class Caricature:
                     self.state = self.STATE_ERROR
                     self.error_msg = "Generation failed"
 
-    def _fit_within_limit(self, width, height, limit):
+    def _fit_within_limit(self, width: int, height: int, limit: int) -> tuple[int, int]:
+        """Scale (width, height) down so the longer side is at most ``limit`` px."""
         max_side = max(width, height)
         if max_side <= limit:
             return width, height
@@ -160,20 +169,25 @@ class Caricature:
         new_h = max(16, int(round(height * scale)))
         return new_w, new_h
 
-    def _pil_image_to_dots(self, pil_image):
+    def _pil_image_to_dots(self, pil_image: PIL.Image.Image) -> np.ndarray:
+        """Dither a PIL image down to a 1-bit dot array sized to the panel."""
         # Flatten alpha onto white background before any conversion
-        if pil_image.mode in ('RGBA', 'LA') or (pil_image.mode == 'P' and 'transparency' in pil_image.info):
-            bg = PIL.Image.new('RGB', pil_image.size, (255, 255, 255))
-            bg.paste(pil_image, mask=pil_image.split()[-1] if pil_image.mode in ('RGBA', 'LA') else None)
+        if pil_image.mode in ("RGBA", "LA") or (
+            pil_image.mode == "P" and "transparency" in pil_image.info
+        ):
+            bg = PIL.Image.new("RGB", pil_image.size, (255, 255, 255))
+            bg.paste(
+                pil_image, mask=pil_image.split()[-1] if pil_image.mode in ("RGBA", "LA") else None
+            )
             pil_image = bg
         # Resize then dither to 1-bit (Floyd-Steinberg) — better than hard-threshold for coloured pixel art
-        resized = pil_image.convert('L').resize((self.width, self.height), PIL.Image.LANCZOS)
-        dithered = resized.convert('1')  # PIL default: Floyd-Steinberg dithering
+        resized = pil_image.convert("L").resize((self.width, self.height), PIL.Image.LANCZOS)
+        dithered = resized.convert("1")  # PIL default: Floyd-Steinberg dithering
         # PIL '1' mode: 0=black, 255=white per pixel; map to 1=on (white), 0=off (black)
         arr = np.array(dithered, dtype=np.uint8)
         return (arr != 0).astype(np.uint8)
 
-    def _pick_best_image(self, pil_images, original_b64):
+    def _pick_best_image(self, pil_images: list[PIL.Image.Image], original_b64: str) -> int:
         """Send candidate images + original photo to an AI; return the index of the best match."""
         if len(pil_images) <= 1:
             return 0
@@ -182,11 +196,11 @@ class Caricature:
         scale = 4
         thumbs_b64 = []
         for img in pil_images:
-            bw = img.convert('L').point(lambda p: 255 if p >= 128 else 0)
+            bw = img.convert("L").point(lambda p: 255 if p >= 128 else 0)
             scaled = bw.resize((bw.width * scale, bw.height * scale), PIL.Image.NEAREST)
             buf = io.BytesIO()
-            scaled.save(buf, format='PNG')
-            thumbs_b64.append(base64.b64encode(buf.getvalue()).decode('utf-8'))
+            scaled.save(buf, format="PNG")
+            thumbs_b64.append(base64.b64encode(buf.getvalue()).decode("utf-8"))
 
         prompt = (
             f"The first image is the original photograph of a person. "
@@ -197,13 +211,17 @@ class Caricature:
             f"Reply with ONLY the 0-based index number of the best candidate (0 to {len(pil_images) - 1})."
         )
 
-        anthropic_key = os.getenv('ANTHROPIC_API_KEY')
-        openai_key = os.getenv('OPENAI_API_KEY')
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+        openai_key = os.getenv("OPENAI_API_KEY")
         try:
             if anthropic_key:
-                return self._pick_with_anthropic(thumbs_b64, original_b64, prompt, anthropic_key, len(pil_images))
+                return self._pick_with_anthropic(
+                    thumbs_b64, original_b64, prompt, anthropic_key, len(pil_images)
+                )
             elif openai_key:
-                return self._pick_with_openai(thumbs_b64, original_b64, prompt, openai_key, len(pil_images))
+                return self._pick_with_openai(
+                    thumbs_b64, original_b64, prompt, openai_key, len(pil_images)
+                )
             else:
                 logger.info("No AI key available for image selection; using candidate index 0")
                 return 0
@@ -211,17 +229,30 @@ class Caricature:
             logger.exception("AI image selection failed; using candidate index 0")
             return 0
 
-    def _pick_with_anthropic(self, thumbs_b64, original_b64, prompt, api_key, n):
-        content = [
+    def _pick_with_anthropic(
+        self,
+        thumbs_b64: list[str],
+        original_b64: str,
+        prompt: str,
+        api_key: str,
+        n: int,
+    ) -> int:
+        """Ask Claude to pick the most recognizable candidate; return its index."""
+        content: list[dict] = [
             {"type": "text", "text": "Original photograph:"},
-            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": original_b64}},
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/jpeg", "data": original_b64},
+            },
         ]
         for i, b64 in enumerate(thumbs_b64):
             content.append({"type": "text", "text": f"Candidate {i}:"})
-            content.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": "image/png", "data": b64},
-            })
+            content.append(
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": b64},
+                }
+            )
         content.append({"type": "text", "text": prompt})
         resp = requests.post(
             "https://api.anthropic.com/v1/messages",
@@ -244,17 +275,30 @@ class Caricature:
         logger.info("Anthropic chose image index=%s", idx)
         return idx
 
-    def _pick_with_openai(self, thumbs_b64, original_b64, prompt, api_key, n):
-        content = [
+    def _pick_with_openai(
+        self,
+        thumbs_b64: list[str],
+        original_b64: str,
+        prompt: str,
+        api_key: str,
+        n: int,
+    ) -> int:
+        """Ask an OpenAI vision model to pick the most recognizable candidate; return its index."""
+        content: list[dict] = [
             {"type": "text", "text": "Original photograph:"},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{original_b64}", "detail": "low"}},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{original_b64}", "detail": "low"},
+            },
         ]
         for i, b64 in enumerate(thumbs_b64):
             content.append({"type": "text", "text": f"Candidate {i}:"})
-            content.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "low"},
-            })
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "low"},
+                }
+            )
         content.append({"type": "text", "text": prompt})
         resp = requests.post(
             "https://api.openai.com/v1/chat/completions",
@@ -276,24 +320,25 @@ class Caricature:
         logger.info("OpenAI chose image index=%s", idx)
         return idx
 
-    def _start_capture(self, camera_frame):
+    def _start_capture(self, camera_frame: np.ndarray | None) -> None:
+        """Encode the camera frame and kick off the caricature worker thread."""
         if camera_frame is None:
             with self._lock:
                 self.state = self.STATE_ERROR
                 self.error_msg = "No frame"
             return
 
-        success, buf = cv2.imencode('.jpg', camera_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        success, buf = cv2.imencode(".jpg", camera_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         if not success:
             with self._lock:
                 self.state = self.STATE_ERROR
                 self.error_msg = "Encode failed"
             return
 
-        cv2.imwrite('caricature_debug.jpg', camera_frame)
+        cv2.imwrite("caricature_debug.jpg", camera_frame)
         logger.info("Saved caricature input capture to caricature_debug.jpg")
 
-        image_b64 = base64.standard_b64encode(buf).decode('utf-8')
+        image_b64 = base64.standard_b64encode(buf).decode("utf-8")
 
         with self._lock:
             generation = self._generation
@@ -306,7 +351,8 @@ class Caricature:
         )
         thread.start()
 
-    def get_frame(self, camera_frame):
+    def get_frame(self, camera_frame: np.ndarray | None) -> Frame:
+        """Advance the capture/loading/display state machine and return the current frame."""
         # Auto-reset when the mode is freshly entered
         if self._last_mode_start_time != self.mode_manager.mode_start_time:
             self._last_mode_start_time = self.mode_manager.mode_start_time
@@ -317,7 +363,7 @@ class Caricature:
             countdown_start = self.countdown_start
 
         if state == self.STATE_COUNTDOWN:
-            elapsed = time.time() - countdown_start
+            elapsed = time.time() - (countdown_start or time.time())
             seconds_left = self.COUNTDOWN_DURATION - int(elapsed)
             if elapsed >= self.COUNTDOWN_DURATION:
                 with self._lock:
@@ -332,7 +378,8 @@ class Caricature:
             return self._make_loading_frame()
 
         if state == self.STATE_DISPLAYING:
-            if time.time() - self.display_start_time > self.DISPLAY_DURATION:
+            display_start = self.display_start_time or time.time()
+            if time.time() - display_start > self.DISPLAY_DURATION or self.caricature_dots is None:
                 self.mode_manager.set_mode(ModeManager.MODE_CLOCK)
                 return np.zeros((self.height, self.width), dtype=np.uint8)
             with self._lock:
@@ -345,7 +392,7 @@ class Caricature:
 
         return np.zeros((self.height, self.width), dtype=np.uint8)
 
-    def _make_countdown_frame(self, seconds_left):
+    def _make_countdown_frame(self, seconds_left: int) -> Frame:
         """Show the countdown digit centred and scaled up 3x."""
         frame = np.zeros((self.height, self.width), dtype=np.uint8)
         # Render digit into a 3x5 buffer then scale 3x → 9x15
@@ -354,10 +401,10 @@ class Caricature:
         big = np.kron(small, np.ones((3, 3), dtype=np.uint8))
         y_off = (self.height - big.shape[0]) // 2
         x_off = (self.width - big.shape[1]) // 2
-        frame[y_off:y_off + big.shape[0], x_off:x_off + big.shape[1]] = big
+        frame[y_off : y_off + big.shape[0], x_off : x_off + big.shape[1]] = big
         return frame
 
-    def _make_loading_frame(self):
+    def _make_loading_frame(self) -> Frame:
         """Ping-pong vertical bar sweeping left-right to indicate processing."""
         frame = np.zeros((self.height, self.width), dtype=np.uint8)
         # One full left-right-left cycle every 1.2 seconds
@@ -366,5 +413,5 @@ class Caricature:
         if pos > 1:
             pos = 2 - pos  # bounce back
         col = int(pos * (self.width - 2))
-        frame[:, col:col + 2] = 1
+        frame[:, col : col + 2] = 1
         return frame

@@ -1,29 +1,30 @@
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 import app.services.human_pose as human_pose
 import app.services.transition as transition
 from app.core.mode_manager import ModeManager
-
 from app.modes.contracts import ModeRegistry, RenderContext
 
 
 def build_mode_registry(
     *,
-    clock,
-    menu,
-    paint,
-    caricature,
-    percussion,
-    autodrum,
-    beatmirror,
-    tetris_game,
-    pong_game,
-    worldcup,
-    board,
-    font_preview,
-    script_mode,
+    clock: Any,
+    menu: Any,
+    paint: Any,
+    caricature: Any,
+    percussion: Any,
+    autodrum: Any,
+    beatmirror: Any,
+    tetris_game: Any,
+    pong_game: Any,
+    worldcup: Any,
+    board: Any,
+    font_preview: Any,
+    script_mode: Any,
     img_sleep: np.ndarray,
     clock_resolve_time: float,
     clock_disolve_time: float,
@@ -60,9 +61,13 @@ def build_mode_registry(
 
     registry.register(ModeManager.MODE_SLEEP, render_sleep)
     registry.register(ModeManager.MODE_POSE, render_pose)
-    registry.register(ModeManager.MODE_MENU, lambda c: menu.get_frame(c.pose_results, input_hub=c.input_hub))
+    registry.register(
+        ModeManager.MODE_MENU, lambda c: menu.get_frame(c.pose_results, input_hub=c.input_hub)
+    )
     registry.register(ModeManager.MODE_CLOCK, render_clock)
-    registry.register(ModeManager.MODE_PAINT, lambda c: paint.get_frame(c.pose_results, input_hub=c.input_hub))
+    registry.register(
+        ModeManager.MODE_PAINT, lambda c: paint.get_frame(c.pose_results, input_hub=c.input_hub)
+    )
     registry.register(ModeManager.MODE_CARICATURE, lambda c: caricature.get_frame(c.frame))
     registry.register(ModeManager.MODE_PERCUSSION, lambda c: percussion.get_frame(c.pose_results))
     registry.register(ModeManager.MODE_AUTODRUM, lambda c: autodrum.get_frame(c.pose_results))
@@ -70,8 +75,13 @@ def build_mode_registry(
     registry.register(ModeManager.MODE_TETRIS, lambda c: tetris_game.get_frame(c.pose_results))
     registry.register(ModeManager.MODE_PONG, lambda c: pong_game.get_frame(c.pose_results))
     registry.register(ModeManager.MODE_WORLDCUP, lambda c: worldcup.get_frame(c.pose_results))
-    registry.register(ModeManager.MODE_BOARD, lambda c: board.get_frame(c.pose_results, input_hub=c.input_hub))
-    registry.register(ModeManager.MODE_FONT_PREVIEW, lambda c: font_preview.get_frame(c.pose_results, input_hub=c.input_hub))
+    registry.register(
+        ModeManager.MODE_BOARD, lambda c: board.get_frame(c.pose_results, input_hub=c.input_hub)
+    )
+    registry.register(
+        ModeManager.MODE_FONT_PREVIEW,
+        lambda c: font_preview.get_frame(c.pose_results, input_hub=c.input_hub),
+    )
     registry.register(ModeManager.MODE_SCRIPT, lambda c: script_mode.get_frame())
 
     return registry

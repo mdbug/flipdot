@@ -10,7 +10,6 @@ from app.services.sandbox import (
     validate_source,
 )
 
-
 GAME_OF_LIFE = """
 def setup(width, height):
     rng = np.random.default_rng(0)

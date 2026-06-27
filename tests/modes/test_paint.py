@@ -2,8 +2,6 @@ import importlib
 import sys
 import types
 
-import numpy as np
-
 
 def _load_paint_module(monkeypatch):
     human_pose_stub = types.SimpleNamespace(
@@ -124,8 +122,12 @@ def test_controller_pointer_is_ignored_when_gesture_controls_mode(monkeypatch):
 
     monkeypatch.setattr(paint_module.cv2, "line", fake_line)
 
-    hub1 = DummyInputHub(pointer=types.SimpleNamespace(source="controller", x=0.1, y=0.1), down=True)
-    hub2 = DummyInputHub(pointer=types.SimpleNamespace(source="controller", x=0.2, y=0.2), down=True)
+    hub1 = DummyInputHub(
+        pointer=types.SimpleNamespace(source="controller", x=0.1, y=0.1), down=True
+    )
+    hub2 = DummyInputHub(
+        pointer=types.SimpleNamespace(source="controller", x=0.2, y=0.2), down=True
+    )
 
     paint.get_frame(None, input_hub=hub1)
     paint.get_frame(None, input_hub=hub2)

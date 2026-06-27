@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import json
 import os
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 
 # Default model. Override with the ANTHROPIC_MODEL env var.
 DEFAULT_MODEL = "claude-opus-4-8"
@@ -60,7 +61,7 @@ def chat_available(mcp_enabled: bool) -> bool:
 _client = None
 
 
-def get_async_client():
+def get_async_client() -> Any:
     """Lazily build a cached AsyncAnthropic client.
 
     Raises ChatUnavailable with a clear message when no API credentials are set,
@@ -83,7 +84,7 @@ def get_async_client():
     return _client
 
 
-async def _mcp_tool_schemas(mcp) -> list[dict]:
+async def _mcp_tool_schemas(mcp: Any) -> list[dict]:
     """Convert the MCP server's tools into Anthropic tool definitions."""
     tools = await mcp.list_tools()
     schemas = []
@@ -98,7 +99,7 @@ async def _mcp_tool_schemas(mcp) -> list[dict]:
     return schemas
 
 
-async def _call_mcp_tool(mcp, name: str, arguments: Optional[dict]) -> tuple[str, bool]:
+async def _call_mcp_tool(mcp: Any, name: str, arguments: dict | None) -> tuple[str, bool]:
     """Execute one MCP tool and return (text, is_error)."""
     try:
         result = await mcp.call_tool(name, arguments or {})
@@ -120,7 +121,9 @@ def _event(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False) + "\n"
 
 
-async def run_chat(mcp, messages: list[dict], *, model: Optional[str] = None) -> AsyncIterator[str]:
+async def run_chat(
+    mcp: Any, messages: list[dict], *, model: str | None = None
+) -> AsyncIterator[str]:
     """Run the streaming agentic loop, yielding NDJSON event strings.
 
     ``messages`` is mutated in place: the assistant turns and tool-result turns are

@@ -22,6 +22,7 @@ let renderSequence = 0;
 let currentVisibleVariants = [];
 let glyphHeadCurrent = null;
 
+/** @returns {number} The current zoom as a factor in [0.5, 3], defaulting to 1. */
 function getZoomFactor() {
   if (!zoomLevel) {
     return 1;
@@ -30,6 +31,11 @@ function getZoomFactor() {
   return Number.isFinite(parsed) ? Math.max(0.5, Math.min(3, parsed / 100)) : 1;
 }
 
+/**
+ * Compute glyph/variant column widths for the given layout density.
+ * @param {string} density - "comfortable" or "compact".
+ * @returns {{glyph: number, variant: number}} Pixel widths per column.
+ */
 function getColumnWidths(density) {
   const zoom = getZoomFactor();
   const base = density === "comfortable" ? 62 : 54;
@@ -37,10 +43,16 @@ function getColumnWidths(density) {
   return { glyph: scaled, variant: scaled };
 }
 
+/** Display a status message in the page header. @param {string} message */
 function setStatus(message) {
   statusText.textContent = message;
 }
 
+/**
+ * Return a printable label for a character (naming whitespace).
+ * @param {string} char - The character.
+ * @returns {string} The character, or "SPACE"/"TAB"/"LF" for whitespace.
+ */
 function escapeChar(char) {
   if (char === " ") {
     return "SPACE";
@@ -54,6 +66,11 @@ function escapeChar(char) {
   return char;
 }
 
+/**
+ * Format a character's Unicode code point as "U+XXXX".
+ * @param {string} char - The character.
+ * @returns {string} The code-point label, or "" if invalid.
+ */
 function charCodeLabel(char) {
   if (!char || typeof char !== "string") {
     return "";
@@ -61,6 +78,12 @@ function charCodeLabel(char) {
   return `U+${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}`;
 }
 
+/**
+ * Render a glyph bitmap as flip-dot style circles onto a canvas.
+ * @param {HTMLCanvasElement} canvas - Target canvas (resized to fit).
+ * @param {number[][]} rows - Glyph bitmap rows of 0/1 values.
+ * @param {string} density - Layout density controlling dot size.
+ */
 function drawGlyphCanvas(canvas, rows, density) {
   const glyphRows = Array.isArray(rows) ? rows : [];
   const h = glyphRows.length;
@@ -106,6 +129,11 @@ function drawGlyphCanvas(canvas, rows, density) {
   }
 }
 
+/**
+ * Rebuild the table's <colgroup> sizing for the glyph + variant columns.
+ * @param {number} variantCount - Number of variant columns.
+ * @param {string} density - Layout density.
+ */
 function renderColGroup(variantCount, density) {
   if (!glyphColGroup) {
     return;
@@ -124,6 +152,12 @@ function renderColGroup(variantCount, density) {
   }
 }
 
+/**
+ * Build an <option> element.
+ * @param {string} value - The option value.
+ * @param {string} label - The visible label.
+ * @returns {HTMLOptionElement}
+ */
 function createOption(value, label) {
   const option = document.createElement("option");
   option.value = value;
@@ -131,6 +165,7 @@ function createOption(value, label) {
   return option;
 }
 
+/** Populate the family/size/style filter dropdowns from the loaded variants. */
 function populateFilters() {
   const families = new Set();
   const sizes = new Set();
@@ -163,6 +198,10 @@ function populateFilters() {
     .forEach((value) => filterStyle.appendChild(createOption(value, value)));
 }
 
+/**
+ * Filter all variants by the current dropdown selections.
+ * @returns {Object[]} The variants matching the active filters.
+ */
 function filterVariants() {
   const family = filterFamily.value;
   const size = filterSize.value;
@@ -182,6 +221,11 @@ function filterVariants() {
   });
 }
 
+/**
+ * Highlight a glyph row by index (clamped) and refresh the header preview.
+ * @param {number} index - Row index to activate.
+ * @param {boolean} [shouldScroll] - Whether to scroll the row into view.
+ */
 function setActiveRow(index, shouldScroll = false) {
   const rows = Array.from(glyphBody.querySelectorAll("tr"));
   rows.forEach((row) => row.classList.remove("glyph-row-active"));
@@ -202,12 +246,17 @@ function setActiveRow(index, shouldScroll = false) {
   updateHeaderPreview();
 }
 
+/** Update the sticky header's previews to show the active row's glyph per variant. */
 function updateHeaderPreview() {
   if (!glyphHeadCurrent) {
     return;
   }
 
-  if (selectedRowIndex < 0 || selectedRowIndex >= allCharacters.length || currentVisibleVariants.length === 0) {
+  if (
+    selectedRowIndex < 0 ||
+    selectedRowIndex >= allCharacters.length ||
+    currentVisibleVariants.length === 0
+  ) {
     glyphHeadCurrent.textContent = "Current row: -";
     for (const canvas of glyphHead.querySelectorAll(".variant-head-preview .glyph-canvas")) {
       drawGlyphCanvas(canvas, [], viewDensity.value);
@@ -219,7 +268,9 @@ function updateHeaderPreview() {
   glyphHeadCurrent.textContent = `Current row: ${escapeChar(char)} (${charCodeLabel(char)})`;
   const density = viewDensity.value;
 
-  const previewCanvases = Array.from(glyphHead.querySelectorAll(".variant-head-preview .glyph-canvas"));
+  const previewCanvases = Array.from(
+    glyphHead.querySelectorAll(".variant-head-preview .glyph-canvas")
+  );
   for (let i = 0; i < previewCanvases.length; i += 1) {
     const variant = currentVisibleVariants[i];
     const rows = variant ? (variant.glyphs && variant.glyphs[char]) || [] : [];
@@ -227,6 +278,7 @@ function updateHeaderPreview() {
   }
 }
 
+/** Make each glyph row activate on mouse hover. */
 function bindRowHoverSelection() {
   const rows = Array.from(glyphBody.querySelectorAll("tr"));
   rows.forEach((row, index) => {
@@ -236,6 +288,12 @@ function bindRowHoverSelection() {
   });
 }
 
+/**
+ * Render glyph rows incrementally (in animation-frame chunks) to keep the UI
+ * responsive, superseding any in-progress render.
+ * @param {Object[]} variants - The visible variant columns.
+ * @param {string} density - Layout density.
+ */
 function renderRowsChunked(variants, density) {
   const runId = ++renderSequence;
   let index = 0;
@@ -280,12 +338,15 @@ function renderRowsChunked(variants, density) {
 
     bindRowHoverSelection();
     setActiveRow(0, false);
-    setStatus(`Showing ${allCharacters.length} glyphs across ${variants.length} variants. Use arrow keys to scan rows.`);
+    setStatus(
+      `Showing ${allCharacters.length} glyphs across ${variants.length} variants. Use arrow keys to scan rows.`
+    );
   };
 
   requestAnimationFrame(renderChunk);
 }
 
+/** Rebuild the whole glyph table (header + columns + rows) for current filters. */
 function renderTable() {
   const variants = filterVariants();
   currentVisibleVariants = variants;
@@ -334,6 +395,7 @@ function renderTable() {
   renderRowsChunked(variants, density);
 }
 
+/** Fetch the glyph catalog from the backend and render the initial table. */
 async function loadGlyphGrid() {
   try {
     const response = await fetch("/api/font-preview/glyph-grid", { cache: "no-store" });

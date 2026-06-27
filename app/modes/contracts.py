@@ -1,5 +1,6 @@
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 
 import numpy as np
 
@@ -14,7 +15,7 @@ class RenderContext:
     frame: np.ndarray
     pose_results: Any
     face_mesh_results: Any
-    estimated_distance: Optional[float]
+    estimated_distance: float | None
     mode_time: float
     panel_width: int
     panel_height: int
@@ -25,7 +26,7 @@ class ModeRegistry:
     """Maps a mode key to a renderer callable."""
 
     def __init__(self) -> None:
-        self._renderers: Dict[str, Renderer] = {}
+        self._renderers: dict[str, Renderer] = {}
 
     def register(self, mode: str, renderer: Renderer) -> None:
         self._renderers[mode] = renderer

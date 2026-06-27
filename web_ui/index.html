@@ -15,7 +15,8 @@
       <section class="display-deck" aria-label="Flipdot display console">
         <header class="topbar">
           <div>
-            <p class="eyebrow">Live panel</p> <p class="console-links">
+            <p class="eyebrow">Live panel</p>
+            <p class="console-links">
               <a class="console-link" href="/chat">Claude Chat</a>
               <a class="console-link" href="/font-grid">Open Font Grid</a>
               <a class="console-link" href="/controller-metrics">Controller Metrics</a>
@@ -24,7 +25,11 @@
           <div class="connection-strip" aria-live="polite">
             <span id="statusText" class="status-pill">Connecting...</span>
             <span id="sourceText" class="status-pill muted">Source: none</span>
-            <span id="controllerStatuses" class="controller-statuses" aria-label="Controller status list"></span>
+            <span
+              id="controllerStatuses"
+              class="controller-statuses"
+              aria-label="Controller status list"
+            ></span>
           </div>
         </header>
 
@@ -37,14 +42,25 @@
         <section class="rail-section mode-section" aria-label="Mode actions">
           <div class="section-head">
             <p class="eyebrow">Mode</p>
-            <button id="settingsToggle" type="button" class="icon-button" title="Sleep settings" aria-label="Sleep settings">
+            <button
+              id="settingsToggle"
+              type="button"
+              class="icon-button"
+              title="Sleep settings"
+              aria-label="Sleep settings"
+            >
               <span aria-hidden="true">&#9881;</span>
             </button>
           </div>
           <div id="modeControls" class="mode-grid"></div>
         </section>
 
-        <section id="sleepSettings" class="rail-section settings-panel hidden" aria-live="polite" aria-label="Sleep mode settings">
+        <section
+          id="sleepSettings"
+          class="rail-section settings-panel hidden"
+          aria-live="polite"
+          aria-label="Sleep mode settings"
+        >
           <div class="section-head compact">
             <p class="eyebrow">Sleep</p>
             <label class="switch" for="sleepEnabled" title="Enable sleep mode">
@@ -61,7 +77,12 @@
           <p id="sleepSettingsStatus" class="system-note">Sleep settings not loaded yet.</p>
         </section>
 
-        <section id="fontPreviewSettings" class="rail-section settings-panel hidden" aria-live="polite" aria-label="Font preview settings">
+        <section
+          id="fontPreviewSettings"
+          class="rail-section settings-panel hidden"
+          aria-live="polite"
+          aria-label="Font preview settings"
+        >
           <div class="section-head compact">
             <p class="eyebrow">Font Preview</p>
           </div>
@@ -75,38 +96,96 @@
           </div>
           <div class="font-preview-group">
             <p class="font-preview-group-label">Compare slots (max 4)</p>
-            <div id="fontPreviewSlots" class="font-preview-slots" aria-label="Font preview compare slots"></div>
+            <div
+              id="fontPreviewSlots"
+              class="font-preview-slots"
+              aria-label="Font preview compare slots"
+            ></div>
           </div>
           <p id="fontPreviewStatus" class="system-note">Font preview phrase not loaded yet.</p>
         </section>
 
-        <section id="boardEditor" class="board-editor hidden" aria-live="polite" aria-label="Board editor">
+        <section
+          id="boardEditor"
+          class="board-editor hidden"
+          aria-live="polite"
+          aria-label="Board editor"
+        >
           <div class="board-command-bar" role="toolbar" aria-label="Board tools">
             <div class="tool-group" role="group" aria-label="Tools">
-              <button type="button" class="tool-btn" data-tool="select" title="Select and move" aria-label="Select and move">
+              <button
+                type="button"
+                class="tool-btn"
+                data-tool="select"
+                title="Select and move"
+                aria-label="Select and move"
+              >
                 <span aria-hidden="true">&#8597;</span>
               </button>
-              <button type="button" class="tool-btn" data-tool="draw" title="Draw" aria-label="Draw">
+              <button
+                type="button"
+                class="tool-btn"
+                data-tool="draw"
+                title="Draw"
+                aria-label="Draw"
+              >
                 <span aria-hidden="true">&#9998;</span>
               </button>
-              <button type="button" class="tool-btn" data-tool="text" title="Text" aria-label="Text">
+              <button
+                type="button"
+                class="tool-btn"
+                data-tool="text"
+                title="Text"
+                aria-label="Text"
+              >
                 <span aria-hidden="true">T</span>
               </button>
-              <button type="button" class="tool-btn" data-tool="image" title="Image" aria-label="Image">
+              <button
+                type="button"
+                class="tool-btn"
+                data-tool="image"
+                title="Image"
+                aria-label="Image"
+              >
                 <span aria-hidden="true">&#9638;</span>
               </button>
             </div>
             <div class="tool-group tool-actions" role="group" aria-label="Actions">
-              <button id="boardUndo" type="button" class="tool-btn tool-action" title="Undo" aria-label="Undo">
+              <button
+                id="boardUndo"
+                type="button"
+                class="tool-btn tool-action"
+                title="Undo"
+                aria-label="Undo"
+              >
                 <span aria-hidden="true">&#8630;</span>
               </button>
-              <button id="boardDeleteSelection" type="button" class="tool-btn tool-action" title="Delete selected" aria-label="Delete selected">
+              <button
+                id="boardDeleteSelection"
+                type="button"
+                class="tool-btn tool-action"
+                title="Delete selected"
+                aria-label="Delete selected"
+              >
                 <span aria-hidden="true">&#9003;</span>
               </button>
-              <button id="boardClear" type="button" class="tool-btn tool-action danger" title="Clear board" aria-label="Clear board">
+              <button
+                id="boardClear"
+                type="button"
+                class="tool-btn tool-action danger"
+                title="Clear board"
+                aria-label="Clear board"
+              >
                 <span aria-hidden="true">&#10005;</span>
               </button>
-              <button id="boardsMenuToggle" type="button" class="tool-btn tool-action" title="Boards" aria-label="Boards" aria-expanded="false">
+              <button
+                id="boardsMenuToggle"
+                type="button"
+                class="tool-btn tool-action"
+                title="Boards"
+                aria-label="Boards"
+                aria-expanded="false"
+              >
                 <span aria-hidden="true">&#9776;</span>
               </button>
             </div>
@@ -131,16 +210,40 @@
 
             <div class="context-block" data-context="draw" hidden>
               <div class="shape-picker" role="group" aria-label="Draw shape">
-                <button type="button" class="shape-btn" data-shape="freehand" title="Freehand" aria-label="Freehand">
+                <button
+                  type="button"
+                  class="shape-btn"
+                  data-shape="freehand"
+                  title="Freehand"
+                  aria-label="Freehand"
+                >
                   <span aria-hidden="true">&#9998;</span>
                 </button>
-                <button type="button" class="shape-btn" data-shape="line" title="Line" aria-label="Line">
+                <button
+                  type="button"
+                  class="shape-btn"
+                  data-shape="line"
+                  title="Line"
+                  aria-label="Line"
+                >
                   <span aria-hidden="true">/</span>
                 </button>
-                <button type="button" class="shape-btn" data-shape="rectangle" title="Rectangle" aria-label="Rectangle">
+                <button
+                  type="button"
+                  class="shape-btn"
+                  data-shape="rectangle"
+                  title="Rectangle"
+                  aria-label="Rectangle"
+                >
                   <span aria-hidden="true">&#9645;</span>
                 </button>
-                <button type="button" class="shape-btn" data-shape="circle" title="Circle" aria-label="Circle">
+                <button
+                  type="button"
+                  class="shape-btn"
+                  data-shape="circle"
+                  title="Circle"
+                  aria-label="Circle"
+                >
                   <span aria-hidden="true">&#9675;</span>
                 </button>
               </div>
@@ -159,8 +262,24 @@
             <div class="context-block" data-context="text" hidden>
               <div class="board-row text-object-row">
                 <select id="boardTextObjectSelect" aria-label="Text object"></select>
-                <button id="boardTextAdd" type="button" class="accent" title="Add text object" aria-label="Add text object">+</button>
-                <button id="boardTextDelete" type="button" class="secondary" title="Delete text object" aria-label="Delete text object">&#9003;</button>
+                <button
+                  id="boardTextAdd"
+                  type="button"
+                  class="accent"
+                  title="Add text object"
+                  aria-label="Add text object"
+                >
+                  +
+                </button>
+                <button
+                  id="boardTextDelete"
+                  type="button"
+                  class="secondary"
+                  title="Delete text object"
+                  aria-label="Delete text object"
+                >
+                  &#9003;
+                </button>
               </div>
               <div class="board-row">
                 <input id="boardText" type="text" maxlength="64" placeholder="Text" />
@@ -211,13 +330,21 @@
 
           <div id="boardsMenu" class="boards-menu hidden" aria-label="Saved boards">
             <div class="board-row">
-              <input id="boardNameInput" type="text" maxlength="64" placeholder="default" aria-label="Board name" />
+              <input
+                id="boardNameInput"
+                type="text"
+                maxlength="64"
+                placeholder="default"
+                aria-label="Board name"
+              />
               <button id="boardSaveNamed" type="button" class="accent">Save</button>
             </div>
             <select id="boardList" aria-label="Saved boards"></select>
             <div class="board-row compact">
               <button id="boardLoadNamed" type="button" class="secondary">Load</button>
-              <button id="boardDeleteNamed" type="button" class="secondary danger-text">Delete</button>
+              <button id="boardDeleteNamed" type="button" class="secondary danger-text">
+                Delete
+              </button>
             </div>
           </div>
         </section>

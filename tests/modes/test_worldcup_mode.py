@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+
 import numpy as np
 
 import app.modes.worldcup as worldcup_mode_module
@@ -26,7 +27,11 @@ def test_refresh_if_needed_respects_refresh_interval(monkeypatch):
 
     monkeypatch.setattr(worldcup_mode_module.time, "time", fake_time)
     monkeypatch.setattr(worldcup_mode_module, "get_worldcup_scorecard", fake_scorecard)
-    monkeypatch.setattr(worldcup_mode_module.threading, "Thread", lambda target, daemon: SimpleNamespace(start=target))
+    monkeypatch.setattr(
+        worldcup_mode_module.threading,
+        "Thread",
+        lambda target, daemon: SimpleNamespace(start=target),
+    )
 
     mode = worldcup_mode_module.WorldCup(28, 28, SimpleNamespace())
     mode._refresh_if_needed()
@@ -128,9 +133,21 @@ def test_live_matches_returns_most_recent_two(monkeypatch):
     mode = worldcup_mode_module.WorldCup(28, 28, SimpleNamespace())
     payload = {
         "events": [
-            {"event_id": "a", "status_bucket": "live", "kickoff_utc": SimpleNamespace(timestamp=lambda: 1.0)},
-            {"event_id": "b", "status_bucket": "live", "kickoff_utc": SimpleNamespace(timestamp=lambda: 3.0)},
-            {"event_id": "c", "status_bucket": "live", "kickoff_utc": SimpleNamespace(timestamp=lambda: 2.0)},
+            {
+                "event_id": "a",
+                "status_bucket": "live",
+                "kickoff_utc": SimpleNamespace(timestamp=lambda: 1.0),
+            },
+            {
+                "event_id": "b",
+                "status_bucket": "live",
+                "kickoff_utc": SimpleNamespace(timestamp=lambda: 3.0),
+            },
+            {
+                "event_id": "c",
+                "status_bucket": "live",
+                "kickoff_utc": SimpleNamespace(timestamp=lambda: 2.0),
+            },
         ]
     }
 

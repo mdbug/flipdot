@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+import errno
 import logging
+import re
+import select
+import subprocess
 import threading
 import time
-import errno
-import select
-import re
-import subprocess
 from typing import Any
 
 try:
-    import evdev  # type: ignore
+    import evdev
 except Exception:  # pragma: no cover - optional dependency on some dev machines
     evdev = None
 
@@ -25,14 +25,20 @@ _BATTERY_PERCENTAGE_HEX_WITH_DEC_RE = re.compile(
 )
 _BATTERY_PERCENTAGE_DEC_RE = re.compile(r"Battery Percentage:\s*(\d{1,3})\b", re.IGNORECASE)
 _BLUETOOTHCTL_RSSI_RE = re.compile(r"RSSI:\s*(?:0x[0-9a-fA-F]+\s*\()?(-?\d+)\)?", re.IGNORECASE)
-_BLUETOOTHCTL_TX_POWER_RE = re.compile(r"TxPower:\s*(?:0x[0-9a-fA-F]+\s*\()?(-?\d+)\)?", re.IGNORECASE)
+_BLUETOOTHCTL_TX_POWER_RE = re.compile(
+    r"TxPower:\s*(?:0x[0-9a-fA-F]+\s*\()?(-?\d+)\)?", re.IGNORECASE
+)
 _BLUETOOTHCTL_LINK_QUALITY_RE = re.compile(r"Link Quality:\s*(\d+)", re.IGNORECASE)
 _BTMGMT_RSSI_RE = re.compile(r"RSSI\s*:\s*(-?\d+)", re.IGNORECASE)
 _BTMGMT_TX_POWER_RE = re.compile(r"TX\s*Power\s*:\s*(-?\d+)", re.IGNORECASE)
 _BTMGMT_LINK_QUALITY_RE = re.compile(r"Link\s*quality\s*:\s*(\d+)", re.IGNORECASE)
-_BTMGMT_CONN_INTERVAL_MS_RE = re.compile(r"Connection\s*interval\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*msec", re.IGNORECASE)
+_BTMGMT_CONN_INTERVAL_MS_RE = re.compile(
+    r"Connection\s*interval\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*msec", re.IGNORECASE
+)
 _BTMGMT_CONN_LATENCY_RE = re.compile(r"(?:Peripheral\s*)?latency\s*:\s*(\d+)", re.IGNORECASE)
-_BTMGMT_SUPERVISION_TIMEOUT_MS_RE = re.compile(r"Supervision\s*timeout\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*msec", re.IGNORECASE)
+_BTMGMT_SUPERVISION_TIMEOUT_MS_RE = re.compile(
+    r"Supervision\s*timeout\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*msec", re.IGNORECASE
+)
 _BLUETOOTHCTL_CONN_INTERVAL_MS_RE = re.compile(
     r"Connection\s*interval\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*msec", re.IGNORECASE
 )
@@ -97,13 +103,15 @@ class ControllerHub:
         self._battery_updated_monotonic: float | None = None
         self._battery_source: str | None = None
         self._battery_poll_duration_ms: int | None = None
-        self._rssi_dbm: int | None = None
-        self._tx_power_dbm: int | None = None
-        self._link_quality: int | None = None
+        # Link metrics come from a mixed int/str/None Bluetooth metrics dict and are
+        # only ever surfaced in reporting payloads, so they keep that broad type.
+        self._rssi_dbm: int | str | None = None
+        self._tx_power_dbm: int | str | None = None
+        self._link_quality: int | str | None = None
         self._signal_source: str | None = None
-        self._connection_interval_ms: int | None = None
-        self._connection_latency: int | None = None
-        self._supervision_timeout_ms: int | None = None
+        self._connection_interval_ms: int | str | None = None
+        self._connection_latency: int | str | None = None
+        self._supervision_timeout_ms: int | str | None = None
         self._connection_params_source: str | None = None
         self._bluetooth_metrics_updated_monotonic: float | None = None
         self._bluetooth_metrics_poll_duration_ms: int | None = None
@@ -126,6 +134,7 @@ class ControllerHub:
             self.start()
 
     def start(self) -> None:
+        """Start the input-reading and battery-polling background threads."""
         if not self._enabled:
             return
         self._running = True
@@ -139,6 +148,7 @@ class ControllerHub:
             self._battery_thread.start()
 
     def get_status_snapshot(self) -> dict[str, Any]:
+        """Return a thread-safe snapshot of connection and button state."""
         with self._lock:
             return {
                 "enabled": bool(self._enabled),
@@ -223,11 +233,15 @@ class ControllerHub:
                                 label = self._map_button_label(event.code)
                                 if label is None:
                                     continue
-                                self._apply_button_state(label, event.value, device_path=getattr(device, "path", ""))
+                                self._apply_button_state(
+                                    label, event.value, device_path=getattr(device, "path", "")
+                                )
                                 continue
 
                             if event.type == self._evdev.ecodes.EV_ABS:
-                                self._apply_abs_state(event.code, event.value, device_path=getattr(device, "path", ""))
+                                self._apply_abs_state(
+                                    event.code, event.value, device_path=getattr(device, "path", "")
+                                )
                                 continue
 
                     if not self._running:
@@ -256,7 +270,10 @@ class ControllerHub:
             return
 
         now = time.monotonic()
-        if now - self._last_bluetooth_connect_attempt_monotonic < self._bluetooth_connect_interval_sec:
+        if (
+            now - self._last_bluetooth_connect_attempt_monotonic
+            < self._bluetooth_connect_interval_sec
+        ):
             return
         with self._lock:
             self._last_bluetooth_connect_attempt_monotonic = now
@@ -273,7 +290,11 @@ class ControllerHub:
         except Exception as exc:
             with self._lock:
                 self._bluetooth_connect_failures += 1
-            logger.debug("Controller reconnect attempt failed: address=%s error=%s", self._target_address, exc)
+            logger.debug(
+                "Controller reconnect attempt failed: address=%s error=%s",
+                self._target_address,
+                exc,
+            )
             return
 
         if result.returncode == 0:
@@ -464,7 +485,9 @@ class ControllerHub:
             return
 
         primary = devices[0]
-        names = sorted({str(getattr(device, "name", "") or "") for device in devices if device is not None})
+        names = sorted(
+            {str(getattr(device, "name", "") or "") for device in devices if device is not None}
+        )
         paths = [str(getattr(device, "path", "") or "") for device in devices if device is not None]
         with self._lock:
             self._connected = True
@@ -526,7 +549,9 @@ class ControllerHub:
             self._bluetooth_metrics_poll_duration_ms = None
             if reason_code:
                 self._last_disconnect_reason_code = reason_code
-                self._disconnect_reason_counts[reason_code] = int(self._disconnect_reason_counts.get(reason_code, 0)) + 1
+                self._disconnect_reason_counts[reason_code] = (
+                    int(self._disconnect_reason_counts.get(reason_code, 0)) + 1
+                )
 
     def _apply_button_state(self, label: str, value: int, device_path: str = "") -> None:
         ts = time.monotonic()
@@ -650,11 +675,15 @@ class ControllerHub:
             if connected:
                 battery_poll_start = time.monotonic()
                 percentage, battery_source = self._read_battery_percentage(address)
-                battery_poll_duration_ms = int(round((time.monotonic() - battery_poll_start) * 1000))
+                battery_poll_duration_ms = int(
+                    round((time.monotonic() - battery_poll_start) * 1000)
+                )
 
                 bluetooth_poll_start = time.monotonic()
                 bluetooth_metrics = self._read_bluetooth_link_metrics(address)
-                bluetooth_poll_duration_ms = int(round((time.monotonic() - bluetooth_poll_start) * 1000))
+                bluetooth_poll_duration_ms = int(
+                    round((time.monotonic() - bluetooth_poll_start) * 1000)
+                )
                 with self._lock:
                     if self._connected:
                         now = time.monotonic()
@@ -665,11 +694,19 @@ class ControllerHub:
                         self._rssi_dbm = bluetooth_metrics.get("rssi_dbm")
                         self._tx_power_dbm = bluetooth_metrics.get("tx_power_dbm")
                         self._link_quality = bluetooth_metrics.get("link_quality")
-                        self._signal_source = str(bluetooth_metrics.get("signal_source") or "") or None
-                        self._connection_interval_ms = bluetooth_metrics.get("connection_interval_ms")
+                        self._signal_source = (
+                            str(bluetooth_metrics.get("signal_source") or "") or None
+                        )
+                        self._connection_interval_ms = bluetooth_metrics.get(
+                            "connection_interval_ms"
+                        )
                         self._connection_latency = bluetooth_metrics.get("connection_latency")
-                        self._supervision_timeout_ms = bluetooth_metrics.get("supervision_timeout_ms")
-                        self._connection_params_source = str(bluetooth_metrics.get("connection_params_source") or "") or None
+                        self._supervision_timeout_ms = bluetooth_metrics.get(
+                            "supervision_timeout_ms"
+                        )
+                        self._connection_params_source = (
+                            str(bluetooth_metrics.get("connection_params_source") or "") or None
+                        )
                         self._bluetooth_metrics_updated_monotonic = now
                         self._bluetooth_metrics_poll_duration_ms = bluetooth_poll_duration_ms
                 if percentage is None:
@@ -837,7 +874,9 @@ class ControllerHub:
             "signal_source": "btmgmt",
             "connection_interval_ms": self._parse_rounded_ms(_BTMGMT_CONN_INTERVAL_MS_RE, output),
             "connection_latency": parse_int(_BTMGMT_CONN_LATENCY_RE),
-            "supervision_timeout_ms": self._parse_rounded_ms(_BTMGMT_SUPERVISION_TIMEOUT_MS_RE, output),
+            "supervision_timeout_ms": self._parse_rounded_ms(
+                _BTMGMT_SUPERVISION_TIMEOUT_MS_RE, output
+            ),
             "connection_params_source": "btmgmt",
         }
 
@@ -948,7 +987,10 @@ class ControllerHub:
                 line = raw_line.strip()
                 if not line:
                     continue
-                if line.startswith("/org/freedesktop/UPower/devices/gaming_input_dev_") and line not in candidate_paths:
+                if (
+                    line.startswith("/org/freedesktop/UPower/devices/gaming_input_dev_")
+                    and line not in candidate_paths
+                ):
                     candidate_paths.append(line)
 
         for object_path in candidate_paths:
@@ -1037,7 +1079,7 @@ class ControllerHub:
         return None
 
     @staticmethod
-    def _parse_bluetoothctl_link_metrics(output: str) -> dict[str, int | None]:
+    def _parse_bluetoothctl_link_metrics(output: str) -> dict[str, int | str | None]:
         def parse_int(regex: re.Pattern[str]) -> int | None:
             match = regex.search(output or "")
             if match is None:
@@ -1065,7 +1107,11 @@ class ControllerHub:
                 return None
 
         return {
-            "connection_interval_ms": ControllerHub._parse_rounded_ms(_BLUETOOTHCTL_CONN_INTERVAL_MS_RE, output),
+            "connection_interval_ms": ControllerHub._parse_rounded_ms(
+                _BLUETOOTHCTL_CONN_INTERVAL_MS_RE, output
+            ),
             "connection_latency": parse_int(_BLUETOOTHCTL_CONN_LATENCY_RE),
-            "supervision_timeout_ms": ControllerHub._parse_rounded_ms(_BLUETOOTHCTL_SUPERVISION_TIMEOUT_MS_RE, output),
+            "supervision_timeout_ms": ControllerHub._parse_rounded_ms(
+                _BLUETOOTHCTL_SUPERVISION_TIMEOUT_MS_RE, output
+            ),
         }

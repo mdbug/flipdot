@@ -2,7 +2,8 @@ import logging
 import os
 
 
-def setup_logging(default_level="INFO"):
+def setup_logging(default_level: str = "INFO") -> None:
+    """Configure root logging from ``LOG_LEVEL``/``LOG_FORMAT``/``LOG_DATE_FORMAT`` env vars."""
     level_name = os.getenv("LOG_LEVEL", default_level).upper()
     level = getattr(logging, level_name, logging.INFO)
 

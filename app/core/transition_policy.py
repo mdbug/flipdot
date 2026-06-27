@@ -1,18 +1,20 @@
-from dataclasses import dataclass
-from datetime import datetime
 import threading
 import time
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 
 import app.services.human_pose as human_pose
-from app.services.worldcup import get_worldcup_scorecard
 from app.core.mode_manager import ModeManager
+from app.modes.contracts import Frame
+from app.services.worldcup import get_worldcup_scorecard
 
 
 @dataclass
 class TransitionState:
     """Per-frame state produced by mode transition rules."""
 
-    face_mesh_results: object
+    face_mesh_results: Any
     eyes_visible: bool
     reason: str
     estimated_distance: float | None
@@ -39,7 +41,9 @@ class TransitionPolicy:
         self.sleep_start_hour = sleep_start_hour
         self.sleep_end_hour = sleep_end_hour
         self.pose_distance_threshold = pose_distance_threshold
-        self.face_mesh_submit_interval = 0.0 if face_mesh_max_fps <= 0 else (1.0 / face_mesh_max_fps)
+        self.face_mesh_submit_interval = (
+            0.0 if face_mesh_max_fps <= 0 else (1.0 / face_mesh_max_fps)
+        )
         self._last_face_mesh_submit = 0.0
         self._cached_face_mesh_results = None
         self._last_worldcup_live_check = 0.0
@@ -65,6 +69,7 @@ class TransitionPolicy:
             self._worldcup_refresh_in_flight = False
 
     def get_sleep_settings(self) -> dict[str, int | bool]:
+        """Return the current sleep-window settings as a JSON-friendly dict."""
         with self._sleep_lock:
             return {
                 "enabled": self.sleep_enabled,
@@ -72,7 +77,10 @@ class TransitionPolicy:
                 "end_hour": self.sleep_end_hour,
             }
 
-    def set_sleep_settings(self, *, enabled: bool, start_hour: int, end_hour: int) -> dict[str, int | bool]:
+    def set_sleep_settings(
+        self, *, enabled: bool, start_hour: int, end_hour: int
+    ) -> dict[str, int | bool]:
+        """Update the sleep window (hours clamped to 0..23) and return the new settings."""
         with self._sleep_lock:
             self.sleep_enabled = bool(enabled)
             self.sleep_start_hour = max(0, min(23, int(start_hour)))
@@ -84,6 +92,7 @@ class TransitionPolicy:
             }
 
     def _is_worldcup_live(self) -> bool:
+        """Return the cached World Cup live flag, kicking off a throttled background refresh."""
         now_mono = time.monotonic()
         should_refresh = False
         with self._worldcup_lock:
@@ -105,6 +114,7 @@ class TransitionPolicy:
         return cached_live
 
     def is_sleep_hour(self, now: datetime | None = None) -> bool:
+        """Return whether ``now`` (default: local now) falls inside the sleep window."""
         with self._sleep_lock:
             sleep_enabled = self.sleep_enabled
             sleep_start_hour = self.sleep_start_hour
@@ -127,7 +137,15 @@ class TransitionPolicy:
         # Wrapping window, e.g. 23 -> 07.
         return now.hour >= sleep_start_hour or now.hour < sleep_end_hour
 
-    def apply(self, *, frame, pose_results, mode_manager: ModeManager, paint_mode) -> TransitionState:
+    def apply(
+        self,
+        *,
+        frame: Frame,
+        pose_results: Any,
+        mode_manager: ModeManager,
+        paint_mode: Any,
+    ) -> TransitionState:
+        """Drive ``mode_manager`` from pose/clock/sleep rules and return the frame's pose state."""
         state = TransitionState(
             face_mesh_results=None,
             eyes_visible=False,
@@ -175,7 +193,9 @@ class TransitionPolicy:
             pass
 
         elif current_mode == ModeManager.MODE_POSE:
-            state.eyes_visible, state.reason, state.angle = human_pose.eyes_visible_and_facing_camera(pose_results)
+            state.eyes_visible, state.reason, state.angle = (
+                human_pose.eyes_visible_and_facing_camera(pose_results)
+            )
             state.estimated_distance, _ = human_pose.estimate_distance(pose_results)
             if human_pose.should_draw_face_features(state.estimated_distance):
                 now_mono = time.monotonic()
@@ -202,7 +222,9 @@ class TransitionPolicy:
         else:
             # Clock and fallback modes.
             if mode_manager.pose_enabled:
-                state.eyes_visible, state.reason, state.angle = human_pose.eyes_visible_and_facing_camera(pose_results)
+                state.eyes_visible, state.reason, state.angle = (
+                    human_pose.eyes_visible_and_facing_camera(pose_results)
+                )
                 state.estimated_distance, _ = human_pose.estimate_distance(pose_results)
                 if (
                     pose_results
@@ -218,7 +240,9 @@ class TransitionPolicy:
                     ):
                         mode_manager.set_mode(ModeManager.MODE_POSE)
 
-            if human_pose.is_arms_crossed(pose_results) and (state.eyes_visible or not mode_manager.pose_enabled):
+            if human_pose.is_arms_crossed(pose_results) and (
+                state.eyes_visible or not mode_manager.pose_enabled
+            ):
                 mode_manager.click_menu(entered_via=ModeManager.CONTROL_GESTURE)
             else:
                 mode_manager.reset_menu_click()

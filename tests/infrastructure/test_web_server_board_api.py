@@ -162,7 +162,14 @@ class DummyBoard:
 
     def place_uploaded_image(self, image_bytes, mode, x, y, threshold):
         if mode == "object":
-            payload = {"id": "img_1", "x": x, "y": y, "width": 2, "height": 2, "pixels": [[1, 1], [1, 1]]}
+            payload = {
+                "id": "img_1",
+                "x": x,
+                "y": y,
+                "width": 2,
+                "height": 2,
+                "pixels": [[1, 1], [1, 1]],
+            }
             self.image_objects.append(payload)
             return {"mode": "object", "object": payload}
         return {"mode": "stamp", "width": 2, "height": 2}
@@ -231,7 +238,9 @@ class DummyBoard:
         for item in moves:
             if item.get("id") == "missing":
                 return None
-            normalized.append({"id": item.get("id"), "x": item.get("x"), "y": item.get("y"), "persist": persist})
+            normalized.append(
+                {"id": item.get("id"), "x": item.get("x"), "y": item.get("y"), "persist": persist}
+            )
         return normalized
 
 
@@ -726,7 +735,9 @@ def test_board_new_endpoints_work_with_attached_board():
     assert response.status_code == 200
     assert response.json()["hit"]["id"] == "txt_1"
 
-    response = client.post("/api/board/hit-test", json={"x": 0.1, "y": 0.2, "all_hits": True, "select": False})
+    response = client.post(
+        "/api/board/hit-test", json={"x": 0.1, "y": 0.2, "all_hits": True, "select": False}
+    )
     assert response.status_code == 200
     assert response.json()["hits"][0]["id"] == "txt_1"
 

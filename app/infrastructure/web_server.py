@@ -1,22 +1,24 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
 import os
-from pathlib import Path
 import threading
 import time
-from typing import Callable, Optional
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
 
+import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-import uvicorn
 
 from app.infrastructure import chat as chat_backend
 from app.infrastructure.mcp_server import build_flipdot_mcp
+from app.modes.contracts import Frame
 from app.services.settings_store import RuntimeSettingsStore
 
 
@@ -140,7 +142,9 @@ class FontPreviewSettingsPayload(BaseModel):
 class WebServer:
     """Built-in FastAPI server for frame mirroring and browser input."""
 
-    def __init__(self, *, input_hub, host: str, port: int, settings_path: Path | None = None) -> None:
+    def __init__(
+        self, *, input_hub: Any, host: str, port: int, settings_path: Path | None = None
+    ) -> None:
         self._input_hub = input_hub
         self._host = host
         self._port = port
@@ -154,7 +158,7 @@ class WebServer:
         self._frame_height = 28
         self._frame_version = 0
         self._current_mode = ""
-        self._controls = []
+        self._controls: list[dict] = []
         self._controller_status_provider: Callable[[], dict | list[dict]] | None = None
         self._controller_metrics_lock = threading.Lock()
         self._controller_metrics_samples: list[dict] = []
@@ -203,15 +207,15 @@ class WebServer:
         if self._mcp is not None:
             self._app.mount("/mcp", self._mcp.streamable_http_app())
 
-        self._server: Optional[uvicorn.Server] = None
-        self._thread: Optional[threading.Thread] = None
+        self._server: uvicorn.Server | None = None
+        self._thread: threading.Thread | None = None
         self._wire_routes()
 
-    def _build_lifespan(self):
+    def _build_lifespan(self) -> Callable[[FastAPI], Any]:
         mcp = self._mcp
 
         @asynccontextmanager
-        async def lifespan(app: FastAPI):
+        async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             if mcp is None:
                 yield
                 return
@@ -231,7 +235,7 @@ class WebServer:
                 self._frame_height,
             )
 
-    def _mcp_controller_status(self):
+    def _mcp_controller_status(self) -> dict:
         status, _statuses = self._controller_status_payload()
         return status
 
@@ -364,7 +368,9 @@ class WebServer:
             )
             if payload.all_hits:
                 hits = hit_result if isinstance(hit_result, list) else []
-                return JSONResponse({"status": "ok", "hit": hits[0] if hits else None, "hits": hits})
+                return JSONResponse(
+                    {"status": "ok", "hit": hits[0] if hits else None, "hits": hits}
+                )
             return JSONResponse({"status": "ok", "hit": hit_result})
 
         @self._app.get("/api/board/text-objects")
@@ -385,7 +391,9 @@ class WebServer:
             return JSONResponse({"status": "ok", "text_object": created})
 
         @self._app.patch("/api/board/text-objects/{object_id}")
-        def patch_board_text_object(object_id: str, payload: BoardTextObjectUpdatePayload) -> JSONResponse:
+        def patch_board_text_object(
+            object_id: str, payload: BoardTextObjectUpdatePayload
+        ) -> JSONResponse:
             board = self._require_board()
             updated = board.update_text_object(
                 object_id,
@@ -436,7 +444,9 @@ class WebServer:
             return JSONResponse({"status": "ok", **payload})
 
         @self._app.patch("/api/board/image-objects/{object_id}")
-        def patch_board_image_object(object_id: str, payload: BoardImageMovePayload) -> JSONResponse:
+        def patch_board_image_object(
+            object_id: str, payload: BoardImageMovePayload
+        ) -> JSONResponse:
             board = self._require_board()
             updated = board.move_image_object(object_id, x=payload.x, y=payload.y)
             if updated is None:
@@ -448,13 +458,22 @@ class WebServer:
             board = self._require_board()
             try:
                 if payload.ids:
-                    moved = board.move_objects([item.model_dump() for item in payload.ids], persist=False)
+                    moved = board.move_objects(
+                        [item.model_dump() for item in payload.ids], persist=False
+                    )
                     if moved is None:
                         raise HTTPException(status_code=404, detail="object not found")
                     return JSONResponse({"status": "ok", "objects": moved})
 
-                if payload.kind is None or payload.id is None or payload.x is None or payload.y is None:
-                    raise HTTPException(status_code=400, detail="drag payload requires kind/id/x/y or ids")
+                if (
+                    payload.kind is None
+                    or payload.id is None
+                    or payload.x is None
+                    or payload.y is None
+                ):
+                    raise HTTPException(
+                        status_code=400, detail="drag payload requires kind/id/x/y or ids"
+                    )
 
                 moved = board.move_object(
                     payload.kind,
@@ -474,13 +493,22 @@ class WebServer:
             board = self._require_board()
             try:
                 if payload.ids:
-                    moved = board.move_objects([item.model_dump() for item in payload.ids], persist=True)
+                    moved = board.move_objects(
+                        [item.model_dump() for item in payload.ids], persist=True
+                    )
                     if moved is None:
                         raise HTTPException(status_code=404, detail="object not found")
                     return JSONResponse({"status": "ok", "objects": moved})
 
-                if payload.kind is None or payload.id is None or payload.x is None or payload.y is None:
-                    raise HTTPException(status_code=400, detail="drag payload requires kind/id/x/y or ids")
+                if (
+                    payload.kind is None
+                    or payload.id is None
+                    or payload.x is None
+                    or payload.y is None
+                ):
+                    raise HTTPException(
+                        status_code=400, detail="drag payload requires kind/id/x/y or ids"
+                    )
 
                 moved = board.move_object(
                     payload.kind,
@@ -610,7 +638,7 @@ class WebServer:
             if not message:
                 raise HTTPException(status_code=400, detail="message is required")
 
-            async def generate():
+            async def generate() -> AsyncIterator[str]:
                 # Hold the lock for the whole turn so the shared history stays
                 # consistent if a second request arrives mid-stream.
                 async with self._chat_lock:
@@ -693,7 +721,15 @@ class WebServer:
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=2.0)
 
-    def publish_frame(self, frame, *, mode: str = "", controls=None, panel_updated_monotonic: float | None = None) -> None:
+    def publish_frame(
+        self,
+        frame: Frame,
+        *,
+        mode: str = "",
+        controls: list[dict] | None = None,
+        panel_updated_monotonic: float | None = None,
+    ) -> None:
+        """Store the latest frame and metadata for API/WebSocket consumers."""
         # Convert once here so API handlers can return cheap immutable snapshots.
         pixels = frame.astype("uint8").tolist()
         with self._frame_lock:
@@ -724,7 +760,7 @@ class WebServer:
                 last_sequence = self._controller_metrics_last_latency_sequence.get(key, 0)
                 if sequence <= last_sequence:
                     continue
-                monotonic_value = event.get("monotonic")
+                monotonic_value: Any = event.get("monotonic")
                 try:
                     event_monotonic = float(monotonic_value)
                 except (TypeError, ValueError):
@@ -768,7 +804,7 @@ class WebServer:
 
     def attach_font_preview(self, font_preview) -> None:
         self._font_preview = font_preview
-        persisted = self._settings_store.load_font_preview_settings()
+        persisted: Any = self._settings_store.load_font_preview_settings()
         if persisted is not None:
             font_preview.update_settings(
                 phrase=str(persisted["phrase"]),
@@ -776,7 +812,9 @@ class WebServer:
                 variants=list(persisted.get("variants", [])),
             )
 
-    def attach_controller_status_provider(self, provider: Callable[[], dict | list[dict]] | None) -> None:
+    def attach_controller_status_provider(
+        self, provider: Callable[[], dict | list[dict]] | None
+    ) -> None:
         self._controller_status_provider = provider
 
     def _controller_status_payload(self) -> tuple[dict, list[dict]]:
@@ -839,7 +877,11 @@ class WebServer:
                 if previous_connected is not None and previous_connected != connected:
                     changed = True
                     event_type = "connected" if connected else "disconnected"
-                    reason_code = str(status.get("last_disconnect_reason_code", "") or "") if not connected else ""
+                    reason_code = (
+                        str(status.get("last_disconnect_reason_code", "") or "")
+                        if not connected
+                        else ""
+                    )
                     if connected:
                         counter["reconnects"] += 1
                     else:
@@ -868,15 +910,16 @@ class WebServer:
                 for button_event in button_events:
                     if not isinstance(button_event, dict):
                         continue
+                    raw_sequence: Any = button_event.get("sequence")
                     try:
-                        sequence = int(button_event.get("sequence"))
+                        sequence = int(raw_sequence)
                     except (TypeError, ValueError):
                         continue
                     last_sequence = self._controller_metrics_last_button_sequence.get(key, 0)
                     if sequence <= last_sequence:
                         continue
                     self._controller_metrics_last_button_sequence[key] = sequence
-                    event_monotonic = button_event.get("monotonic")
+                    event_monotonic: Any = button_event.get("monotonic")
                     event_monotonic_value = None
                     try:
                         event_monotonic_value = float(event_monotonic)
@@ -893,7 +936,9 @@ class WebServer:
                             "sequence": sequence,
                             "button": str(button_event.get("button", "") or ""),
                             "event": str(button_event.get("event", "") or ""),
-                            "monotonic": event_monotonic_value if isinstance(event_monotonic_value, float) else None,
+                            "monotonic": event_monotonic_value
+                            if isinstance(event_monotonic_value, float)
+                            else None,
                         }
                     )
                 sample_statuses.append(
@@ -905,7 +950,9 @@ class WebServer:
                         "last_event_age_ms": status.get("last_event_age_ms"),
                         "bluetooth_connect_attempts": status.get("bluetooth_connect_attempts"),
                         "bluetooth_connect_failures": status.get("bluetooth_connect_failures"),
-                        "last_bluetooth_connect_attempt_age_ms": status.get("last_bluetooth_connect_attempt_age_ms"),
+                        "last_bluetooth_connect_attempt_age_ms": status.get(
+                            "last_bluetooth_connect_attempt_age_ms"
+                        ),
                         "battery_percentage": status.get("battery_percentage"),
                         "battery_source": status.get("battery_source"),
                         "battery_age_ms": status.get("battery_age_ms"),
@@ -921,13 +968,17 @@ class WebServer:
                         "last_disconnect_reason_code": status.get("last_disconnect_reason_code"),
                         "disconnect_reason_counts": status.get("disconnect_reason_counts"),
                         "bluetooth_metrics_age_ms": status.get("bluetooth_metrics_age_ms"),
-                        "bluetooth_metrics_poll_duration_ms": status.get("bluetooth_metrics_poll_duration_ms"),
+                        "bluetooth_metrics_poll_duration_ms": status.get(
+                            "bluetooth_metrics_poll_duration_ms"
+                        ),
                         "pressed_count": len(pressed_buttons),
                         "pressed_buttons": [str(item) for item in pressed_buttons],
                     }
                 )
 
-            should_sample = changed or (now_monotonic - self._controller_metrics_last_sample_monotonic >= 0.5)
+            should_sample = changed or (
+                now_monotonic - self._controller_metrics_last_sample_monotonic >= 0.5
+            )
             if not should_sample:
                 return
 
@@ -941,10 +992,14 @@ class WebServer:
 
             cutoff = now_wall - 3600.0
             self._controller_metrics_samples = [
-                sample for sample in self._controller_metrics_samples if float(sample.get("timestamp", 0.0)) >= cutoff
+                sample
+                for sample in self._controller_metrics_samples
+                if float(sample.get("timestamp", 0.0)) >= cutoff
             ][-7200:]
             self._controller_metrics_events = [
-                event for event in self._controller_metrics_events if float(event.get("timestamp", 0.0)) >= cutoff
+                event
+                for event in self._controller_metrics_events
+                if float(event.get("timestamp", 0.0)) >= cutoff
             ][-1000:]
             self._controller_metrics_button_events = [
                 event
@@ -958,7 +1013,9 @@ class WebServer:
             events = list(self._controller_metrics_events)
             button_events = list(self._controller_metrics_button_events)
             panel_latency_events = list(self._controller_metrics_panel_latency_events)
-            counters = {key: dict(value) for key, value in self._controller_metrics_counters.items()}
+            counters = {
+                key: dict(value) for key, value in self._controller_metrics_counters.items()
+            }
 
         now_wall = time.time()
         window_sec = 3600
@@ -1002,12 +1059,20 @@ class WebServer:
 
             sample_count = len(controller_samples)
             connected_ratio = (connected_samples / sample_count) if sample_count else 0.0
-            average_event_age_ms = (sum(freshness_values) / len(freshness_values)) if freshness_values else None
+            average_event_age_ms = (
+                (sum(freshness_values) / len(freshness_values)) if freshness_values else None
+            )
             average_rssi_dbm = (sum(rssi_values) / len(rssi_values)) if rssi_values else None
-            average_connection_interval_ms = (sum(interval_values) / len(interval_values)) if interval_values else None
-            average_supervision_timeout_ms = (sum(supervision_values) / len(supervision_values)) if supervision_values else None
+            average_connection_interval_ms = (
+                (sum(interval_values) / len(interval_values)) if interval_values else None
+            )
+            average_supervision_timeout_ms = (
+                (sum(supervision_values) / len(supervision_values)) if supervision_values else None
+            )
             average_connection_latency = (
-                (sum(connection_latency_values) / len(connection_latency_values)) if connection_latency_values else None
+                (sum(connection_latency_values) / len(connection_latency_values))
+                if connection_latency_values
+                else None
             )
             disconnect_count = int(counter.get("disconnects", 0))
             controller_events = sorted(
@@ -1021,7 +1086,11 @@ class WebServer:
                 event_ts = float(controller_event.get("timestamp", 0.0))
                 if event_type == "disconnected":
                     last_disconnect_ts = event_ts
-                elif event_type == "connected" and last_disconnect_ts is not None and event_ts >= last_disconnect_ts:
+                elif (
+                    event_type == "connected"
+                    and last_disconnect_ts is not None
+                    and event_ts >= last_disconnect_ts
+                ):
                     reconnect_durations_sec.append(event_ts - last_disconnect_ts)
                     last_disconnect_ts = None
 
@@ -1060,7 +1129,9 @@ class WebServer:
                     "device_name": counter.get("device_name", ""),
                     "disconnects": disconnect_count,
                     "reconnects": int(counter.get("reconnects", 0)),
-                    "disconnects_per_hour": (disconnect_count / window_hours) if window_hours > 0 else 0.0,
+                    "disconnects_per_hour": (disconnect_count / window_hours)
+                    if window_hours > 0
+                    else 0.0,
                     "mttr_sec": mttr_sec,
                     "connected_ratio": connected_ratio,
                     "average_event_age_ms": average_event_age_ms,
@@ -1112,7 +1183,7 @@ class WebServer:
             else:
                 normalized_battery = parsed_battery if 0 <= parsed_battery <= 100 else None
 
-        last_event_monotonic = status.get("last_event_monotonic")
+        last_event_monotonic: Any = status.get("last_event_monotonic")
         try:
             last_event_monotonic_value = float(last_event_monotonic)
         except (TypeError, ValueError):
@@ -1121,9 +1192,11 @@ class WebServer:
         if last_event_monotonic_value is None:
             last_event_age_ms = None
         else:
-            last_event_age_ms = max(0, int(round((time.monotonic() - last_event_monotonic_value) * 1000)))
+            last_event_age_ms = max(
+                0, int(round((time.monotonic() - last_event_monotonic_value) * 1000))
+            )
 
-        battery_updated_monotonic = status.get("battery_updated_monotonic")
+        battery_updated_monotonic: Any = status.get("battery_updated_monotonic")
         try:
             battery_updated_monotonic_value = float(battery_updated_monotonic)
         except (TypeError, ValueError):
@@ -1131,9 +1204,11 @@ class WebServer:
         if battery_updated_monotonic_value is None:
             battery_age_ms = None
         else:
-            battery_age_ms = max(0, int(round((time.monotonic() - battery_updated_monotonic_value) * 1000)))
+            battery_age_ms = max(
+                0, int(round((time.monotonic() - battery_updated_monotonic_value) * 1000))
+            )
 
-        bluetooth_metrics_updated_monotonic = status.get("bluetooth_metrics_updated_monotonic")
+        bluetooth_metrics_updated_monotonic: Any = status.get("bluetooth_metrics_updated_monotonic")
         try:
             bluetooth_metrics_updated_monotonic_value = float(bluetooth_metrics_updated_monotonic)
         except (TypeError, ValueError):
@@ -1146,9 +1221,13 @@ class WebServer:
                 int(round((time.monotonic() - bluetooth_metrics_updated_monotonic_value) * 1000)),
             )
 
-        last_bluetooth_connect_attempt_monotonic = status.get("last_bluetooth_connect_attempt_monotonic")
+        last_bluetooth_connect_attempt_monotonic: Any = status.get(
+            "last_bluetooth_connect_attempt_monotonic"
+        )
         try:
-            last_bluetooth_connect_attempt_monotonic_value = float(last_bluetooth_connect_attempt_monotonic)
+            last_bluetooth_connect_attempt_monotonic_value = float(
+                last_bluetooth_connect_attempt_monotonic
+            )
         except (TypeError, ValueError):
             last_bluetooth_connect_attempt_monotonic_value = None
         if last_bluetooth_connect_attempt_monotonic_value is None:
@@ -1156,7 +1235,11 @@ class WebServer:
         else:
             last_bluetooth_connect_attempt_age_ms = max(
                 0,
-                int(round((time.monotonic() - last_bluetooth_connect_attempt_monotonic_value) * 1000)),
+                int(
+                    round(
+                        (time.monotonic() - last_bluetooth_connect_attempt_monotonic_value) * 1000
+                    )
+                ),
             )
 
         return {
@@ -1167,31 +1250,45 @@ class WebServer:
             "pressed_buttons": [str(item) for item in pressed_buttons],
             "last_event_monotonic": last_event_monotonic_value,
             "last_event_age_ms": last_event_age_ms,
-            "bluetooth_connect_attempts": self._normalize_int_or_none(status.get("bluetooth_connect_attempts")),
-            "bluetooth_connect_failures": self._normalize_int_or_none(status.get("bluetooth_connect_failures")),
+            "bluetooth_connect_attempts": self._normalize_int_or_none(
+                status.get("bluetooth_connect_attempts")
+            ),
+            "bluetooth_connect_failures": self._normalize_int_or_none(
+                status.get("bluetooth_connect_failures")
+            ),
             "last_bluetooth_connect_attempt_monotonic": last_bluetooth_connect_attempt_monotonic_value,
             "last_bluetooth_connect_attempt_age_ms": last_bluetooth_connect_attempt_age_ms,
             "battery_percentage": normalized_battery,
             "battery_source": str(status.get("battery_source", "") or ""),
             "battery_updated_monotonic": battery_updated_monotonic_value,
             "battery_age_ms": battery_age_ms,
-            "battery_poll_duration_ms": self._normalize_int_or_none(status.get("battery_poll_duration_ms")),
+            "battery_poll_duration_ms": self._normalize_int_or_none(
+                status.get("battery_poll_duration_ms")
+            ),
             "rssi_dbm": self._normalize_int_or_none(status.get("rssi_dbm")),
             "tx_power_dbm": self._normalize_int_or_none(status.get("tx_power_dbm")),
             "link_quality": self._normalize_int_or_none(status.get("link_quality")),
             "signal_source": str(status.get("signal_source", "") or ""),
-            "connection_interval_ms": self._normalize_int_or_none(status.get("connection_interval_ms")),
+            "connection_interval_ms": self._normalize_int_or_none(
+                status.get("connection_interval_ms")
+            ),
             "connection_latency": self._normalize_int_or_none(status.get("connection_latency")),
-            "supervision_timeout_ms": self._normalize_int_or_none(status.get("supervision_timeout_ms")),
+            "supervision_timeout_ms": self._normalize_int_or_none(
+                status.get("supervision_timeout_ms")
+            ),
             "connection_params_source": str(status.get("connection_params_source", "") or ""),
             "last_disconnect_reason_code": str(status.get("last_disconnect_reason_code", "") or ""),
-            "disconnect_reason_counts": self._normalize_reason_counts(status.get("disconnect_reason_counts", {})),
+            "disconnect_reason_counts": self._normalize_reason_counts(
+                status.get("disconnect_reason_counts", {})
+            ),
             "bluetooth_metrics_updated_monotonic": bluetooth_metrics_updated_monotonic_value,
             "bluetooth_metrics_age_ms": bluetooth_metrics_age_ms,
             "bluetooth_metrics_poll_duration_ms": self._normalize_int_or_none(
                 status.get("bluetooth_metrics_poll_duration_ms")
             ),
-            "recent_button_events": self._normalize_button_events(status.get("recent_button_events", [])),
+            "recent_button_events": self._normalize_button_events(
+                status.get("recent_button_events", [])
+            ),
         }
 
     @staticmethod
@@ -1211,12 +1308,14 @@ class WebServer:
         for item in value[-50:]:
             if not isinstance(item, dict):
                 continue
+            raw_sequence: Any = item.get("sequence")
             try:
-                sequence = int(item.get("sequence"))
+                sequence = int(raw_sequence)
             except (TypeError, ValueError):
                 continue
+            raw_monotonic: Any = item.get("monotonic")
             try:
-                monotonic = float(item.get("monotonic"))
+                monotonic = float(raw_monotonic)
             except (TypeError, ValueError):
                 monotonic = None
             out.append(
@@ -1333,17 +1432,17 @@ class WebServer:
             "recent_button_events": [],
         }
 
-    def _require_board(self):
+    def _require_board(self) -> Any:
         if self._board is None:
             raise HTTPException(status_code=409, detail="board mode is not attached")
         return self._board
 
-    def _require_transition_policy(self):
+    def _require_transition_policy(self) -> Any:
         if self._transition_policy is None:
             raise HTTPException(status_code=409, detail="transition policy is not attached")
         return self._transition_policy
 
-    def _require_font_preview(self):
+    def _require_font_preview(self) -> Any:
         if self._font_preview is None:
             raise HTTPException(status_code=409, detail="font preview mode is not attached")
         return self._font_preview

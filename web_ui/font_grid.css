@@ -26,8 +26,7 @@ body {
   color: var(--text);
   background:
     radial-gradient(circle at 10% 0%, rgba(42, 183, 169, 0.17) 0, transparent 34%),
-    radial-gradient(circle at 100% 20%, rgba(239, 107, 85, 0.1) 0, transparent 28%),
-    var(--bg);
+    radial-gradient(circle at 100% 20%, rgba(239, 107, 85, 0.1) 0, transparent 28%), var(--bg);
   font-family: "Avenir Next", "Segoe UI", sans-serif;
 }
 

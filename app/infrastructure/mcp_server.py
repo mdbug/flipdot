@@ -10,13 +10,13 @@ over the same host/port as the browser console.
 from __future__ import annotations
 
 import base64
-from typing import Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from app.core.mode_manager import ModeManager
-
 
 # Mode ids an agent is allowed to switch to. Derived from ModeManager so it stays
 # in sync with the constants defined there.
@@ -39,21 +39,19 @@ _SHAPE_ALIASES = {
 
 def _frame_to_ascii(pixels: list[list[int]]) -> str:
     """Render a binary frame as ASCII so an agent can 'see' the display."""
-    return "\n".join(
-        "".join("█" if cell else "·" for cell in row) for row in pixels
-    )
+    return "\n".join("".join("█" if cell else "·" for cell in row) for row in pixels)
 
 
 def build_flipdot_mcp(
     *,
-    input_hub,
+    input_hub: Any,
     snapshot_frame: Callable[[], tuple[list[list[int]], str, int, int]],
-    get_mode_manager: Callable[[], Optional[object]],
-    get_board: Callable[[], Optional[object]],
-    get_script_mode: Callable[[], Optional[object]] | None = None,
-    get_transition_policy: Callable[[], Optional[object]],
-    settings_store,
-    get_controller_status: Callable[[], object] | None = None,
+    get_mode_manager: Callable[[], Any | None],
+    get_board: Callable[[], Any | None],
+    get_script_mode: Callable[[], Any | None] | None = None,
+    get_transition_policy: Callable[[], Any | None],
+    settings_store: Any,
+    get_controller_status: Callable[[], Any] | None = None,
 ) -> FastMCP:
     """Build the flip-dot MCP server.
 
@@ -76,25 +74,25 @@ def build_flipdot_mcp(
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
 
-    def _require_board():
+    def _require_board() -> Any:
         board = get_board()
         if board is None:
             raise ValueError("board mode is not available yet")
         return board
 
-    def _require_mode_manager():
+    def _require_mode_manager() -> Any:
         mode_manager = get_mode_manager()
         if mode_manager is None:
             raise ValueError("mode manager is not available yet")
         return mode_manager
 
-    def _require_script_mode():
+    def _require_script_mode() -> Any:
         script_mode = get_script_mode() if get_script_mode is not None else None
         if script_mode is None:
             raise ValueError("script mode is not available yet")
         return script_mode
 
-    def _require_transition_policy():
+    def _require_transition_policy() -> Any:
         policy = get_transition_policy()
         if policy is None:
             raise ValueError("transition policy is not available yet")

@@ -1,0 +1,14 @@
+# Optional: `pipenv run pre-commit install` to enable the gate on every commit.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v3.1.0
+    hooks:
+      - id: prettier
+        files: ^web_ui/
+        exclude: ^web_ui/vendor/

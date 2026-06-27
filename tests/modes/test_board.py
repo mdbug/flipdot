@@ -41,10 +41,12 @@ def test_board_apply_stroke_sets_pixels(monkeypatch, tmp_path):
     board_module = _load_board_module(monkeypatch, tmp_path)
     board = board_module.Board(28, 28, DummyModeManager())
 
-    board.apply_stroke([
-        {"x": 0.1, "y": 0.1},
-        {"x": 0.9, "y": 0.9},
-    ])
+    board.apply_stroke(
+        [
+            {"x": 0.1, "y": 0.1},
+            {"x": 0.9, "y": 0.9},
+        ]
+    )
     frame = board.get_frame(None)
 
     assert frame.shape == (28, 28)
@@ -173,9 +175,11 @@ def test_board_apply_stroke_off_color_erases_pixels(monkeypatch, tmp_path):
     board_module = _load_board_module(monkeypatch, tmp_path)
     board = board_module.Board(28, 28, DummyModeManager())
 
-    board.apply_stroke([
-        {"x": 0.5, "y": 0.5},
-    ])
+    board.apply_stroke(
+        [
+            {"x": 0.5, "y": 0.5},
+        ]
+    )
     before_erase = int(board.get_frame(None).sum())
     assert before_erase > 0
 

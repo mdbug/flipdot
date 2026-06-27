@@ -1,29 +1,44 @@
-import cv2
+import logging
 import os
 import threading
-import logging
 import time
 
+import cv2
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
 class Camera:
-    def __init__(self, camera_index=0, width=640, height=480, fps=30):
+    """Capture webcam frames on a background thread, exposing the latest one.
+
+    A reader thread continuously grabs frames so the main loop never blocks on
+    camera I/O; ``read_frame`` returns the freshest captured BGR frame.
+    """
+
+    def __init__(
+        self, camera_index: int = 0, width: int = 640, height: int = 480, fps: int = 30
+    ) -> None:
         self.camera_index = camera_index
         self.cap = cv2.VideoCapture(camera_index, cv2.CAP_V4L2)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self.cap.set(cv2.CAP_PROP_FPS, fps)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc("M", "J", "P", "G"))
 
         # Fix webcam contrast
         ret, frame = self.cap.read()
         if not ret:
             raise RuntimeError(f"Failed to read initial frame from camera index {camera_index}")
         os.system(f"v4l2-ctl -d /dev/video{camera_index} --set-ctrl=contrast=128")
-        logger.info("Camera initialized index=%s width=%s height=%s fps=%s", camera_index, width, height, fps)
+        logger.info(
+            "Camera initialized index=%s width=%s height=%s fps=%s",
+            camera_index,
+            width,
+            height,
+            fps,
+        )
 
         # Background reader: always keep the freshest frame ready so the main
         # loop never blocks on camera I/O.
@@ -32,7 +47,8 @@ class Camera:
         self._thread = threading.Thread(target=self._reader, daemon=True)
         self._thread.start()
 
-    def _reader(self):
+    def _reader(self) -> None:
+        """Continuously grab frames, keeping only the most recent."""
         while True:
             try:
                 ret, frame = self.cap.read()
@@ -46,6 +62,7 @@ class Camera:
                 # Avoid hot-looping if the camera backend is temporarily unavailable.
                 time.sleep(0.1)
 
-    def read_frame(self):
+    def read_frame(self) -> np.ndarray:
+        """Return the most recently captured BGR frame."""
         with self._lock:
             return self._frame

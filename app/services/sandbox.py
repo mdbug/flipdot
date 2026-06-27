@@ -39,7 +39,6 @@ import sys
 import traceback
 from multiprocessing.connection import Connection
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -54,9 +53,23 @@ ALLOWED_MODULES = {"numpy", "math", "random"}
 # the worker namespace omits them, rejecting them in the AST gives Claude a
 # clear, early error to self-correct against.
 BLOCKED_NAMES = {
-    "eval", "exec", "compile", "open", "__import__", "input", "breakpoint",
-    "exit", "quit", "globals", "locals", "vars", "getattr", "setattr",
-    "delattr", "memoryview", "help",
+    "eval",
+    "exec",
+    "compile",
+    "open",
+    "__import__",
+    "input",
+    "breakpoint",
+    "exit",
+    "quit",
+    "globals",
+    "locals",
+    "vars",
+    "getattr",
+    "setattr",
+    "delattr",
+    "memoryview",
+    "help",
 }
 
 # Builtins the worker namespace *does* expose. Deliberately omits open/eval/
@@ -64,12 +77,48 @@ BLOCKED_NAMES = {
 _SAFE_BUILTINS = {
     name: __builtins__[name] if isinstance(__builtins__, dict) else getattr(__builtins__, name)
     for name in (
-        "abs", "all", "any", "bool", "bytes", "bytearray", "complex", "dict",
-        "divmod", "enumerate", "filter", "float", "frozenset", "int", "len",
-        "list", "map", "max", "min", "pow", "print", "range", "reversed",
-        "round", "set", "slice", "sorted", "str", "sum", "tuple", "zip",
-        "True", "False", "None", "abs", "bin", "hex", "oct", "ord", "chr",
-        "isinstance", "issubclass",
+        "abs",
+        "all",
+        "any",
+        "bool",
+        "bytes",
+        "bytearray",
+        "complex",
+        "dict",
+        "divmod",
+        "enumerate",
+        "filter",
+        "float",
+        "frozenset",
+        "int",
+        "len",
+        "list",
+        "map",
+        "max",
+        "min",
+        "pow",
+        "print",
+        "range",
+        "reversed",
+        "round",
+        "set",
+        "slice",
+        "sorted",
+        "str",
+        "sum",
+        "tuple",
+        "zip",
+        "True",
+        "False",
+        "None",
+        "abs",
+        "bin",
+        "hex",
+        "oct",
+        "ord",
+        "chr",
+        "isinstance",
+        "issubclass",
     )
     if (name in __builtins__ if isinstance(__builtins__, dict) else hasattr(__builtins__, name))
 }
@@ -133,13 +182,9 @@ def validate_source(code: str) -> None:
     if validator.errors:
         raise ScriptValidationError("; ".join(sorted(set(validator.errors))))
 
-    func_names = {
-        node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
-    }
+    func_names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
     if "step" not in func_names:
-        raise ScriptValidationError(
-            "script must define a step(state, t, width, height) function"
-        )
+        raise ScriptValidationError("script must define a step(state, t, width, height) function")
 
 
 # --- Worker process --------------------------------------------------------
@@ -266,33 +311,31 @@ class SandboxedScript:
         self._mem_limit_bytes = max(0, mem_limit_mb) * 1024 * 1024
         self._frame_timeout = frame_timeout
         self._startup_timeout = startup_timeout
-        self._proc: Optional[subprocess.Popen] = None
-        self._conn: Optional[Connection] = None
+        self._proc: subprocess.Popen | None = None
+        self._conn: Connection | None = None
         self._failed = False
-        self._error: Optional[str] = None
+        self._error: str | None = None
 
     @property
     def failed(self) -> bool:
+        """Whether the script has failed and can no longer produce frames."""
         return self._failed
 
     @property
-    def error(self) -> Optional[str]:
+    def error(self) -> str | None:
+        """The failure message, if the script has failed; otherwise None."""
         return self._error
 
     def start(self) -> None:
+        """Launch the isolated worker process and wait for it to be ready."""
         # A socketpair carries the multiprocessing Connection protocol; one end
         # is inherited by a minimal `python -c` worker that imports only numpy.
         parent_sock, child_sock = socket.socketpair()
         child_fd = child_sock.fileno()
         os.set_inheritable(child_fd, True)
-        bootstrap = (
-            "from app.services.sandbox import _worker_entry; "
-            f"_worker_entry({child_fd})"
-        )
+        bootstrap = f"from app.services.sandbox import _worker_entry; _worker_entry({child_fd})"
         env = dict(os.environ)
-        env["PYTHONPATH"] = os.pathsep.join(
-            p for p in (_REPO_ROOT, env.get("PYTHONPATH", "")) if p
-        )
+        env["PYTHONPATH"] = os.pathsep.join(p for p in (_REPO_ROOT, env.get("PYTHONPATH", "")) if p)
         try:
             self._proc = subprocess.Popen(
                 [sys.executable, "-c", bootstrap],
@@ -308,16 +351,16 @@ class SandboxedScript:
             self._conn.send(("config", self.code, self.width, self.height, self._mem_limit_bytes))
         except (OSError, BrokenPipeError) as exc:
             self._fail(f"failed to start worker: {exc}")
-            raise SandboxStartupError(self._error or "failed to start worker")
+            raise SandboxStartupError(self._error or "failed to start worker") from exc
 
         if not self._conn.poll(self._startup_timeout):
             self._fail("script did not start in time")
             raise SandboxStartupError(self._error or "startup timeout")
         try:
             msg = self._conn.recv()
-        except (EOFError, OSError):
+        except (EOFError, OSError) as exc:
             self._fail("worker died during startup")
-            raise SandboxStartupError(self._error or "worker died")
+            raise SandboxStartupError(self._error or "worker died") from exc
         if not msg or msg[0] != "ready":
             err = msg[1] if msg and len(msg) > 1 else "unknown startup error"
             self._fail(err)
@@ -326,7 +369,7 @@ class SandboxedScript:
     def _alive(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
-    def get_frame(self, t: float) -> Optional[np.ndarray]:
+    def get_frame(self, t: float) -> np.ndarray | None:
         """Return the next frame, or ``None`` (and mark failed) on any problem.
 
         ``t`` is elapsed seconds since the script started.
@@ -336,16 +379,20 @@ class SandboxedScript:
         if not self._alive():
             self._fail("worker process is not running")
             return None
+        conn = self._conn
+        if conn is None:
+            self._fail("worker pipe closed")
+            return None
         try:
-            self._conn.send(("step", float(t)))
+            conn.send(("step", float(t)))
         except (BrokenPipeError, OSError):
             self._fail("worker pipe closed")
             return None
-        if not self._conn.poll(self._frame_timeout):
+        if not conn.poll(self._frame_timeout):
             self._fail(f"frame timed out after {self._frame_timeout}s")
             return None
         try:
-            msg = self._conn.recv()
+            msg = conn.recv()
         except (EOFError, OSError):
             self._fail("worker died")
             return None
@@ -359,11 +406,12 @@ class SandboxedScript:
         return None
 
     def stop(self) -> None:
+        """Signal the worker to stop and terminate the process if needed."""
         proc = self._proc
-        if proc is not None and proc.poll() is None:
+        if proc is not None and proc.poll() is None and self._conn is not None:
             try:
                 self._conn.send(("stop",))
-            except (BrokenPipeError, OSError, AttributeError):
+            except (BrokenPipeError, OSError):
                 pass
             try:
                 proc.wait(timeout=0.2)

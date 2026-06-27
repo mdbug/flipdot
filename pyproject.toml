@@ -1,0 +1,45 @@
+# Tooling configuration only. Runtime/dev dependencies are managed in Pipfile.
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["flipPyDot", "web_ui/vendor"]
+
+[tool.ruff.lint]
+# E/W pycodestyle, F pyflakes, I isort, UP pyupgrade, B flake8-bugbear.
+select = ["E", "W", "F", "I", "UP", "B"]
+# E501 (line length) is handled by the formatter; B008 trips on FastAPI Depends().
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# flipdot.py intentionally imports app modules after load_dotenv()/setup_logging()
+# so logging is configured before those modules create their module-level loggers.
+"flipdot.py" = ["E402"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.10"
+# Pragmatic start: surface untyped defs without failing the build on the
+# unavoidable `Any` coming from MediaPipe / OpenCV results.
+ignore_missing_imports = true
+# Gradual typing: mypy type-checks a function once it has annotations, so the
+# gate tightens module-by-module as the retrofit adds hints. Flip
+# check_untyped_defs / disallow_untyped_defs to true once coverage is complete.
+disallow_untyped_defs = false
+check_untyped_defs = false
+warn_redundant_casts = true
+warn_unused_ignores = true
+files = ["app"]
+
+[[tool.mypy.overrides]]
+module = ["mediapipe.*", "cv2.*", "flippydot.*", "evdev.*", "serial.*"]
+ignore_missing_imports = true
+
+# Dynamic I/O / image libraries: skip their bundled stubs and treat as Any rather
+# than fighting overly-strict third-party annotations at these boundaries.
+[[tool.mypy.overrides]]
+module = ["cv2.*", "PIL.*", "requests.*"]
+follow_imports = "skip"
+follow_imports_for_stubs = true

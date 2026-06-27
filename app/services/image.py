@@ -1,29 +1,35 @@
 from io import BytesIO
 
-from PIL import Image
 import numpy as np
+from PIL import Image
 
-def load(file):
+
+def load(file: str) -> np.ndarray:
+    """Load an image from the ``imgs/`` directory as a numpy array."""
     image = Image.open("imgs/" + file)
     return np.asarray(image)
 
 
-def crop(image: np.array) -> np.array:
+def crop(image: np.ndarray) -> np.ndarray:
+    """Center-crop ``image`` to a square using its shorter side."""
     if image.shape[1] > image.shape[0]:
         crop_size = image.shape[0]
         start_x = (image.shape[1] - crop_size) // 2
-        croped_image = image[:, start_x:start_x + crop_size]
+        croped_image = image[:, start_x : start_x + crop_size]
     elif image.shape[0] > image.shape[1]:
         crop_size = image.shape[1]
         start_y = (image.shape[0] - crop_size) // 2
-        croped_image = image[start_y:start_y + crop_size, :]
+        croped_image = image[start_y : start_y + crop_size, :]
     else:
         croped_image = image
-    
+
     return croped_image
 
 
-def binary_from_bytes(data: bytes, *, max_width: int, max_height: int, threshold: int = 128) -> np.ndarray:
+def binary_from_bytes(
+    data: bytes, *, max_width: int, max_height: int, threshold: int = 128
+) -> np.ndarray:
+    """Decode image bytes, fit within max dimensions, and threshold to a 1-bit uint8 array."""
     if not data:
         raise ValueError("image payload is empty")
 

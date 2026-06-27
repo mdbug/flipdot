@@ -212,7 +212,10 @@ def test_run_chat_full_loop_executes_tool(monkeypatch):
     types = [e["type"] for e in events]
 
     assert types == ["thinking", "thinking", "text", "tool", "text", "done"]
-    assert "".join(e["text"] for e in events if e["type"] == "thinking") == "I should call show_message."
+    assert (
+        "".join(e["text"] for e in events if e["type"] == "thinking")
+        == "I should call show_message."
+    )
     assert events[3]["name"] == "show_message"
     # The tool actually ran against the MCP server.
     assert mode_manager.mode == "board"

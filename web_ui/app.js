@@ -41,7 +41,6 @@ const boardDrawLineWidth = document.getElementById("boardDrawLineWidth");
 const boardDrawColor = document.getElementById("boardDrawColor");
 const toolbarButtons = Array.from(document.querySelectorAll(".tool-btn[data-tool]"));
 const shapeButtons = Array.from(document.querySelectorAll(".shape-btn[data-shape]"));
-const boardContext = document.getElementById("boardContext");
 const contextBlocks = Array.from(document.querySelectorAll("#boardContext .context-block"));
 const boardsMenuToggle = document.getElementById("boardsMenuToggle");
 const boardsMenu = document.getElementById("boardsMenu");
@@ -88,6 +87,11 @@ let sleepStatusTimer = null;
 let fontPreviewCatalog = {};
 let fontPreviewVariants = [null, null, null, null];
 
+/**
+ * Coerce a raw controller status into a fully-populated, validated shape.
+ * @param {Object} raw - The raw status payload (may be null/partial).
+ * @returns {Object} Normalized controller status.
+ */
 function normalizeControllerStatus(raw) {
   if (!raw || typeof raw !== "object") {
     return {
@@ -100,13 +104,17 @@ function normalizeControllerStatus(raw) {
   }
 
   const pressed = Array.isArray(raw.pressed_buttons)
-    ? raw.pressed_buttons.map((label) => String(label || "").trim()).filter((label) => label.length > 0)
+    ? raw.pressed_buttons
+        .map((label) => String(label || "").trim())
+        .filter((label) => label.length > 0)
     : [];
 
   const battery = Number(raw.battery_percentage);
-  const batteryPercentage = Number.isFinite(battery) && battery >= 0 && battery <= 100 ? Math.round(battery) : null;
+  const batteryPercentage =
+    Number.isFinite(battery) && battery >= 0 && battery <= 100 ? Math.round(battery) : null;
   const lastEventAge = Number(raw.last_event_age_ms);
-  const lastEventAgeMs = Number.isFinite(lastEventAge) && lastEventAge >= 0 ? Math.round(lastEventAge) : null;
+  const lastEventAgeMs =
+    Number.isFinite(lastEventAge) && lastEventAge >= 0 ? Math.round(lastEventAge) : null;
 
   return {
     enabled: Boolean(raw.enabled),
@@ -119,6 +127,7 @@ function normalizeControllerStatus(raw) {
   };
 }
 
+/** Format a last-event age in ms as a compact label. @param {number} ageMs @returns {string} */
 function controllerEventAgeLabel(ageMs) {
   if (!Number.isFinite(ageMs)) {
     return "--";
@@ -132,10 +141,12 @@ function controllerEventAgeLabel(ageMs) {
   return `${Math.round(ageMs / 1000)}s`;
 }
 
+/** @param {number} index @returns {string} The player tag ("P1", "P2", …). */
 function controllerPlayerTag(index) {
   return index === 0 ? "P1" : `P${index + 1}`;
 }
 
+/** @param {Object} status @returns {string} "unavailable", "connected", or "disconnected". */
 function controllerStatusState(status) {
   if (!status.enabled) {
     return "unavailable";
@@ -143,6 +154,7 @@ function controllerStatusState(status) {
   return status.connected ? "connected" : "disconnected";
 }
 
+/** Map a button label to its display glyph (arrows for the D-pad). @param {string} label @returns {string} */
 function displayControllerButtonLabel(label) {
   const normalized = String(label || "").trim();
   const dpadArrows = {
@@ -154,6 +166,12 @@ function displayControllerButtonLabel(label) {
   return dpadArrows[normalized] || normalized;
 }
 
+/**
+ * Extract a list of normalized controller statuses from a frame payload,
+ * supporting both the multi-controller and legacy single-controller shapes.
+ * @param {Object} payload
+ * @returns {Object[]} One normalized status per controller.
+ */
 function controllerStatusEntries(payload) {
   if (payload && Array.isArray(payload.controller_statuses)) {
     const normalized = payload.controller_statuses.map((item) => normalizeControllerStatus(item));
@@ -164,6 +182,10 @@ function controllerStatusEntries(payload) {
   return [normalizeControllerStatus(payload ? payload.controller_status : null)];
 }
 
+/**
+ * Render the controller status pills (connection, battery, freshness, buttons).
+ * @param {Object} payload - The latest frame payload carrying controller status.
+ */
 function renderControllerStatus(payload) {
   if (!controllerStatuses) {
     return;
@@ -262,6 +284,7 @@ function renderControllerStatus(payload) {
   }
 }
 
+/** @returns {HTMLElement} The settings panel for the current mode. */
 function activeSettingsPanel() {
   if (currentMode === "font_preview") {
     return fontPreviewSettings;
@@ -269,6 +292,7 @@ function activeSettingsPanel() {
   return sleepSettings;
 }
 
+/** Hide every mode settings panel. */
 function hideAllSettingsPanels() {
   if (sleepSettings) {
     sleepSettings.classList.add("hidden");
@@ -278,28 +302,35 @@ function hideAllSettingsPanels() {
   }
 }
 
+/** Collapse whitespace and cap a phrase at 32 chars, defaulting to "FLIPDOT". @param {string} value @returns {string} */
 function cleanPhrase(value) {
-  const compact = String(value || "").replace(/\s+/g, " ").trim();
+  const compact = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!compact) {
     return "FLIPDOT";
   }
   return compact.slice(0, 32);
 }
 
+/** Clamp font-preview spacing to [0, 6]. @param {*} value @returns {number} */
 function clampFontPreviewSpacing(value) {
   const parsed = toInt(value, 0);
   return Math.max(0, Math.min(6, parsed));
 }
 
+/** Clamp board glyph spacing to [0, 6]. @param {*} value @returns {number} */
 function clampBoardGlyphSpacing(value) {
   return Math.max(0, Math.min(6, toInt(value, 1)));
 }
 
+/** Snap a pixel size down to a whole multiple of the grid cell. @param {number} value @returns {number} */
 function snapToGridMultiple(value) {
   const n = Math.max(GRID, Number.isFinite(value) ? Math.floor(value) : GRID);
   return Math.max(GRID, Math.floor(n / GRID) * GRID);
 }
 
+/** Resize the canvas backing store to match its CSS size and DPR, then redraw. */
 function syncCanvasResolution() {
   const rect = canvas.getBoundingClientRect();
   if (!rect.width || !rect.height) {
@@ -325,6 +356,11 @@ function syncCanvasResolution() {
   drawGrid(latestFramePixels);
 }
 
+/**
+ * Deep-copy a GRID×GRID pixel array, coercing values to 0/1.
+ * @param {number[][]} pixels
+ * @returns {number[][]} A fresh copy.
+ */
 function clonePixels(pixels) {
   const out = Array.from({ length: GRID }, () => Array(GRID).fill(0));
   for (let y = 0; y < GRID; y += 1) {
@@ -335,11 +371,13 @@ function clonePixels(pixels) {
   return out;
 }
 
+/** Read a CSS custom property, falling back if unset. @param {string} name @param {string} fallback @returns {string} */
 function themeColor(name, fallback) {
   const value = THEME.getPropertyValue(name).trim();
   return value || fallback;
 }
 
+/** Draw the full flip-dot grid (and any selection overlay) for the given pixels. @param {number[][]} pixels */
 function drawGrid(pixels) {
   ctx.imageSmoothingEnabled = false;
   const cell = canvas.width / GRID;
@@ -378,6 +416,7 @@ function drawGrid(pixels) {
   drawSelectionOverlay(cell);
 }
 
+/** Outline the currently selected board text/image objects. @param {number} cell - Pixel size of one grid cell. */
 function drawSelectionOverlay(cell) {
   if (!isBoardMode() || !boardState) {
     return;
@@ -427,6 +466,12 @@ function drawSelectionOverlay(cell) {
   }
 }
 
+/**
+ * Paint a square brush of pixels centered on (x, y) into a pixel array.
+ * @param {number[][]} pixels @param {number} x @param {number} y
+ * @param {number} [drawValue] - 1 to set, 0 to clear.
+ * @param {number} [lineWidth] - Brush size in pixels.
+ */
 function setPreviewPixel(pixels, x, y, drawValue = 1, lineWidth = 1) {
   if (x < 0 || x >= GRID || y < 0 || y >= GRID) {
     return;
@@ -449,6 +494,7 @@ function setPreviewPixel(pixels, x, y, drawValue = 1, lineWidth = 1) {
   }
 }
 
+/** Convert a normalized [0,1] position to integer grid pixel coords. @param {{x:number,y:number}} pos @returns {{x:number,y:number}} */
 function pixelPointFromNorm(pos) {
   return {
     x: Math.trunc(Math.max(0, Math.min(1, Number(pos.x))) * (GRID - 1)),
@@ -456,6 +502,11 @@ function pixelPointFromNorm(pos) {
   };
 }
 
+/**
+ * Rasterize a straight line between two grid points into a pixel array.
+ * @param {number[][]} pixels @param {{x:number,y:number}} p0 @param {{x:number,y:number}} p1
+ * @param {{drawValue?:number, lineWidth?:number}} [options]
+ */
 function rasterLine(pixels, p0, p1, options = {}) {
   const drawValue = options.drawValue === 0 ? 0 : 1;
   const lineWidth = options.lineWidth;
@@ -470,6 +521,11 @@ function rasterLine(pixels, p0, p1, options = {}) {
   }
 }
 
+/**
+ * Rasterize a rectangle outline between two corner points.
+ * @param {number[][]} pixels @param {{x:number,y:number}} p0 @param {{x:number,y:number}} p1
+ * @param {{drawValue?:number, lineWidth?:number}} [options]
+ */
 function rasterRect(pixels, p0, p1, options = {}) {
   const minX = Math.min(p0.x, p1.x);
   const maxX = Math.max(p0.x, p1.x);
@@ -481,12 +537,20 @@ function rasterRect(pixels, p0, p1, options = {}) {
   rasterLine(pixels, { x: minX, y: maxY }, { x: minX, y: minY }, options);
 }
 
+/**
+ * Rasterize a circle whose diameter spans the two points' bounding box.
+ * @param {number[][]} pixels @param {{x:number,y:number}} p0 @param {{x:number,y:number}} p1
+ * @param {{drawValue?:number, lineWidth?:number}} [options]
+ */
 function rasterCircle(pixels, p0, p1, options = {}) {
   const drawValue = options.drawValue === 0 ? 0 : 1;
   const lineWidth = options.lineWidth;
   const cx = Math.round((p0.x + p1.x) / 2);
   const cy = Math.round((p0.y + p1.y) / 2);
-  const radius = Math.max(1, Math.round(Math.max(Math.abs(p1.x - p0.x), Math.abs(p1.y - p0.y)) / 2));
+  const radius = Math.max(
+    1,
+    Math.round(Math.max(Math.abs(p1.x - p0.x), Math.abs(p1.y - p0.y)) / 2)
+  );
   for (let angle = 0; angle < 360; angle += 2) {
     const rad = (angle * Math.PI) / 180;
     const x = Math.round(cx + radius * Math.cos(rad));
@@ -495,19 +559,23 @@ function rasterCircle(pixels, p0, p1, options = {}) {
   }
 }
 
+/** @returns {number} The selected draw line width, clamped to [1, 8]. */
 function getDrawLineWidth() {
   const width = toInt(boardDrawLineWidth && boardDrawLineWidth.value, 1);
   return Math.max(1, Math.min(8, width));
 }
 
+/** @returns {string} The selected draw color, "on" or "off". */
 function getDrawColor() {
   return boardDrawColor && boardDrawColor.value === "off" ? "off" : "on";
 }
 
+/** @returns {number} The pixel value (1/0) for the selected draw color. */
 function getDrawValue() {
   return getDrawColor() === "off" ? 0 : 1;
 }
 
+/** Redraw the canvas with a live preview of the in-progress shape. @param {{x:number,y:number}} currentPos */
 function renderShapePreview(currentPos) {
   if (!boardStrokeActive || !boardShapeStart) {
     return;
@@ -536,6 +604,7 @@ function renderShapePreview(currentPos) {
   drawGrid(previewPixels);
 }
 
+/** Map a mouse/pointer event to a normalized [0,1] canvas position. @param {MouseEvent} event @returns {{x:number,y:number}} */
 function normPosFromEvent(event) {
   const rect = canvas.getBoundingClientRect();
   const x = (event.clientX - rect.left) / rect.width;
@@ -546,6 +615,7 @@ function normPosFromEvent(event) {
   };
 }
 
+/** Map a touch point to a normalized [0,1] canvas position. @param {Touch} touch @returns {{x:number,y:number}} */
 function normPosFromTouch(touch) {
   const rect = canvas.getBoundingClientRect();
   const x = (touch.clientX - rect.left) / rect.width;
@@ -556,6 +626,7 @@ function normPosFromTouch(touch) {
   };
 }
 
+/** POST JSON to a URL, returning the response or null on network error. @param {string} url @param {Object} payload @returns {Promise<Response|null>} */
 async function postJson(url, payload) {
   try {
     return await fetch(url, {
@@ -568,6 +639,7 @@ async function postJson(url, payload) {
   }
 }
 
+/** PATCH JSON to a URL, returning the response or null on network error. @param {string} url @param {Object} payload @returns {Promise<Response|null>} */
 async function patchJson(url, payload) {
   try {
     return await fetch(url, {
@@ -580,6 +652,7 @@ async function patchJson(url, payload) {
   }
 }
 
+/** Send a DELETE request, returning the response or null on network error. @param {string} url @returns {Promise<Response|null>} */
 async function deleteJson(url) {
   try {
     return await fetch(url, { method: "DELETE" });
@@ -588,6 +661,7 @@ async function deleteJson(url) {
   }
 }
 
+/** GET and parse JSON, throwing on a non-OK response. @param {string} url @returns {Promise<Object>} */
 async function getJson(url) {
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) {
@@ -596,36 +670,43 @@ async function getJson(url) {
   return response.json();
 }
 
+/** @returns {boolean} Whether the board mode is currently active. */
 function isBoardMode() {
   return currentMode === "board";
 }
 
+/** Convert a normalized [0,1] coordinate to an integer grid pixel index. @param {number} norm @returns {number} */
 function toGridPixel(norm) {
   const value = Number(norm);
   const clamped = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
   return Math.trunc(clamped * (GRID - 1));
 }
 
+/** Parse an integer, returning a fallback if invalid. @param {*} value @param {number} fallback @returns {number} */
 function toInt(value, fallback) {
   const parsed = Number.parseInt(String(value), 10);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+/** Parse a float, returning a fallback if invalid. @param {*} value @param {number} fallback @returns {number} */
 function toFloat(value, fallback) {
   const parsed = Number.parseFloat(String(value));
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+/** Parse an hour and clamp it to [0, 23]. @param {*} value @param {number} fallback @returns {number} */
 function clampHour(value, fallback) {
   return Math.max(0, Math.min(23, toInt(value, fallback)));
 }
 
+/** Enable or disable the sleep-schedule hour inputs. @param {boolean} enabled */
 function setSleepInputsEnabled(enabled) {
   const disabled = !enabled;
   sleepStartHour.disabled = disabled;
   sleepEndHour.disabled = disabled;
 }
 
+/** Set the sleep-settings status line. @param {string} message @param {string} [kind] - "error", "ok", or "". */
 function setSleepSettingsStatus(message, kind = "") {
   sleepSettingsStatus.textContent = message;
   sleepSettingsStatus.classList.remove("error", "ok");
@@ -634,6 +715,7 @@ function setSleepSettingsStatus(message, kind = "") {
   }
 }
 
+/** Format how long ago a timestamp was as "just now"/"Ns ago"/etc. @param {number} since - Epoch ms. @returns {string} */
 function formatRelativeTimestamp(since) {
   const seconds = Math.max(0, Math.floor((Date.now() - since) / 1000));
   if (seconds <= 1) {
@@ -650,6 +732,11 @@ function formatRelativeTimestamp(since) {
   return `${hours}h ago`;
 }
 
+/**
+ * Show a sleep-settings status that updates its relative timestamp each second.
+ * @param {string} prefix - The status text prefix.
+ * @param {string} kind - "error", "ok", or "".
+ */
 function setSleepStatusWithTimestamp(prefix, kind) {
   if (sleepStatusTimer !== null) {
     window.clearInterval(sleepStatusTimer);
@@ -665,6 +752,7 @@ function setSleepStatusWithTimestamp(prefix, kind) {
   sleepStatusTimer = window.setInterval(refresh, 1000);
 }
 
+/** Set the font-preview status line. @param {string} message @param {string} [kind] - "error", "ok", or "". */
 function setFontPreviewStatus(message, kind = "") {
   if (!fontPreviewStatus) {
     return;
@@ -676,10 +764,12 @@ function setFontPreviewStatus(message, kind = "") {
   }
 }
 
+/** @returns {string[]} The available font family names, sorted. */
 function fontPreviewFamilyNames() {
   return Object.keys(fontPreviewCatalog || {}).sort();
 }
 
+/** @param {string} family @returns {string[]} The available size keys for a family, sorted numerically. */
 function fontPreviewSizeKeys(family) {
   if (!family || !fontPreviewCatalog || !fontPreviewCatalog[family]) {
     return [];
@@ -687,6 +777,7 @@ function fontPreviewSizeKeys(family) {
   return Object.keys(fontPreviewCatalog[family]).sort((a, b) => Number(a) - Number(b));
 }
 
+/** @param {string} family @param {string} sizeKey @returns {string[]} The available styles for a family/size. */
 function fontPreviewStyleNames(family, sizeKey) {
   if (!family || !sizeKey || !fontPreviewCatalog || !fontPreviewCatalog[family]) {
     return [];
@@ -695,6 +786,11 @@ function fontPreviewStyleNames(family, sizeKey) {
   return Array.isArray(styles) ? styles : [];
 }
 
+/**
+ * Validate and complete a font-preview variant against the catalog.
+ * @param {Object} entry - A {family, size, style} candidate.
+ * @returns {{family:string, size:number, style:string}|null} A valid variant, or null.
+ */
 function normalizeFontPreviewVariant(entry) {
   if (!entry || typeof entry !== "object") {
     return null;
@@ -719,10 +815,12 @@ function normalizeFontPreviewVariant(entry) {
     return null;
   }
 
-  const style = typeof entry.style === "string" && styles.includes(entry.style) ? entry.style : styles[0];
+  const style =
+    typeof entry.style === "string" && styles.includes(entry.style) ? entry.style : styles[0];
   return { family, size: Number(sizeKey), style };
 }
 
+/** Build a default variant (first size/style) for a family. @param {string} family @returns {Object|null} */
 function defaultFontPreviewVariantForFamily(family) {
   const sizeKeys = fontPreviewSizeKeys(family);
   if (sizeKeys.length === 0) {
@@ -735,6 +833,7 @@ function defaultFontPreviewVariantForFamily(family) {
   return { family, size: Number(sizeKeys[0]), style: styles[0] };
 }
 
+/** Replace the four preview slots from a saved variants payload. @param {Object[]} variants */
 function setFontPreviewVariantsFromPayload(variants) {
   fontPreviewVariants = [null, null, null, null];
   if (!Array.isArray(variants)) {
@@ -748,6 +847,7 @@ function setFontPreviewVariantsFromPayload(variants) {
   }
 }
 
+/** @returns {Object[]} The valid, deduplicated preview-slot variants (max 4) to persist. */
 function collectFontPreviewVariantsPayload() {
   const payload = [];
   const seen = new Set();
@@ -766,6 +866,7 @@ function collectFontPreviewVariantsPayload() {
   return payload.slice(0, 4);
 }
 
+/** Render the four font-preview slot rows (family/size/style selectors + handlers). */
 function renderFontPreviewSlots() {
   if (!fontPreviewSlots) {
     return;
@@ -879,6 +980,7 @@ function renderFontPreviewSlots() {
   }
 }
 
+/** Load the sleep schedule from the backend into the settings form. */
 async function loadSleepSettings() {
   try {
     const payload = await getJson("/api/settings/sleep");
@@ -892,6 +994,7 @@ async function loadSleepSettings() {
   }
 }
 
+/** Persist the sleep schedule to the backend and reflect the saved result. */
 async function saveSleepSettings() {
   const payload = {
     enabled: sleepEnabled.checked,
@@ -920,6 +1023,7 @@ async function saveSleepSettings() {
   }
 }
 
+/** Load font-preview settings and the variant catalog, then render the form. */
 async function loadFontPreviewSettings() {
   if (!fontPreviewPhrase || !fontPreviewSlots || !fontPreviewSpacing) {
     return;
@@ -940,6 +1044,7 @@ async function loadFontPreviewSettings() {
   }
 }
 
+/** Persist font-preview phrase, spacing, and variants, then reflect the result. */
 async function saveFontPreviewSettings() {
   if (!fontPreviewPhrase || !fontPreviewSpacing) {
     return;
@@ -970,6 +1075,7 @@ async function saveFontPreviewSettings() {
   }
 }
 
+/** @returns {Object|null} The primary-selected board text object, if any. */
 function selectedTextObject() {
   if (!boardState || !Array.isArray(boardState.text_objects)) {
     return null;
@@ -977,6 +1083,7 @@ function selectedTextObject() {
   return boardState.text_objects.find((item) => item.id === selectedTextId) || null;
 }
 
+/** @returns {Object|null} The first selected board image object, if any. */
 function selectedImageObject() {
   if (!boardState || !Array.isArray(boardState.image_objects) || selectedImageIds.size === 0) {
     return null;
@@ -985,6 +1092,7 @@ function selectedImageObject() {
   return boardState.image_objects.find((item) => item.id === firstId) || null;
 }
 
+/** Find a board object by kind and id. @param {string} kind - "text" or "image". @param {string} id @returns {Object|null} */
 function getObjectById(kind, id) {
   if (!boardState || !id) {
     return null;
@@ -998,6 +1106,7 @@ function getObjectById(kind, id) {
   return null;
 }
 
+/** Whether a board object is selected. @param {string} kind - "text" or "image". @param {string} id @returns {boolean} */
 function isSelected(kind, id) {
   if (kind === "text") {
     return selectedTextIds.has(id);
@@ -1008,6 +1117,7 @@ function isSelected(kind, id) {
   return false;
 }
 
+/** Update the selection summary text to reflect the current selection. */
 function refreshSelectionSummary() {
   const textCount = selectedTextIds.size;
   const imageCount = selectedImageIds.size;
@@ -1034,6 +1144,7 @@ function refreshSelectionSummary() {
   boardSelectionSummary.textContent = `Selected ${textCount} text, ${imageCount} image objects`;
 }
 
+/** Populate the editor fields from the currently selected text/image objects. */
 function syncSelectionFields() {
   const textObj = selectedTextObject();
   applyTextObjectToFields(textObj);
@@ -1045,6 +1156,10 @@ function syncSelectionFields() {
   refreshSelectionSummary();
 }
 
+/**
+ * Replace the current selection with the given ids (filtered to existing objects).
+ * @param {string[]} nextTextIds @param {string[]} nextImageIds
+ */
 function replaceSelection(nextTextIds, nextImageIds) {
   const validText = new Set();
   const validImage = new Set();
@@ -1082,10 +1197,12 @@ function replaceSelection(nextTextIds, nextImageIds) {
   drawGrid(latestFramePixels);
 }
 
+/** Clear the entire board selection. */
 function clearSelection() {
   replaceSelection([], []);
 }
 
+/** Select exactly one object. @param {string} kind - "text" or "image". @param {string} id */
 function selectOnly(kind, id) {
   if (!id) {
     clearSelection();
@@ -1101,6 +1218,7 @@ function selectOnly(kind, id) {
   }
 }
 
+/** Add or remove one object from the selection. @param {string} kind - "text" or "image". @param {string} id */
 function toggleSelection(kind, id) {
   if (!id) {
     return;
@@ -1129,6 +1247,7 @@ function toggleSelection(kind, id) {
   replaceSelection(Array.from(nextText), Array.from(nextImage));
 }
 
+/** Populate the board font-family dropdown from the loaded fonts. */
 function renderFontFamilyOptions() {
   boardFontFamily.innerHTML = "";
   const families = Object.keys(boardFonts).sort();
@@ -1143,6 +1262,7 @@ function renderFontFamilyOptions() {
   }
 }
 
+/** Populate the board font-size dropdown for the selected family, preserving the choice if valid. */
 function renderFontSizeOptions() {
   const family = boardFontFamily.value;
   const sizeMap = boardFonts[family] || {};
@@ -1161,6 +1281,7 @@ function renderFontSizeOptions() {
   }
 }
 
+/** Populate the board font-style dropdown for the selected family/size, preserving the choice if valid. */
 function renderFontStyleOptions() {
   const family = boardFontFamily.value;
   const size = boardFontSize.value;
@@ -1179,6 +1300,7 @@ function renderFontStyleOptions() {
   }
 }
 
+/** Load a text object's properties into the editor fields (or reset them if null). @param {Object|null} item */
 function applyTextObjectToFields(item) {
   if (!item) {
     boardText.value = "";
@@ -1206,6 +1328,7 @@ function applyTextObjectToFields(item) {
   }
 }
 
+/** Rebuild the text-object dropdown and sync the primary selection + fields. */
 function renderTextObjectList() {
   const current = selectedTextId;
   boardTextObjectSelect.innerHTML = "";
@@ -1233,6 +1356,7 @@ function renderTextObjectList() {
   applyTextObjectToFields(selectedTextObject());
 }
 
+/** Populate the saved-board dropdown and highlight the active board. */
 function renderBoardLibrary() {
   boardList.innerHTML = "";
   const boards = (boardState && boardState.boards) || [];
@@ -1250,6 +1374,7 @@ function renderBoardLibrary() {
   }
 }
 
+/** Reflect the active board tool as a CSS class on the canvas (drives the cursor). */
 function updateCanvasToolClass() {
   canvas.classList.remove("tool-select", "tool-draw", "tool-text", "tool-image", "dragging");
   if (activeBoardTool === "select") {
@@ -1263,6 +1388,7 @@ function updateCanvasToolClass() {
   }
 }
 
+/** Sync the toolbar/shape buttons' active state and the canvas tool class. */
 function renderToolbarState() {
   for (const button of toolbarButtons) {
     button.classList.toggle("is-active", button.dataset.tool === activeBoardTool);
@@ -1273,7 +1399,7 @@ function renderToolbarState() {
   updateCanvasToolClass();
 }
 
-// Show only the context block relevant to the active tool / selection.
+/** Show only the context block (draw/text/image/empty) relevant to the active tool/selection. */
 function renderBoardContext() {
   let context = "empty";
   if (activeBoardTool === "draw") {
@@ -1307,6 +1433,7 @@ function renderBoardContext() {
   }
 }
 
+/** Switch the active board tool and refresh the toolbar/context UI. @param {string} nextTool */
 function setBoardTool(nextTool) {
   const tool = typeof nextTool === "string" ? nextTool : "select";
   activeBoardTool = tool;
@@ -1328,6 +1455,7 @@ function setBoardTool(nextTool) {
   renderBoardContext();
 }
 
+/** Select a draw shape (freehand/line/rect/circle) and activate the draw tool. @param {string} shape */
 function setDrawShape(shape) {
   if (!DRAW_TOOLS.has(shape)) {
     return;
@@ -1338,6 +1466,7 @@ function setDrawShape(shape) {
   renderToolbarState();
 }
 
+/** Fetch the board font catalog and rebuild the family/size/style dropdowns. */
 async function loadBoardFonts() {
   if (!isBoardMode()) {
     return;
@@ -1352,6 +1481,7 @@ async function loadBoardFonts() {
   }
 }
 
+/** Refresh just the saved-board list (names + active) without the full board state. */
 async function refreshBoardLibraryOnly() {
   if (!isBoardMode()) {
     return;
@@ -1369,6 +1499,7 @@ async function refreshBoardLibraryOnly() {
   }
 }
 
+/** Fetch the full board state and refresh selection, lists, fonts, and library. */
 async function syncBoardState() {
   if (!isBoardMode()) {
     return;
@@ -1403,6 +1534,7 @@ async function syncBoardState() {
   }
 }
 
+/** Send a freehand stroke (list of normalized points) to the board. @param {Object[]} points */
 async function sendBoardStroke(points) {
   if (!isBoardMode()) {
     return;
@@ -1417,6 +1549,12 @@ async function sendBoardStroke(points) {
   });
 }
 
+/**
+ * Hit-test a normalized position against board objects on the server.
+ * @param {{x:number,y:number}} pos
+ * @param {{allHits?:boolean, select?:boolean}} [options]
+ * @returns {Promise<{hit:Object|null, hits:Object[]}>}
+ */
 async function boardHitTest(pos, options = {}) {
   try {
     const response = await fetch("/api/board/hit-test", {
@@ -1433,11 +1571,7 @@ async function boardHitTest(pos, options = {}) {
       return { hit: null, hits: [] };
     }
     const payload = await response.json();
-    const hits = Array.isArray(payload.hits)
-      ? payload.hits
-      : payload.hit
-        ? [payload.hit]
-        : [];
+    const hits = Array.isArray(payload.hits) ? payload.hits : payload.hit ? [payload.hit] : [];
     return {
       hit: payload.hit || hits[0] || null,
       hits,
@@ -1447,6 +1581,7 @@ async function boardHitTest(pos, options = {}) {
   }
 }
 
+/** Reflect an object's position in the editor fields. @param {string} kind @param {number} x @param {number} y */
 function updateEditorPositionFields(kind, x, y) {
   if (kind === "text") {
     boardTextX.value = String(x);
@@ -1459,6 +1594,7 @@ function updateEditorPositionFields(kind, x, y) {
   }
 }
 
+/** Update an object's position in the local board state. @param {string} kind @param {string} id @param {number} x @param {number} y */
 function updateLocalObjectPosition(kind, id, x, y) {
   const item = getObjectById(kind, id);
   if (!item) {
@@ -1468,6 +1604,7 @@ function updateLocalObjectPosition(kind, id, x, y) {
   item.y = y;
 }
 
+/** POST a drag-move payload to an endpoint. @param {Object} payload @param {string} endpoint @returns {Promise<boolean>} Success. */
 async function sendDragMove(payload, endpoint) {
   try {
     const response = await fetch(endpoint, {
@@ -1481,6 +1618,7 @@ async function sendDragMove(payload, endpoint) {
   }
 }
 
+/** Send the latest queued drag position, coalescing rapid moves into one in-flight request. */
 async function flushQueuedDragMove() {
   if (!dragState || dragMoveInFlight || !dragQueuedPosition) {
     return;
@@ -1505,6 +1643,7 @@ async function flushQueuedDragMove() {
   }
 }
 
+/** Update local positions for dragged items, redraw, and queue a server sync. @param {Object[]} items */
 function queueDragMove(items) {
   if (!dragState || !Array.isArray(items) || items.length === 0) {
     return;
@@ -1530,6 +1669,7 @@ function queueDragMove(items) {
   flushQueuedDragMove();
 }
 
+/** @returns {Object[]} The selected text/image objects with their kind, id, and position. */
 function getSelectedObjects() {
   const selected = [];
   for (const id of selectedTextIds) {
@@ -1547,6 +1687,11 @@ function getSelectedObjects() {
   return selected;
 }
 
+/**
+ * Hit-test a pointer position and update the selection accordingly.
+ * @param {{x:number,y:number}} pos @param {boolean} additive - Toggle vs. replace selection.
+ * @returns {Promise<Object|null>} The hit object, or null.
+ */
 async function selectFromPointer(pos, additive) {
   const hitResponse = await boardHitTest(pos, { allHits: true, select: false });
   const hit = hitResponse.hit;
@@ -1574,6 +1719,7 @@ async function selectFromPointer(pos, additive) {
   return hit;
 }
 
+/** Begin dragging the object(s) under the pointer. @param {{x:number,y:number}} pos @returns {Promise<boolean>} Whether a drag started. */
 async function beginObjectDrag(pos) {
   const hit = await selectFromPointer(pos, false);
   if (!hit) {
@@ -1609,6 +1755,7 @@ async function beginObjectDrag(pos) {
   return true;
 }
 
+/** Move dragged objects to follow the pointer. @param {{x:number,y:number}} pos */
 function updateObjectDrag(pos) {
   if (!dragState) {
     return;
@@ -1628,6 +1775,7 @@ function updateObjectDrag(pos) {
   queueDragMove(nextItems);
 }
 
+/** Commit the final dragged positions to the server and resync. */
 async function endObjectDrag() {
   if (!dragState) {
     return;
@@ -1650,6 +1798,7 @@ async function endObjectDrag() {
   await syncBoardState();
 }
 
+/** Create a text object at a pointer position using the current editor fields. @param {{x:number,y:number}} pos */
 async function placeTextAt(pos) {
   const response = await postJson("/api/board/text-objects", {
     text: boardText.value || "",
@@ -1667,6 +1816,11 @@ async function placeTextAt(pos) {
   }
 }
 
+/**
+ * Upload the chosen image file to the board at grid (x, y).
+ * @param {number} x @param {number} y
+ * @returns {Promise<boolean>} Whether the upload succeeded.
+ */
 async function uploadImageAt(x, y) {
   const file = boardImageFile.files && boardImageFile.files[0];
   if (!file) {
@@ -1693,6 +1847,7 @@ async function uploadImageAt(x, y) {
   return false;
 }
 
+/** Switch the active display mode and reconcile the board editor and settings panels. @param {string} nextMode */
 function setMode(nextMode) {
   const previousMode = currentMode;
   currentMode = typeof nextMode === "string" ? nextMode : "";
@@ -1724,6 +1879,7 @@ function setMode(nextMode) {
   }
 }
 
+/** Map a control action to its icon glyph. @param {string} action @returns {string} */
 function getControlGlyph(action) {
   const glyphs = {
     toggle_menu: "=",
@@ -1737,6 +1893,7 @@ function getControlGlyph(action) {
   return glyphs[action] || "o";
 }
 
+/** Render the mode's on-screen control buttons (diffed against the last render). @param {Object[]} controls */
 function renderControls(controls) {
   const normalized = Array.isArray(controls) ? controls : [];
   const signature = JSON.stringify(normalized);
@@ -2025,6 +2182,7 @@ canvas.addEventListener(
   { passive: false }
 );
 
+/** Open the frame WebSocket, rendering streamed frames and reconnecting on drop. */
 function startWebSocket() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
@@ -2048,7 +2206,12 @@ function startWebSocket() {
     setMode(data.mode);
     renderControls(data.controls);
     drawGrid(data.pixels);
-    if (isBoardMode() && boardDrawToggle.checked && boardStrokeActive && boardTool.value !== "freehand") {
+    if (
+      isBoardMode() &&
+      boardDrawToggle.checked &&
+      boardStrokeActive &&
+      boardTool.value !== "freehand"
+    ) {
       renderShapePreview(boardLastPoint || boardShapeStart);
     }
   };
@@ -2072,7 +2235,12 @@ function startWebSocket() {
           setMode(data.mode);
           renderControls(data.controls);
           drawGrid(data.pixels);
-          if (isBoardMode() && boardDrawToggle.checked && boardStrokeActive && boardTool.value !== "freehand") {
+          if (
+            isBoardMode() &&
+            boardDrawToggle.checked &&
+            boardStrokeActive &&
+            boardTool.value !== "freehand"
+          ) {
             renderShapePreview(boardLastPoint || boardShapeStart);
           }
         } catch (_err) {
@@ -2088,6 +2256,7 @@ function startWebSocket() {
   };
 }
 
+/** Open the controller-status WebSocket, updating the status pills and reconnecting on drop. */
 function startControllerWebSocket() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${protocol}//${window.location.host}/ws/controller-status`);
@@ -2218,6 +2387,7 @@ boardTextDelete.addEventListener("click", async () => {
   }
 });
 
+/** Delete all currently selected board text/image objects and resync. */
 async function deleteSelection() {
   if (!isBoardMode()) {
     return;
@@ -2300,7 +2470,9 @@ boardClear.addEventListener("click", async () => {
   if (!isBoardMode()) {
     return;
   }
-  const approved = window.confirm("Clear the board and remove all objects? This can be undone once.");
+  const approved = window.confirm(
+    "Clear the board and remove all objects? This can be undone once."
+  );
   if (!approved) {
     return;
   }
@@ -2332,6 +2504,7 @@ for (const button of shapeButtons) {
   });
 }
 
+/** Open or close the saved-boards dropdown menu. @param {boolean} open */
 function setBoardsMenuOpen(open) {
   if (!boardsMenu || !boardsMenuToggle) {
     return;
@@ -2358,6 +2531,7 @@ document.addEventListener("click", (event) => {
   setBoardsMenuOpen(false);
 });
 
+/** @param {EventTarget} target @returns {boolean} Whether the target is within a text input/textarea/select. */
 function isTextInputTarget(target) {
   if (!(target instanceof HTMLElement)) {
     return false;

@@ -3,10 +3,10 @@ import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from urllib.parse import urlparse
 
 import requests
-
 
 logger = logging.getLogger(__name__)
 
@@ -54,14 +54,14 @@ _next_fetch_after_mono = 0.0
 _next_fallback_lookup_after_mono = 0.0
 _next_status_probe_after_mono = 0.0
 _next_schedule_refresh_after_mono = 0.0
-_schedule_windows_utc = []
+_schedule_windows_utc: list[Any] = []
 _cached_espn_scorecard = None
 _next_espn_fetch_after_mono = 0.0
 _cached_fifa_scorecard = None
 _next_fifa_fetch_after_mono = 0.0
 _discovered_fifa_match_ids = None
 _next_fifa_match_discovery_after_mono = 0.0
-_last_fifa_match_id_hints = []
+_last_fifa_match_id_hints: list[Any] = []
 _rate_limit_state = {
     "daily_limit": None,
     "daily_remaining": None,
@@ -188,7 +188,9 @@ def _normalize_fifa_event(event):
     date_str = event.get("Date")
     if date_str:
         try:
-            dt_utc = datetime.fromisoformat(date_str.replace("Z", "+00:00")).astimezone(timezone.utc)
+            dt_utc = datetime.fromisoformat(date_str.replace("Z", "+00:00")).astimezone(
+                timezone.utc
+            )
         except ValueError:
             dt_utc = None
 
@@ -282,7 +284,9 @@ def _refresh_fifa_match_ids_if_needed(now_mono, now_utc):
         if status_bucket != "live" and not is_recent_or_upcoming:
             continue
 
-        discovered.append((kickoff or datetime.max.replace(tzinfo=timezone.utc), str(event.get("IdMatch"))))
+        discovered.append(
+            (kickoff or datetime.max.replace(tzinfo=timezone.utc), str(event.get("IdMatch")))
+        )
 
     if discovered:
         discovered.sort(key=lambda item: item[0])
@@ -333,7 +337,9 @@ def _get_fifa_scorecard():
         return None
 
     for match_id in match_ids:
-        live_event = _fetch_fifa_json(f"live/football/{match_id}", params={"language": FIFA_LANGUAGE})
+        live_event = _fetch_fifa_json(
+            f"live/football/{match_id}", params={"language": FIFA_LANGUAGE}
+        )
         if not isinstance(live_event, dict) or not live_event.get("IdMatch"):
             continue
 
@@ -431,7 +437,9 @@ def _update_rate_limit_state(headers):
 def _seconds_until_utc_day_end(now=None):
     if now is None:
         now = datetime.now(timezone.utc)
-    midnight_tomorrow = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) + timedelta(days=1)
+    midnight_tomorrow = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) + timedelta(
+        days=1
+    )
     return max(1.0, (midnight_tomorrow - now).total_seconds())
 
 
@@ -502,7 +510,9 @@ def _choose_base_interval(selection, in_active_window=False):
     return BASE_INTERVAL_NONE_SEC
 
 
-def _adaptive_interval_sec(selection, now_utc=None, min_interval_sec=MIN_RETRY_SEC, base_interval_sec=None):
+def _adaptive_interval_sec(
+    selection, now_utc=None, min_interval_sec=MIN_RETRY_SEC, base_interval_sec=None
+):
     if now_utc is None:
         now_utc = datetime.now(timezone.utc)
 
@@ -517,7 +527,9 @@ def _adaptive_interval_sec(selection, now_utc=None, min_interval_sec=MIN_RETRY_S
         seconds_left = _seconds_until_utc_day_end(now_utc)
         usable_remaining = max(1, daily_remaining - DAILY_REQUEST_RESERVE)
 
-        day_end = datetime(now_utc.year, now_utc.month, now_utc.day, tzinfo=timezone.utc) + timedelta(days=1)
+        day_end = datetime(
+            now_utc.year, now_utc.month, now_utc.day, tzinfo=timezone.utc
+        ) + timedelta(days=1)
         active_seconds = _seconds_overlap_with_windows(now_utc, day_end, _schedule_windows_utc)
         idle_seconds = max(0.0, seconds_left - active_seconds)
 
@@ -766,11 +778,7 @@ def _get_worldcup_context():
     league = selected.get("league") or {}
     seasons = selected.get("seasons") or []
     season_years = sorted(
-        {
-            s.get("year")
-            for s in seasons
-            if isinstance(s.get("year"), int)
-        },
+        {s.get("year") for s in seasons if isinstance(s.get("year"), int)},
         reverse=True,
     )
     if not season_years:
@@ -933,7 +941,9 @@ def _get_api_football_scorecard():
                 selected_finished.get("event_id"),
                 len(events),
             )
-            _next_fetch_after_mono = now_mono + _adaptive_interval_sec("latest_finished", now_utc=now_utc)
+            _next_fetch_after_mono = now_mono + _adaptive_interval_sec(
+                "latest_finished", now_utc=now_utc
+            )
             return _with_rate_limit(_cached_scorecard)
 
         _cached_scorecard = {
@@ -1021,7 +1031,9 @@ def _normalize_espn_event(event):
 
     status = competition.get("status") or event.get("status") or {}
     short_status, status_bucket = _espn_status(status)
-    minute = _normalize_fifa_match_time(status.get("displayClock")) if status_bucket == "live" else ""
+    minute = (
+        _normalize_fifa_match_time(status.get("displayClock")) if status_bucket == "live" else ""
+    )
 
     return {
         "event_id": event.get("id"),

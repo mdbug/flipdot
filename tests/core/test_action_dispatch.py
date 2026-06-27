@@ -114,7 +114,10 @@ def test_controller_style_actions_use_same_dispatch_path():
     font_preview = DummyFontPreview()
 
     dispatch_actions(
-        actions=[_action("toggle_menu", source="controller"), _action("paint_clear", source="controller")],
+        actions=[
+            _action("toggle_menu", source="controller"),
+            _action("paint_clear", source="controller"),
+        ],
         mode_manager=manager,
         paint=paint,
         autodrum=autodrum,
@@ -176,7 +179,10 @@ def test_matching_mode_actions_are_executed():
 def test_actions_can_be_filtered_by_source():
     manager = DummyModeManager(ModeManager.MODE_CLOCK)
     dispatch_actions(
-        actions=[_action("toggle_menu", source="controller"), _action("toggle_menu", source="pose")],
+        actions=[
+            _action("toggle_menu", source="controller"),
+            _action("toggle_menu", source="pose"),
+        ],
         mode_manager=manager,
         paint=DummyPaint(),
         autodrum=DummyAutoDrum(),

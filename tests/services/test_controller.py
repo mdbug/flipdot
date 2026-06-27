@@ -406,5 +406,3 @@ def test_bluetooth_reconnect_attempt_is_throttled(monkeypatch):
     ]
     assert calls[0][1]["timeout"] == 2.0
     assert calls[0][1]["check"] is False
-
-

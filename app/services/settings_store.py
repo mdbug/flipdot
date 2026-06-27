@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import threading
+from pathlib import Path
 
 
 class RuntimeSettingsStore:
@@ -13,6 +13,7 @@ class RuntimeSettingsStore:
         self._lock = threading.Lock()
 
     def load_sleep_settings(self) -> dict[str, int | bool] | None:
+        """Return the persisted sleep schedule, or None if unset/invalid."""
         payload = self._load_payload()
         if payload is None:
             return None
@@ -31,6 +32,7 @@ class RuntimeSettingsStore:
             return None
 
     def save_sleep_settings(self, *, enabled: bool, start_hour: int, end_hour: int) -> None:
+        """Persist the sleep schedule, clamping hours to 0-23."""
         clamped = {
             "enabled": bool(enabled),
             "start_hour": max(0, min(23, int(start_hour))),
@@ -39,6 +41,7 @@ class RuntimeSettingsStore:
         self._save_section("sleep", clamped)
 
     def load_font_preview_settings(self) -> dict[str, object] | None:
+        """Return persisted font-preview settings, or None if unset/invalid."""
         payload = self._load_payload()
         if payload is None:
             return None
@@ -67,7 +70,10 @@ class RuntimeSettingsStore:
             "variants": self._normalize_font_preview_variants(preview_payload.get("variants")),
         }
 
-    def save_font_preview_settings(self, *, phrase: str, spacing: int, variants: list[dict[str, object]]) -> None:
+    def save_font_preview_settings(
+        self, *, phrase: str, spacing: int, variants: list[dict[str, object]]
+    ) -> None:
+        """Persist font-preview phrase, spacing, and variants (deduped, clamped)."""
         cleaned = " ".join(str(phrase).split())
         if not cleaned:
             cleaned = "FLIPDOT"
@@ -95,7 +101,7 @@ class RuntimeSettingsStore:
             family = item.get("family")
             size = item.get("size")
             style = item.get("style")
-            if not isinstance(family, str) or not isinstance(style, str):
+            if not isinstance(family, str) or not isinstance(style, str) or size is None:
                 continue
 
             try:
@@ -134,4 +140,6 @@ class RuntimeSettingsStore:
             payload[section] = value
 
             self._settings_path.parent.mkdir(parents=True, exist_ok=True)
-            self._settings_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            self._settings_path.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
