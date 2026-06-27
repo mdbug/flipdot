@@ -10,29 +10,41 @@ implements a pure *frame generator* with this contract::
         '''Return (new_state, frame) OR just frame. frame is a (height, width)
         array of 0/1 values; t is elapsed seconds since the script started.'''
 
-Three layers keep this safe enough to run without a human reading the code:
+Four layers keep this safe enough to run without a human reading the code:
 
 1. ``validate_source`` — a static AST allow-list rejects imports outside
    ``numpy``/``math``/``random``, dunder access (the usual sandbox-escape
    route), and dangerous builtins, *before* anything runs.
-2. The code executes in a **dedicated subprocess** with a restricted
-   ``__builtins__`` and ``numpy``/``math``/``random`` pre-injected. The worker
-   is launched via ``python -c`` (not ``multiprocessing``) so it imports *only*
-   numpy and this module — never the host app's heavy stack (mediapipe, cv2,
-   serial). That matters: ``multiprocessing`` re-imports ``__main__`` to find
-   the target, which would drag ~1 GB of the app's libraries into the worker
-   and make the memory ``rlimit`` clamp below the already-consumed address
-   space, so every allocation in an otherwise-fine script would ``MemoryError``.
-3. The worker has a memory ``rlimit`` and every frame is fetched with a
-   timeout — a hang, crash or OOM kills the child without touching the
-   single-threaded display loop. Only a shape-checked ``uint8`` pixel buffer
-   ever crosses back to the host; no untrusted object re-enters the parent.
+2. **OS-level isolation via bubblewrap** is the real boundary. The worker runs
+   under ``bwrap`` with an unshared (disconnected) network namespace, a cleared
+   environment, and a read-only filesystem — only the ``app`` package, the
+   Python install and numpy are bind-mounted read-only, plus an ephemeral
+   tmpfs ``/tmp``. This matters because ``numpy`` itself is a full file/network
+   primitive (``np.memmap`` writes, ``np.fromfile`` reads, ``DataSource``
+   fetches) that the AST allow-list *cannot* constrain; bwrap makes those
+   syscalls impossible regardless. The launcher fails closed: if ``bwrap`` is
+   not installed, no script runs.
+3. Inside that jail the code executes in a **dedicated subprocess** with a
+   restricted ``__builtins__`` and ``numpy``/``math``/``random`` pre-injected.
+   The worker is launched via ``python -c`` (not ``multiprocessing``) so it
+   imports *only* numpy and this module — never the host app's heavy stack
+   (mediapipe, cv2, serial). That matters: ``multiprocessing`` re-imports
+   ``__main__`` to find the target, which would drag ~1 GB of the app's
+   libraries into the worker and make the memory ``rlimit`` clamp below the
+   already-consumed address space, so every allocation in an otherwise-fine
+   script would ``MemoryError``.
+4. The worker has memory/CPU/file-size/process ``rlimit``\\s and every frame is
+   fetched with a timeout — a hang, crash or OOM kills the child without
+   touching the single-threaded display loop. Only a shape-checked ``uint8``
+   pixel buffer ever crosses back to the host; no untrusted object re-enters
+   the parent.
 """
 
 from __future__ import annotations
 
 import ast
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -44,6 +56,11 @@ import numpy as np
 
 # Repo root, so the worker subprocess can import ``app.services.sandbox``.
 _REPO_ROOT = str(Path(__file__).resolve().parents[2])
+# The ``app`` package directory. Only this (read-only) is exposed to the worker
+# filesystem — never the repo root, which holds ``.env`` and other secrets.
+_APP_DIR = str(Path(__file__).resolve().parents[1])
+# numpy's install location, so the bubblewrap worker can import it.
+_NUMPY_DIR = str(Path(np.__file__).resolve().parent)
 
 
 # Modules generated code may use. Everything else is rejected statically.
@@ -127,6 +144,10 @@ _SAFE_BUILTINS = {
 DEFAULT_MEM_LIMIT_MB = int(os.getenv("SANDBOX_MEM_MB", "1024"))
 DEFAULT_FRAME_TIMEOUT = float(os.getenv("SANDBOX_FRAME_TIMEOUT", "0.25"))
 DEFAULT_STARTUP_TIMEOUT = float(os.getenv("SANDBOX_STARTUP_TIMEOUT", "8.0"))
+# CPU-seconds and process-count ceilings applied inside the worker as defence in
+# depth behind bubblewrap's read-only, network-less namespace.
+DEFAULT_CPU_SECONDS = int(os.getenv("SANDBOX_CPU_SECONDS", "10"))
+DEFAULT_NPROC = int(os.getenv("SANDBOX_NPROC", "256"))
 
 
 class ScriptValidationError(ValueError):
@@ -182,9 +203,13 @@ def validate_source(code: str) -> None:
     if validator.errors:
         raise ScriptValidationError("; ".join(sorted(set(validator.errors))))
 
-    func_names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
-    if "step" not in func_names:
-        raise ScriptValidationError("script must define a step(state, t, width, height) function")
+    # ``step`` must be defined at module level: a nested ``step`` would pass an
+    # ``ast.walk`` check but be invisible to ``namespace.get("step")`` at runtime.
+    top_level_funcs = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+    if "step" not in top_level_funcs:
+        raise ScriptValidationError(
+            "script must define a top-level step(state, t, width, height) function"
+        )
 
 
 # --- Worker process --------------------------------------------------------
@@ -218,11 +243,24 @@ def _apply_rlimits(mem_limit_bytes: int) -> None:
         import resource
     except ImportError:  # pragma: no cover - non-Unix
         return
-    if mem_limit_bytes > 0:
+
+    def _set(limit: int, value: int) -> None:
         try:
-            resource.setrlimit(resource.RLIMIT_AS, (mem_limit_bytes, mem_limit_bytes))
+            resource.setrlimit(limit, (value, value))
         except (ValueError, OSError):  # pragma: no cover - host dependent
             pass
+
+    if mem_limit_bytes > 0:
+        _set(resource.RLIMIT_AS, mem_limit_bytes)
+    # No new files may be created/grown — defence in depth behind bubblewrap's
+    # read-only mounts (the only writable area, tmpfs /tmp, is ephemeral).
+    _set(resource.RLIMIT_FSIZE, 0)
+    # Cap CPU-seconds so a busy loop can't peg a core indefinitely.
+    if DEFAULT_CPU_SECONDS > 0:
+        _set(resource.RLIMIT_CPU, DEFAULT_CPU_SECONDS)
+    # Cap process count to blunt fork bombs (the worker is single-process).
+    if DEFAULT_NPROC > 0:
+        _set(resource.RLIMIT_NPROC, DEFAULT_NPROC)
 
 
 def _short_tb() -> str:
@@ -291,6 +329,84 @@ def _worker_entry(fd: int) -> None:
     _worker_main(conn, code, width, height, mem_limit_bytes)
 
 
+# Host paths the worker needs to read to start Python + numpy. Everything is
+# bind-mounted read-only; ``-try`` variants tolerate paths absent on a given
+# host (e.g. ``/lib64`` on a pure-/usr layout). The repo root is *not* here, so
+# ``.env`` and other secrets stay invisible to untrusted code.
+_RO_BIND_PATHS = (
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/lib32",
+    "/lib64",
+    "/etc/ld.so.cache",
+    "/etc/ld.so.conf",
+    "/etc/ld.so.conf.d",
+    sys.prefix,
+    sys.base_prefix,
+    _NUMPY_DIR,
+)
+
+
+def bwrap_available() -> bool:
+    """Whether the bubblewrap sandbox backend is installed on this host."""
+    return shutil.which("bwrap") is not None
+
+
+def _sandbox_argv(bootstrap: str) -> list[str]:
+    """Build the ``bwrap``-wrapped command that runs the worker in isolation.
+
+    The jail has no network (``--unshare-all`` includes a fresh, disconnected
+    network namespace), no writable filesystem (only an ephemeral tmpfs
+    ``/tmp``), and a cleared environment, so even numpy's file/network
+    primitives have nothing to act on. Raises :class:`SandboxStartupError` if
+    bubblewrap is not installed — the worker never runs unsandboxed.
+    """
+    bwrap = shutil.which("bwrap")
+    if bwrap is None:
+        raise SandboxStartupError(
+            "the bubblewrap sandbox backend ('bwrap') is not installed; "
+            "refusing to run untrusted script code (install the 'bubblewrap' package)"
+        )
+    ro_binds: list[str] = []
+    for path in _RO_BIND_PATHS:
+        ro_binds += ["--ro-bind-try", path, path]
+    return [
+        bwrap,
+        "--unshare-all",  # fresh, disconnected network namespace + pid/ipc/uts/user
+        "--die-with-parent",
+        "--clearenv",  # drop inherited .env secrets / API keys
+        "--setenv",
+        "PYTHONPATH",
+        _REPO_ROOT,
+        "--setenv",
+        "PYTHONDONTWRITEBYTECODE",
+        "1",
+        "--setenv",
+        "HOME",
+        "/tmp",
+        "--setenv",
+        "TMPDIR",
+        "/tmp",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/tmp",
+        *ro_binds,
+        "--ro-bind",
+        _APP_DIR,
+        _APP_DIR,  # source for `import app.services.sandbox`
+        "--chdir",
+        "/tmp",
+        sys.executable,
+        "-c",
+        bootstrap,
+    ]
+
+
 class SandboxedScript:
     """A running, isolated frame generator. ``get_frame`` is fail-safe."""
 
@@ -329,19 +445,22 @@ class SandboxedScript:
     def start(self) -> None:
         """Launch the isolated worker process and wait for it to be ready."""
         # A socketpair carries the multiprocessing Connection protocol; one end
-        # is inherited by a minimal `python -c` worker that imports only numpy.
+        # is inherited (fd number preserved through bwrap) by a minimal
+        # `python -c` worker that imports only numpy.
         parent_sock, child_sock = socket.socketpair()
         child_fd = child_sock.fileno()
         os.set_inheritable(child_fd, True)
         bootstrap = f"from app.services.sandbox import _worker_entry; _worker_entry({child_fd})"
-        env = dict(os.environ)
-        env["PYTHONPATH"] = os.pathsep.join(p for p in (_REPO_ROOT, env.get("PYTHONPATH", "")) if p)
+        try:
+            argv = _sandbox_argv(bootstrap)  # raises SandboxStartupError if bwrap missing
+        except SandboxStartupError:
+            child_sock.close()
+            parent_sock.close()
+            raise
         try:
             self._proc = subprocess.Popen(
-                [sys.executable, "-c", bootstrap],
+                argv,
                 pass_fds=(child_fd,),
-                cwd=_REPO_ROOT,
-                env=env,
             )
         finally:
             child_sock.close()  # the parent keeps only its own end of the pair

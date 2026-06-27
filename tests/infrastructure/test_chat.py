@@ -37,7 +37,6 @@ class DummyBoard:
 def _build_mcp(mode_manager=None, board=None):
     frame = [[0] * 28 for _ in range(28)]
     return build_flipdot_mcp(
-        input_hub=object(),
         snapshot_frame=lambda: ([list(r) for r in frame], "clock", 28, 28),
         get_mode_manager=lambda: mode_manager,
         get_board=lambda: board,

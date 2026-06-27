@@ -126,7 +126,10 @@ def main() -> None:
     sleep_hour_end = int(os.getenv("SLEEP_HOUR_END", "7"))
     face_mesh_max_fps = float(os.getenv("FACE_MESH_MAX_FPS", "12"))
     enable_web_ui = os.getenv("ENABLE_WEB_UI", "false").lower() == "true"
-    web_ui_host = os.getenv("WEB_UI_HOST", "0.0.0.0")
+    # Loopback by default: the web UI and /mcp endpoint are not exposed to the
+    # LAN unless WEB_UI_HOST is explicitly set (e.g. 0.0.0.0). /mcp additionally
+    # requires MCP_AUTH_TOKEN before it is mounted.
+    web_ui_host = os.getenv("WEB_UI_HOST", "127.0.0.1")
     web_ui_port = int(os.getenv("WEB_UI_PORT", "8000"))
 
     logger.info(

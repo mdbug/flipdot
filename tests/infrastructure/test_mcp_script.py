@@ -7,7 +7,12 @@ pytest.importorskip("mcp")
 from app.core.mode_manager import ModeManager
 from app.infrastructure.mcp_server import build_flipdot_mcp
 from app.modes.script_mode import ScriptMode
+from app.services.sandbox import bwrap_available
 from app.services.script_store import ScriptStore
+
+requires_bwrap = pytest.mark.skipif(
+    not bwrap_available(), reason="bubblewrap (bwrap) is required to run sandboxed scripts"
+)
 
 GAME_OF_LIFE = """
 def setup(width, height):
@@ -40,7 +45,6 @@ class DummySettingsStore:
 
 def _build(mode_manager, script_mode):
     return build_flipdot_mcp(
-        input_hub=None,
         snapshot_frame=lambda: ([[0]], mode_manager.mode, 28, 28),
         get_mode_manager=lambda: mode_manager,
         get_board=lambda: None,
@@ -54,6 +58,7 @@ def _script_mode(tmp_path):
     return ScriptMode(28, 28, store=ScriptStore(tmp_path))
 
 
+@requires_bwrap
 def test_run_script_switches_to_script_mode(tmp_path):
     mode_manager = DummyModeManager()
     script_mode = _script_mode(tmp_path)
@@ -77,6 +82,7 @@ def test_run_script_rejects_unsafe_code(tmp_path):
         )
 
 
+@requires_bwrap
 def test_save_load_list_round_trip(tmp_path):
     mode_manager = DummyModeManager()
     script_mode = _script_mode(tmp_path)

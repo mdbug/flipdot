@@ -3,6 +3,10 @@ from io import BytesIO
 import numpy as np
 from PIL import Image
 
+# Upper bound on source image dimensions accepted by ``binary_from_bytes``.
+# Generous (the panel is 28x28) but small enough to reject decompression bombs.
+_MAX_SOURCE_PIXELS = 8000 * 8000
+
 
 def load(file: str) -> np.ndarray:
     """Load an image from the ``imgs/`` directory as a numpy array."""
@@ -34,6 +38,15 @@ def binary_from_bytes(
         raise ValueError("image payload is empty")
 
     with Image.open(BytesIO(data)) as raw:
+        # Image.open only reads the header, so check declared dimensions before
+        # decoding pixels — guards against a decompression bomb (a tiny file that
+        # expands to gigabytes once decoded). The panel is only 28x28.
+        source_pixels = (raw.width or 0) * (raw.height or 0)
+        if source_pixels > _MAX_SOURCE_PIXELS:
+            raise ValueError(
+                f"image is too large to decode ({raw.width}x{raw.height} px); "
+                f"maximum is {_MAX_SOURCE_PIXELS} pixels"
+            )
         grayscale = raw.convert("L")
         grayscale.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
         pixels = np.asarray(grayscale, dtype=np.uint8)

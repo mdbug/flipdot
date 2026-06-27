@@ -64,7 +64,6 @@ class DummyInputHub:
 def _build(mode_manager, board, policy, settings_store):
     frame = [[1 if (r + c) % 2 == 0 else 0 for c in range(28)] for r in range(28)]
     return build_flipdot_mcp(
-        input_hub=DummyInputHub(),
         snapshot_frame=lambda: ([list(row) for row in frame], mode_manager.mode, 28, 28),
         get_mode_manager=lambda: mode_manager,
         get_board=lambda: board,
@@ -132,6 +131,20 @@ def test_show_message_clears_and_adds_text_on_board():
     assert board.text_objects[-1]["scroll"] is True
 
 
+def test_place_image_rejects_oversized_payload(monkeypatch):
+    import base64
+
+    from app.infrastructure import mcp_server
+
+    monkeypatch.setattr(mcp_server, "_MAX_IMAGE_BYTES", 8)
+    mcp = _build(DummyModeManager(), DummyBoard(), DummyTransitionPolicy(), DummySettingsStore())
+    payload = base64.b64encode(b"x" * 64).decode()
+
+    # Rejected before reaching the board (DummyBoard has no place_uploaded_image).
+    with pytest.raises(Exception):  # noqa: B017
+        asyncio.run(mcp.call_tool("place_image", {"image_base64": payload}))
+
+
 def test_set_sleep_settings_tool_persists():
     policy = DummyTransitionPolicy()
     store = DummySettingsStore()
@@ -145,12 +158,13 @@ def test_set_sleep_settings_tool_persists():
     assert store.saved == {"enabled": False, "start_hour": 1, "end_hour": 9}
 
 
-def test_web_server_mounts_mcp_endpoint():
+def test_web_server_mounts_mcp_endpoint(monkeypatch):
     pytest.importorskip("fastapi")
     from starlette.routing import Mount
 
     from app.infrastructure.web_server import WebServer
 
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "test-token")
     server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8124)
 
     mount_paths = [route.path for route in server._app.routes if isinstance(route, Mount)]
@@ -158,7 +172,44 @@ def test_web_server_mounts_mcp_endpoint():
     assert "/mcp" in mount_paths
 
 
-def test_mcp_endpoint_handshake_and_tool_call():
+def test_mcp_not_mounted_without_auth_token(monkeypatch):
+    """Without MCP_AUTH_TOKEN the HTTP /mcp endpoint is not exposed, but the MCP
+    object still exists so the in-process (in-UI) chat keeps working."""
+    pytest.importorskip("fastapi")
+    from starlette.routing import Mount
+
+    from app.infrastructure.web_server import WebServer
+
+    monkeypatch.delenv("MCP_AUTH_TOKEN", raising=False)
+    server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8126)
+
+    mount_paths = [route.path for route in server._app.routes if isinstance(route, Mount)]
+
+    assert "/mcp" not in mount_paths
+    assert server._mcp is not None  # in-UI chat depends on this being built
+    assert server._mcp_http_mounted is False
+
+
+def test_mcp_endpoint_rejects_missing_or_wrong_token(monkeypatch):
+    """The bearer-token gate returns 401 without a valid Authorization header."""
+    pytest.importorskip("fastapi")
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+
+    from app.infrastructure.web_server import WebServer
+
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "s3cret")
+    server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8128)
+
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+    base = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+    with TestClient(server._app) as client:
+        assert client.post("/mcp", json=body, headers=base).status_code == 401
+        wrong = {**base, "Authorization": "Bearer nope"}
+        assert client.post("/mcp", json=body, headers=wrong).status_code == 401
+
+
+def test_mcp_endpoint_handshake_and_tool_call(monkeypatch):
     """End-to-end: handshake over the mounted /mcp endpoint and drive a tool."""
     pytest.importorskip("fastapi")
     pytest.importorskip("httpx")
@@ -168,6 +219,10 @@ def test_mcp_endpoint_handshake_and_tool_call():
 
     from app.infrastructure.web_server import WebServer
 
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "s3cret")
+    # The TestClient sends Host "testserver"; allow it past DNS-rebinding protection.
+    monkeypatch.setenv("MCP_ALLOWED_HOSTS", "testserver,localhost:*,127.0.0.1:*")
+
     mode_manager = DummyModeManager()
     server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8125)
     server.attach_mode_manager(mode_manager)
@@ -175,6 +230,7 @@ def test_mcp_endpoint_handshake_and_tool_call():
     headers = {
         "Accept": "application/json, text/event-stream",
         "Content-Type": "application/json",
+        "Authorization": "Bearer s3cret",
     }
 
     def rpc(client, payload, hdrs):

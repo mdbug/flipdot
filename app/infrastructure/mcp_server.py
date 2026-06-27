@@ -26,6 +26,10 @@ KNOWN_MODES = tuple(
     if name.startswith("MODE_") and isinstance(value, str)
 )
 
+# Cap decoded image payloads so an agent can't exhaust memory with a huge upload
+# (the panel is only 28x28; this is generous headroom).
+_MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
 # Accept friendly aliases for the Board shape tool names.
 _SHAPE_ALIASES = {
     "line": "line",
@@ -44,7 +48,6 @@ def _frame_to_ascii(pixels: list[list[int]]) -> str:
 
 def build_flipdot_mcp(
     *,
-    input_hub: Any,
     snapshot_frame: Callable[[], tuple[list[list[int]], str, int, int]],
     get_mode_manager: Callable[[], Any | None],
     get_board: Callable[[], Any | None],
@@ -52,6 +55,8 @@ def build_flipdot_mcp(
     get_transition_policy: Callable[[], Any | None],
     settings_store: Any,
     get_controller_status: Callable[[], Any] | None = None,
+    allowed_hosts: list[str] | None = None,
+    allowed_origins: list[str] | None = None,
 ) -> FastMCP:
     """Build the flip-dot MCP server.
 
@@ -69,9 +74,14 @@ def build_flipdot_mcp(
         stateless_http=True,
         json_response=True,
         streamable_http_path="/",
-        # The web server is already open (CORS "*"); allow agents to connect from
-        # any host rather than only localhost (default DNS-rebinding protection).
-        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+        # DNS-rebinding protection on: only the configured Host/Origin values are
+        # accepted (localhost by default). Access is additionally gated by the
+        # MCP_AUTH_TOKEN bearer check the web server wraps around this mount.
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=allowed_hosts or ["127.0.0.1:*", "localhost:*", "[::1]:*"],
+            allowed_origins=allowed_origins or [],
+        ),
     )
 
     def _require_board() -> Any:
@@ -303,6 +313,10 @@ def build_flipdot_mcp(
             raise ValueError(f"image_base64 is not valid base64: {exc}") from exc
         if not raw:
             raise ValueError("image payload is empty")
+        if len(raw) > _MAX_IMAGE_BYTES:
+            raise ValueError(
+                f"image is too large ({len(raw)} bytes); maximum is {_MAX_IMAGE_BYTES}"
+            )
         result = _require_board().place_uploaded_image(
             raw, mode=mode, x=int(x), y=int(y), threshold=int(threshold)
         )

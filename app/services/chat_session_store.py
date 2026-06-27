@@ -19,6 +19,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 _DEFAULT_DIR = Path(__file__).resolve().parents[2] / "state" / "chat_sessions"
 _ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -43,9 +44,7 @@ class ChatSessionStore:
     """Persist and retrieve chat sessions as ``<id>.json`` files on disk."""
 
     def __init__(self, sessions_dir: Path | None = None) -> None:
-        self._dir = Path(
-            os.getenv("CHAT_SESSIONS_DIR", str(sessions_dir or _DEFAULT_DIR))
-        )
+        self._dir = Path(os.getenv("CHAT_SESSIONS_DIR", str(sessions_dir or _DEFAULT_DIR)))
         self._lock = threading.Lock()
 
     @staticmethod
@@ -63,7 +62,7 @@ class ChatSessionStore:
         """Create and persist a new, empty session; return its record."""
         session_id = uuid.uuid4().hex
         now = _now_iso()
-        record = {
+        record: dict[str, Any] = {
             "id": session_id,
             "title": derive_title(title),
             "model": model,
@@ -148,9 +147,7 @@ class ChatSessionStore:
         # Count only the human-visible user turns (string content), so tool
         # results that ride along as user-role messages don't inflate the count.
         turns = sum(
-            1
-            for m in messages
-            if m.get("role") == "user" and isinstance(m.get("content"), str)
+            1 for m in messages if m.get("role") == "user" and isinstance(m.get("content"), str)
         )
         return {
             "id": record.get("id"),
@@ -175,9 +172,7 @@ class ChatSessionStore:
             path = self._path(record["id"])
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".json.tmp")
-            tmp.write_text(
-                json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            tmp.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
             os.replace(tmp, path)
 
         if lock:

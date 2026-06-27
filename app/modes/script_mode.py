@@ -17,6 +17,17 @@ import app.services.text as text
 from app.services.sandbox import SandboxedScript
 from app.services.script_store import ScriptStore
 
+try:
+    # Characters the small panel font can render; used to sanitise error text.
+    _DISPLAYABLE_CHARS = text.supported_characters(sizes=[5])
+except Exception:  # pragma: no cover - fonts are present in practice
+    _DISPLAYABLE_CHARS = frozenset()
+
+
+def _displayable(message: str) -> str:
+    """Uppercase ``message`` and drop characters the panel font can't render."""
+    return "".join(ch for ch in message.upper() if ch in _DISPLAYABLE_CHARS)
+
 
 class ScriptMode:
     """Render-loop glue around a sandboxed, LLM-generated frame generator."""
@@ -112,7 +123,26 @@ class ScriptMode:
         return np.zeros((self.height, self.width), dtype=np.uint8)
 
     def _error_frame(self, message: str) -> np.ndarray:
+        """Render 'ERROR' plus the failure message (scrolling if too wide).
+
+        Never raises: any rendering problem falls back to a bare 'ERROR' so the
+        single-threaded display loop is undisturbed.
+        """
         frame = self._blank()
-        text.write_centered(frame, "SCRIPT", y=8, size=5)
-        text.write_centered(frame, "ERROR", y=16, size=5)
+        try:
+            text.write_centered(frame, "ERROR", y=2, size=5)
+            safe = _displayable(message)
+            if not safe:
+                return frame
+            msg_width = text.width(safe, size=5)
+            if msg_width <= self.width:
+                text.write_centered(frame, safe, y=16, size=5)
+            else:
+                # Wider than the panel: scroll leftwards so all of it is readable.
+                span = msg_width + self.width
+                offset = int(time.monotonic() * 12) % span
+                text.write(frame, safe, x=self.width - offset, y=16, size=5)
+        except Exception:  # noqa: BLE001 - render loop must never see an error here
+            frame = self._blank()
+            text.write_centered(frame, "ERROR", y=8, size=5)
         return frame

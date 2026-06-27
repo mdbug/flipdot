@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import secrets
 import threading
 import time
 from collections.abc import AsyncIterator, Callable
@@ -23,9 +25,70 @@ from app.modes.contracts import Frame
 from app.services.chat_session_store import ChatSessionStore
 from app.services.settings_store import RuntimeSettingsStore
 
+logger = logging.getLogger(__name__)
+
 
 def _mcp_enabled() -> bool:
     return os.getenv("ENABLE_MCP", "true").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _mcp_auth_token() -> str:
+    """The bearer token required on ``/mcp`` (empty string if unconfigured)."""
+    return os.getenv("MCP_AUTH_TOKEN", "").strip()
+
+
+def _cors_settings() -> tuple[list[str], str | None]:
+    """CORS (allow_origins, allow_origin_regex) for the web UI.
+
+    The UI is served same-origin, so cross-origin access is not required by
+    default. ``WEB_UI_ALLOWED_ORIGINS`` (comma-separated exact origins) overrides
+    this; otherwise only localhost on any port is permitted via a regex — a
+    tightening of the previous ``allow_origins=["*"]``.
+    """
+    raw = os.getenv("WEB_UI_ALLOWED_ORIGINS", "").strip()
+    if raw:
+        return [o.strip() for o in raw.split(",") if o.strip()], None
+    return [], r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+
+
+def _mcp_security_lists(host: str, port: int) -> tuple[list[str], list[str]]:
+    """Allowed ``Host``/``Origin`` values for MCP DNS-rebinding protection.
+
+    Defaults to localhost only. Operators exposing the server to a LAN (by
+    binding a non-loopback host) can widen the Host allow-list via
+    ``MCP_ALLOWED_HOSTS`` (comma-separated ``host:*`` patterns); the bearer
+    token remains the primary control.
+    """
+    explicit = os.getenv("MCP_ALLOWED_HOSTS", "").strip()
+    if explicit:
+        hosts = [h.strip() for h in explicit.split(",") if h.strip()]
+    else:
+        hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+        if host not in ("127.0.0.1", "localhost", "0.0.0.0", "::", ""):
+            hosts.append(f"{host}:*")
+    origins: list[str] = []
+    for h in hosts:
+        base = h[:-2] if h.endswith(":*") else h
+        origins.append(f"http://{base}:*")
+        origins.append(f"https://{base}:*")
+    return hosts, origins
+
+
+def _bearer_guard(app: Any, token: str) -> Any:
+    """Wrap an ASGI ``app`` so every HTTP request needs ``Bearer <token>``."""
+
+    async def guarded(scope: dict, receive: Any, send: Any) -> None:
+        if scope.get("type") == "http":
+            headers = dict(scope.get("headers") or [])
+            provided = headers.get(b"authorization", b"").decode("latin-1")
+            expected = f"Bearer {token}"
+            if not (provided and secrets.compare_digest(provided, expected)):
+                response = JSONResponse({"error": "unauthorized"}, status_code=401)
+                await response(scope, receive, send)
+                return
+        await app(scope, receive, send)
+
+    return guarded
 
 
 class PointerEventPayload(BaseModel):
@@ -193,12 +256,19 @@ class WebServer:
         self._chat_sessions = ChatSessionStore()
         self._chat_session_id: str | None = None
 
-        # Build the MCP server (if enabled) before the FastAPI app so its
-        # streamable-HTTP session manager can be driven from the app lifespan.
+        # Build the MCP server (if enabled) before the FastAPI app. The same
+        # object backs two consumers: the in-UI Claude chat, which calls its
+        # tools in-process, and the external HTTP /mcp endpoint. The in-UI chat
+        # works whenever the object exists; the HTTP endpoint, which grants
+        # remote tool access (including sandboxed code execution), is only
+        # mounted when an MCP_AUTH_TOKEN is configured and is gated by that
+        # bearer token on every request.
         self._mcp = None
+        self._mcp_token = _mcp_auth_token()
+        self._mcp_http_mounted = False
         if _mcp_enabled():
+            allowed_hosts, allowed_origins = _mcp_security_lists(host, port)
             self._mcp = build_flipdot_mcp(
-                input_hub=self._input_hub,
                 snapshot_frame=self.snapshot_frame,
                 get_mode_manager=lambda: self._mode_manager,
                 get_board=lambda: self._board,
@@ -206,31 +276,46 @@ class WebServer:
                 get_transition_policy=lambda: self._transition_policy,
                 settings_store=self._settings_store,
                 get_controller_status=self._mcp_controller_status,
+                allowed_hosts=allowed_hosts,
+                allowed_origins=allowed_origins,
             )
 
         self._app = FastAPI(lifespan=self._build_lifespan())
+        cors_origins, cors_origin_regex = _cors_settings()
         self._app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=cors_origins,
+            allow_origin_regex=cors_origin_regex,
             allow_methods=["*"],
             allow_headers=["*"],
         )
-        if self._mcp is not None:
-            self._app.mount("/mcp", self._mcp.streamable_http_app())
+        if self._mcp is not None and self._mcp_token:
+            self._app.mount("/mcp", _bearer_guard(self._mcp.streamable_http_app(), self._mcp_token))
+            self._mcp_http_mounted = True
+        elif self._mcp is not None:
+            logger.warning(
+                "MCP_AUTH_TOKEN is not set; the external /mcp HTTP endpoint is disabled "
+                "(the in-UI chat still works). Set MCP_AUTH_TOKEN to expose /mcp."
+            )
 
         self._server: uvicorn.Server | None = None
         self._thread: threading.Thread | None = None
         self._wire_routes()
 
     def _build_lifespan(self) -> Callable[[FastAPI], Any]:
-        mcp = self._mcp
+        server = self
 
         @asynccontextmanager
         async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-            if mcp is None:
+            # Read state via ``server`` (not captured locals): this runs at app
+            # startup, after __init__ has decided whether the HTTP endpoint is
+            # mounted. The session manager only exists once streamable_http_app()
+            # has been called, i.e. when /mcp is mounted; the in-UI chat uses the
+            # mcp object directly and needs no session manager.
+            mcp = server._mcp
+            if mcp is None or not server._mcp_http_mounted:
                 yield
                 return
-            # Run the MCP streamable-HTTP session manager for the app's lifetime.
             async with mcp.session_manager.run():
                 yield
 
@@ -698,9 +783,7 @@ class WebServer:
                     if len(self._chat_messages) <= 1:
                         return
                     if self._chat_session_id is None:
-                        record = self._chat_sessions.create(
-                            title=message, model=payload.model
-                        )
+                        record = self._chat_sessions.create(title=message, model=payload.model)
                         self._chat_session_id = record["id"]
                     summary = self._chat_sessions.save(
                         self._chat_session_id,
@@ -708,10 +791,13 @@ class WebServer:
                         title=message if new_session else None,
                         model=payload.model,
                     )
-                    yield json.dumps(
-                        {"type": "session_saved", "session": summary},
-                        ensure_ascii=False,
-                    ) + "\n"
+                    yield (
+                        json.dumps(
+                            {"type": "session_saved", "session": summary},
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
 
             return StreamingResponse(generate(), media_type="application/x-ndjson")
 

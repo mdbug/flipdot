@@ -7,7 +7,12 @@ import pytest
 from app.services.sandbox import (
     SandboxedScript,
     ScriptValidationError,
+    bwrap_available,
     validate_source,
+)
+
+requires_bwrap = pytest.mark.skipif(
+    not bwrap_available(), reason="bubblewrap (bwrap) is required to run sandboxed scripts"
 )
 
 GAME_OF_LIFE = """
@@ -43,10 +48,19 @@ def test_validate_requires_step_function():
         validate_source("def setup(w, h):\n    return 0")
 
 
+def test_validate_rejects_nested_step():
+    # A step() nested inside another function passes ast.walk but is invisible at
+    # runtime, so it must be rejected up front.
+    code = "def outer():\n    def step(s, t, w, h):\n        return 0\n    return step"
+    with pytest.raises(ScriptValidationError):
+        validate_source(code)
+
+
 def test_validate_accepts_game_of_life():
     validate_source(GAME_OF_LIFE)  # should not raise
 
 
+@requires_bwrap
 def test_worker_produces_binary_frames():
     script = SandboxedScript(GAME_OF_LIFE, 28, 28)
     script.start()
@@ -62,6 +76,7 @@ def test_worker_produces_binary_frames():
         script.stop()
 
 
+@requires_bwrap
 def test_infinite_loop_is_killed_by_timeout():
     code = "def step(s, t, w, h):\n    while True:\n        pass"
     script = SandboxedScript(code, 28, 28, frame_timeout=0.2)
@@ -74,6 +89,7 @@ def test_infinite_loop_is_killed_by_timeout():
         script.stop()
 
 
+@requires_bwrap
 def test_wrong_shape_frame_is_rejected():
     code = "def step(s, t, w, h):\n    return np.zeros((5, 5))"
     script = SandboxedScript(code, 28, 28)
@@ -86,6 +102,7 @@ def test_wrong_shape_frame_is_rejected():
         script.stop()
 
 
+@requires_bwrap
 def test_t_is_passed_as_float_seconds():
     code = (
         "def step(state, t, w, h):\n"
@@ -102,6 +119,7 @@ def test_t_is_passed_as_float_seconds():
         script.stop()
 
 
+@requires_bwrap
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc")
 def test_worker_does_not_inherit_heavy_app_imports():
     # Regression: the worker must be a clean subprocess that imports only numpy.
@@ -119,6 +137,7 @@ def test_worker_does_not_inherit_heavy_app_imports():
         script.stop()
 
 
+@requires_bwrap
 def test_runtime_error_is_reported_not_raised():
     code = "def step(s, t, w, h):\n    return 1 / 0"
     script = SandboxedScript(code, 28, 28)
@@ -127,5 +146,46 @@ def test_runtime_error_is_reported_not_raised():
         assert script.get_frame(0) is None
         assert script.failed
         assert script.error
+    finally:
+        script.stop()
+
+
+@requires_bwrap
+def test_sandbox_blocks_filesystem_write(tmp_path):
+    # numpy's I/O surface (memmap mode="w+") is fully exposed to script code; the
+    # bubblewrap jail must make the write impossible rather than relying on the
+    # AST allow-list, which cannot constrain numpy.
+    target = tmp_path / "escape.bin"
+    code = (
+        "def step(s, t, w, h):\n"
+        f"    m = np.memmap({str(target)!r}, dtype=np.uint8, mode='w+', shape=(4,))\n"
+        "    m[:] = 1\n"
+        "    m.flush()\n"
+        "    return np.zeros((h, w), dtype=np.uint8)"
+    )
+    script = SandboxedScript(code, 28, 28)
+    script.start()
+    try:
+        assert script.get_frame(0) is None
+        assert script.failed
+    finally:
+        script.stop()
+    assert not target.exists()
+
+
+@requires_bwrap
+def test_sandbox_blocks_network(tmp_path):
+    # The worker runs in an unshared (disconnected) network namespace, so even
+    # numpy's DataSource fetch cannot reach the network.
+    code = (
+        "def step(s, t, w, h):\n"
+        "    np.lib.npyio.DataSource('/tmp').open('http://127.0.0.1:9/')\n"
+        "    return np.zeros((h, w), dtype=np.uint8)"
+    )
+    script = SandboxedScript(code, 28, 28)
+    script.start()
+    try:
+        assert script.get_frame(0) is None
+        assert script.failed
     finally:
         script.stop()
