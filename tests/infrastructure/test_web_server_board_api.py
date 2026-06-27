@@ -31,6 +31,14 @@ class DummyTransitionPolicy:
     def get_sleep_settings(self):
         return dict(self._settings)
 
+    def set_sleep_settings(self, *, enabled, start_hour, end_hour):
+        self._settings = {
+            "enabled": bool(enabled),
+            "start_hour": int(start_hour),
+            "end_hour": int(end_hour),
+        }
+        return dict(self._settings)
+
 
 class DummyFontPreview:
     def __init__(self):
@@ -84,14 +92,6 @@ class DummyFontPreview:
             "phrase": cleaned[:32],
             "spacing": max(0, min(6, int(spacing))),
             "variants": normalized_variants[:4],
-        }
-        return dict(self._settings)
-
-    def set_sleep_settings(self, *, enabled, start_hour, end_hour):
-        self._settings = {
-            "enabled": bool(enabled),
-            "start_hour": int(start_hour),
-            "end_hour": int(end_hour),
         }
         return dict(self._settings)
 
@@ -523,8 +523,13 @@ def test_font_grid_page_route_serves_html():
     assert "text/html" in response.headers.get("content-type", "")
 
 
-def test_sleep_settings_endpoints_with_attached_transition_policy():
-    server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8130)
+def test_sleep_settings_endpoints_with_attached_transition_policy(tmp_path):
+    server = WebServer(
+        input_hub=DummyInputHub(),
+        host="127.0.0.1",
+        port=8130,
+        settings_path=tmp_path / "settings.json",
+    )
     server.attach_transition_policy(DummyTransitionPolicy())
     client = TestClient(server._app)
 
@@ -547,8 +552,13 @@ def test_sleep_settings_endpoints_with_attached_transition_policy():
     assert response.json() == {"enabled": False, "start_hour": 22, "end_hour": 6}
 
 
-def test_font_preview_settings_endpoints_with_attached_mode():
-    server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8133)
+def test_font_preview_settings_endpoints_with_attached_mode(tmp_path):
+    server = WebServer(
+        input_hub=DummyInputHub(),
+        host="127.0.0.1",
+        port=8133,
+        settings_path=tmp_path / "settings.json",
+    )
     server.attach_font_preview(DummyFontPreview())
     client = TestClient(server._app)
 

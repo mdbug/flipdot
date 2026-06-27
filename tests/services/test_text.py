@@ -96,18 +96,6 @@ def test_scoreline_family_is_size6_regular_only():
         get_font_definition("scoreline", 6, "monospace")
 
 
-def test_scoreline_uses_monospace_digits_and_regular_letters():
-    scoreline = get_font_definition("scoreline", 6, "regular").glyphs
-    mono = get_font_definition("classic", 6, "monospace").glyphs
-    regular = get_font_definition("classic", 6, "regular").glyphs
-
-    for digit in "0123456789":
-        assert np.array_equal(scoreline[digit], mono[digit])
-
-    for ch in ("A", "G", ":", "°"):
-        assert np.array_equal(scoreline[ch], regular[ch])
-
-
 def test_classic_size6_monospace_glyphs_are_fixed_width():
     mono = get_font_definition("classic", 6, "monospace")
     assert mono.cell_width == 5

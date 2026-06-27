@@ -9,5 +9,10 @@
         "style": "monospace"
       }
     ]
+  },
+  "sleep": {
+    "enabled": false,
+    "end_hour": 6,
+    "start_hour": 22
   }
 }
