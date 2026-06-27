@@ -58,13 +58,22 @@ class ScriptMode:
 
     def run_script(self, code: str, name: str = "") -> dict:
         """Validate, isolate and start ``code``. Raises on unsafe/broken code."""
+        # Validate the optional save name *before* spawning a worker so an
+        # invalid name fails fast and can never leave an orphaned worker running
+        # after this call has raised.
+        sanitized = ScriptStore.sanitize_name(name) if name else ""
         script = SandboxedScript(code, self.width, self.height)  # validates
         script.start()  # spawns worker, runs setup; raises on startup failure
-        self._replace(script, name)
         saved = ""
-        if name:
-            saved = self._store.save(name, code)
-            self._name = saved
+        if sanitized:
+            try:
+                saved = self._store.save(sanitized, code)
+            except Exception:
+                script.stop()  # don't leak the worker if persisting the code fails
+                raise
+        # Only now swap the active script in, so a failure above never leaves the
+        # mode pointing at a worker the caller was told didn't start.
+        self._replace(script, saved)
         return {"running": True, "name": saved}
 
     def stop_script(self) -> bool:

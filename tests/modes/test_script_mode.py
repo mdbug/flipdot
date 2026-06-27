@@ -1,6 +1,18 @@
 import numpy as np
+import pytest
 
 from app.modes.script_mode import ScriptMode
+
+_VALID_SCRIPT = "def step(state, t, width, height):\n    return None, np.zeros((height, width))\n"
+
+
+def test_run_script_rejects_invalid_name_before_starting_worker():
+    # An invalid save name must be caught up front so no sandbox worker is
+    # spawned and left running after the call raises.
+    mode = ScriptMode(28, 28)
+    with pytest.raises(ValueError):
+        mode.run_script(_VALID_SCRIPT, name="not a valid name!")
+    assert mode._script is None  # nothing was started or left active
 
 
 def test_error_frame_renders_message_without_raising():

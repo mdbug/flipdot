@@ -30,6 +30,10 @@ KNOWN_MODES = tuple(
 # (the panel is only 28x28; this is generous headroom).
 _MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
+# Bound a freehand stroke so a single call can't pin CPU/memory with a giant
+# point list (the panel is only 28x28; this is wide headroom).
+_MAX_STROKE_POINTS = 10000
+
 # Accept friendly aliases for the Board shape tool names.
 _SHAPE_ALIASES = {
     "line": "line",
@@ -281,6 +285,8 @@ def build_flipdot_mcp(
         Each point is {"x": float, "y": float} with coordinates normalized in
         [0, 1]. A single point paints a dot. color is 'on' or 'off'.
         """
+        if len(points or []) > _MAX_STROKE_POINTS:
+            raise ValueError(f"too many points; maximum is {_MAX_STROKE_POINTS}")
         normalized = [{"x": float(p["x"]), "y": float(p["y"])} for p in (points or [])]
         if not normalized:
             raise ValueError("points are required")
@@ -307,6 +313,10 @@ def build_flipdot_mcp(
         """
         if mode not in {"stamp", "object"}:
             raise ValueError("mode must be 'stamp' or 'object'")
+        # Reject before decoding: base64 inflates by 4/3, so cap the encoded
+        # length up front rather than materialising a huge bytes object first.
+        if len(image_base64) > _MAX_IMAGE_BYTES // 3 * 4 + 4:
+            raise ValueError(f"image is too large; maximum is {_MAX_IMAGE_BYTES} decoded bytes")
         try:
             raw = base64.b64decode(image_base64, validate=True)
         except Exception as exc:  # noqa: BLE001 - surface decode failures to the agent

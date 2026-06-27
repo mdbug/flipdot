@@ -27,6 +27,10 @@ from app.services.settings_store import RuntimeSettingsStore
 
 logger = logging.getLogger(__name__)
 
+# Cap raw image uploads so a single request can't exhaust memory before the
+# image layer ever sees it (the panel is only 28x28; this is generous headroom).
+_MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+
 
 def _mcp_enabled() -> bool:
     return os.getenv("ENABLE_MCP", "true").strip().lower() not in {"0", "false", "no", "off"}
@@ -116,7 +120,9 @@ class BoardPointPayload(BaseModel):
 
 
 class BoardDrawPayload(BaseModel):
-    points: list[BoardPointPayload]
+    # A freehand stroke on a 28x28 panel needs at most a few hundred points; cap
+    # it generously so a single request can't pin CPU/memory with a giant list.
+    points: list[BoardPointPayload] = Field(max_length=10000)
     line_width: int = Field(default=1, ge=1, le=8)
     color: str = Field(default="on")
 
@@ -529,7 +535,13 @@ class WebServer:
             threshold: int = Form(128),
         ) -> JSONResponse:
             board = self._require_board()
-            raw = await file.read()
+            # Reject oversized uploads by Content-Length first, then bound the
+            # actual read so a lying/chunked client still can't blow up memory.
+            if file.size is not None and file.size > _MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="image is too large")
+            raw = await file.read(_MAX_UPLOAD_BYTES + 1)
+            if len(raw) > _MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="image is too large")
             if not raw:
                 raise HTTPException(status_code=400, detail="image payload is empty")
             if mode not in {"stamp", "object"}:

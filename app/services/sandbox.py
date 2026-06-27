@@ -148,6 +148,10 @@ DEFAULT_STARTUP_TIMEOUT = float(os.getenv("SANDBOX_STARTUP_TIMEOUT", "8.0"))
 # depth behind bubblewrap's read-only, network-less namespace.
 DEFAULT_CPU_SECONDS = int(os.getenv("SANDBOX_CPU_SECONDS", "10"))
 DEFAULT_NPROC = int(os.getenv("SANDBOX_NPROC", "256"))
+# Reject pathologically large source before parsing it into an AST. A real
+# animation script is a few KB; this is a wide margin that still bounds the
+# parser's work and memory.
+MAX_SOURCE_BYTES = int(os.getenv("SANDBOX_MAX_SOURCE_BYTES", str(256 * 1024)))
 
 
 class ScriptValidationError(ValueError):
@@ -193,6 +197,8 @@ class _Validator(ast.NodeVisitor):
 
 def validate_source(code: str) -> None:
     """Raise ``ScriptValidationError`` if ``code`` is unsafe or malformed."""
+    if len(code.encode("utf-8")) > MAX_SOURCE_BYTES:
+        raise ScriptValidationError(f"script is too large; maximum is {MAX_SOURCE_BYTES} bytes")
     try:
         tree = ast.parse(code)
     except SyntaxError as exc:

@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from app.services.sandbox import (
+    MAX_SOURCE_BYTES,
     SandboxedScript,
     ScriptValidationError,
     bwrap_available,
@@ -52,6 +53,13 @@ def test_validate_rejects_nested_step():
     # A step() nested inside another function passes ast.walk but is invisible at
     # runtime, so it must be rejected up front.
     code = "def outer():\n    def step(s, t, w, h):\n        return 0\n    return step"
+    with pytest.raises(ScriptValidationError):
+        validate_source(code)
+
+
+def test_validate_rejects_oversized_source():
+    # A multi-megabyte blob must be rejected before it is parsed into an AST.
+    code = "def step(s, t, w, h):\n    return 0\n" + ("# pad\n" * (MAX_SOURCE_BYTES // 6 + 1))
     with pytest.raises(ScriptValidationError):
         validate_source(code)
 
