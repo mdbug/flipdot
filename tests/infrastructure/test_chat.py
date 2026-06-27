@@ -224,6 +224,30 @@ def test_run_chat_full_loop_executes_tool(monkeypatch):
     assert any(m["role"] == "user" and isinstance(m["content"], list) for m in messages)
 
 
+def test_serialize_messages_converts_blocks_to_json():
+    import json as _json
+
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [
+                _FakeBlock("text", text="Showing it."),
+                _FakeBlock("tool_use", name="show_message", input={"text": "HI"}, id="t1"),
+            ],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1"}]},
+    ]
+    serialized = chat_backend.serialize_messages(messages)
+    # Round-trips through JSON without error and preserves structure.
+    _json.dumps(serialized)
+    assert serialized[0] == {"role": "user", "content": "hi"}
+    assert serialized[1]["content"][0] == {"type": "text", "text": "Showing it."}
+    assert serialized[1]["content"][1]["name"] == "show_message"
+    assert serialized[1]["content"][1]["input"] == {"text": "HI"}
+    assert serialized[2]["content"][0]["type"] == "tool_result"
+
+
 def test_run_chat_without_mcp_streams_error():
     async def collect():
         events = []

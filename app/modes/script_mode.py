@@ -82,6 +82,10 @@ class ScriptMode:
         """Return stored script names and the active one."""
         return {"scripts": self._store.list_names(), "active": self._name}
 
+    def get_code(self, name: str) -> str | None:
+        """Return the source code of the saved script ``name``, or None if absent."""
+        return self._store.load(name)
+
     def delete_script(self, name: str) -> bool:
         """Delete a stored script; return whether it existed."""
         return self._store.delete(name)

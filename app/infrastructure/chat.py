@@ -19,6 +19,9 @@ from typing import Any
 
 # Default model. Override with the ANTHROPIC_MODEL env var.
 DEFAULT_MODEL = "claude-opus-4-8"
+# Models the in-UI selector may choose. Both support the adaptive-thinking
+# request shape used below, so no per-model thinking handling is needed.
+ALLOWED_MODELS = ("claude-opus-4-8", "claude-sonnet-4-6")
 MAX_TOKENS = 8192
 
 SYSTEM_PROMPT = (
@@ -121,6 +124,43 @@ def _event(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False) + "\n"
 
 
+def _serialize_block(block: Any) -> Any:
+    """Convert one assistant content block into a JSON-serializable dict.
+
+    Real Anthropic SDK blocks are pydantic models with ``model_dump``; we fall
+    back to picking the known fields off plain objects so the conversation can be
+    written to disk and replayed unchanged (``thinking`` blocks keep their
+    ``signature``, which the API requires when replaying extended thinking).
+    """
+    if isinstance(block, dict):
+        return block
+    dump = getattr(block, "model_dump", None)
+    if callable(dump):
+        return dump(mode="json", exclude_none=True)
+    result: dict[str, Any] = {}
+    for field in ("type", "text", "thinking", "signature", "name", "input", "id"):
+        value = getattr(block, field, None)
+        if value is not None:
+            result[field] = value
+    return result
+
+
+def serialize_messages(messages: list[dict]) -> list[dict]:
+    """Return a JSON-serializable deep copy of the chat history for persistence.
+
+    User turns hold plain strings or already-dict tool-result blocks; assistant
+    turns hold raw SDK content blocks, which are converted via
+    :func:`_serialize_block`.
+    """
+    serialized: list[dict] = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            content = [_serialize_block(block) for block in content]
+        serialized.append({"role": message.get("role"), "content": content})
+    return serialized
+
+
 async def run_chat(
     mcp: Any, messages: list[dict], *, model: str | None = None
 ) -> AsyncIterator[str]:
@@ -140,6 +180,8 @@ async def run_chat(
         return
 
     model = model or os.getenv("ANTHROPIC_MODEL", DEFAULT_MODEL)
+    if model not in ALLOWED_MODELS:
+        model = DEFAULT_MODEL
     tools = await _mcp_tool_schemas(mcp)
 
     try:

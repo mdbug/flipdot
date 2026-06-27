@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import threading
 import time
@@ -19,6 +20,7 @@ from pydantic import BaseModel, Field
 from app.infrastructure import chat as chat_backend
 from app.infrastructure.mcp_server import build_flipdot_mcp
 from app.modes.contracts import Frame
+from app.services.chat_session_store import ChatSessionStore
 from app.services.settings_store import RuntimeSettingsStore
 
 
@@ -125,6 +127,11 @@ class SleepSettingsPayload(BaseModel):
 
 class ChatPayload(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
+    model: str | None = Field(default=None, max_length=64)
+
+
+class ChatRenamePayload(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
 
 
 class FontPreviewVariantPayload(BaseModel):
@@ -178,9 +185,13 @@ class WebServer:
 
         # Single shared conversation for the in-UI Claude chat (one physical
         # display = one conversation). Serialized with a lock so overlapping
-        # requests can't interleave turns into the shared history.
+        # requests can't interleave turns into the shared history. The active
+        # conversation is auto-saved to the ChatSessionStore after every turn;
+        # ``_chat_session_id`` is None until the first message opens a session.
         self._chat_messages: list[dict] = []
         self._chat_lock = asyncio.Lock()
+        self._chat_sessions = ChatSessionStore()
+        self._chat_session_id: str | None = None
 
         # Build the MCP server (if enabled) before the FastAPI app so its
         # streamable-HTTP session manager can be driven from the app lifespan.
@@ -258,6 +269,10 @@ class WebServer:
         @self._app.get("/chat")
         def chat_page() -> FileResponse:
             return FileResponse(static_dir / "chat.html")
+
+        @self._app.get("/scripts")
+        def scripts_page() -> FileResponse:
+            return FileResponse(static_dir / "scripts.html")
 
         @self._app.get("/favicon.ico")
         def favicon() -> JSONResponse:
@@ -624,6 +639,34 @@ class WebServer:
             )
             return JSONResponse({"status": "ok", **settings})
 
+        @self._app.get("/api/scripts")
+        def get_scripts() -> JSONResponse:
+            return JSONResponse(self._require_script_mode().list_scripts())
+
+        @self._app.get("/api/scripts/{name}/code")
+        def get_script_code(name: str) -> JSONResponse:
+            code = self._require_script_mode().get_code(name)
+            if code is None:
+                raise HTTPException(status_code=404, detail="script not found")
+            return JSONResponse({"name": name, "code": code})
+
+        @self._app.post("/api/scripts/{name}/play")
+        def post_script_play(name: str) -> JSONResponse:
+            try:
+                result = self._require_script_mode().load_script(name)
+            except (ValueError, RuntimeError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if self._mode_manager is not None:
+                self._mode_manager.set_mode("script")
+            return JSONResponse({"status": "ok", **result})
+
+        @self._app.delete("/api/scripts/{name}")
+        def delete_script_endpoint(name: str) -> JSONResponse:
+            deleted = self._require_script_mode().delete_script(name)
+            if not deleted:
+                raise HTTPException(status_code=404, detail="script not found")
+            return JSONResponse({"status": "ok", "deleted": True})
+
         @self._app.get("/api/ping")
         def ping() -> dict[str, str]:
             return {"status": "ok"}
@@ -642,16 +685,103 @@ class WebServer:
                 # Hold the lock for the whole turn so the shared history stays
                 # consistent if a second request arrives mid-stream.
                 async with self._chat_lock:
+                    new_session = self._chat_session_id is None
                     self._chat_messages.append({"role": "user", "content": message})
-                    async for event in chat_backend.run_chat(self._mcp, self._chat_messages):
+                    async for event in chat_backend.run_chat(
+                        self._mcp, self._chat_messages, model=payload.model
+                    ):
                         yield event
+
+                    # Only persist once the assistant has actually replied; a turn
+                    # that errored out (no key / MCP off) leaves just the bare user
+                    # message, which isn't worth a saved session.
+                    if len(self._chat_messages) <= 1:
+                        return
+                    if self._chat_session_id is None:
+                        record = self._chat_sessions.create(
+                            title=message, model=payload.model
+                        )
+                        self._chat_session_id = record["id"]
+                    summary = self._chat_sessions.save(
+                        self._chat_session_id,
+                        messages=chat_backend.serialize_messages(self._chat_messages),
+                        title=message if new_session else None,
+                        model=payload.model,
+                    )
+                    yield json.dumps(
+                        {"type": "session_saved", "session": summary},
+                        ensure_ascii=False,
+                    ) + "\n"
 
             return StreamingResponse(generate(), media_type="application/x-ndjson")
 
         @self._app.post("/api/chat/reset")
         async def post_chat_reset() -> dict[str, str]:
+            # Start a fresh conversation. The previous session stays on disk.
             async with self._chat_lock:
                 self._chat_messages.clear()
+                self._chat_session_id = None
+            return {"status": "ok"}
+
+        @self._app.get("/api/chat/sessions")
+        async def list_chat_sessions() -> dict[str, Any]:
+            return {
+                "active_id": self._chat_session_id,
+                "sessions": self._chat_sessions.list_summaries(),
+            }
+
+        @self._app.get("/api/chat/sessions/{session_id}")
+        async def get_chat_session(session_id: str) -> dict[str, Any]:
+            try:
+                session_id = self._chat_sessions.sanitize_id(session_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            record = self._chat_sessions.load(session_id)
+            if record is None:
+                raise HTTPException(status_code=404, detail="session not found")
+            return record
+
+        @self._app.post("/api/chat/sessions/{session_id}/resume")
+        async def resume_chat_session(session_id: str) -> dict[str, Any]:
+            try:
+                session_id = self._chat_sessions.sanitize_id(session_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            async with self._chat_lock:
+                record = self._chat_sessions.load(session_id)
+                if record is None:
+                    raise HTTPException(status_code=404, detail="session not found")
+                self._chat_messages.clear()
+                self._chat_messages.extend(record.get("messages") or [])
+                self._chat_session_id = session_id
+            return record
+
+        @self._app.patch("/api/chat/sessions/{session_id}")
+        async def rename_chat_session(
+            session_id: str, payload: ChatRenamePayload
+        ) -> dict[str, Any]:
+            try:
+                session_id = self._chat_sessions.sanitize_id(session_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            summary = self._chat_sessions.rename(session_id, payload.title)
+            if summary is None:
+                raise HTTPException(status_code=404, detail="session not found")
+            return summary
+
+        @self._app.delete("/api/chat/sessions/{session_id}")
+        async def delete_chat_session(session_id: str) -> dict[str, str]:
+            try:
+                session_id = self._chat_sessions.sanitize_id(session_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            async with self._chat_lock:
+                existed = self._chat_sessions.delete(session_id)
+                if not existed:
+                    raise HTTPException(status_code=404, detail="session not found")
+                if self._chat_session_id == session_id:
+                    self._chat_messages.clear()
+                    self._chat_session_id = None
             return {"status": "ok"}
 
         @self._app.websocket("/ws")
@@ -1446,3 +1576,8 @@ class WebServer:
         if self._font_preview is None:
             raise HTTPException(status_code=409, detail="font preview mode is not attached")
         return self._font_preview
+
+    def _require_script_mode(self) -> Any:
+        if self._script_mode is None:
+            raise HTTPException(status_code=409, detail="script mode is not attached")
+        return self._script_mode

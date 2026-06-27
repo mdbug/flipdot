@@ -9,9 +9,9 @@
     <script src="/static/vendor/purify.min.js" defer></script>
     <script src="/static/chat.js" defer></script>
   </head>
-  <body class="metrics-body">
+  <body class="metrics-body chat-body">
     <main class="chat-shell">
-      <header class="metrics-topbar">
+      <header class="metrics-topbar chat-topbar">
         <div>
           <p class="eyebrow">Assistant</p>
           <h1>Claude Chat</h1>
@@ -21,48 +21,79 @@
         </div>
         <nav class="metrics-nav" aria-label="Console pages">
           <a class="console-link" href="/">Live Console</a>
+          <a class="console-link" href="/scripts">Scripts</a>
           <a class="console-link" href="/font-grid">Font Grid</a>
           <a class="console-link" href="/controller-metrics">Controller Metrics</a>
         </nav>
       </header>
 
-      <section class="chat-card" aria-label="Claude chat">
-        <div class="section-head">
-          <p class="eyebrow">Conversation</p>
-          <button
-            id="chatReset"
-            type="button"
-            class="icon-button"
-            title="New conversation"
-            aria-label="New conversation"
-          >
-            <span aria-hidden="true">&#x270E;</span>
-          </button>
-        </div>
-        <div id="chatLog" class="chat-log" aria-live="polite">
-          <div id="chatEmpty" class="chat-empty">
-            <p class="chat-empty-title">What should the display show?</p>
-            <p class="chat-empty-sub">Claude drives the 28×28 flip-dot panel through its tools.</p>
-            <div class="chat-chips">
-              <button type="button" class="chat-chip">Write “HELLO” on the display</button>
-              <button type="button" class="chat-chip">Draw a smiley face</button>
-              <button type="button" class="chat-chip">What's on the panel right now?</button>
+      <div class="chat-workspace">
+        <aside id="chatSidebar" class="chat-sidebar" aria-label="Saved chats">
+          <div class="chat-sidebar-head">
+            <p class="eyebrow">Saved chats</p>
+            <button id="chatNew" type="button" class="chat-new" title="New chat">
+              <span aria-hidden="true">＋</span> New
+            </button>
+          </div>
+          <ul id="sessionList" class="session-list" aria-live="polite"></ul>
+          <p id="sessionEmpty" class="session-empty">No saved chats yet.</p>
+        </aside>
+
+        <section class="chat-card" aria-label="Claude chat">
+          <div class="chat-bar">
+            <button
+              id="chatSidebarToggle"
+              type="button"
+              class="icon-button chat-sidebar-toggle"
+              title="Saved chats"
+              aria-label="Toggle saved chats"
+              aria-expanded="false"
+            >
+              <span aria-hidden="true">&#9776;</span>
+            </button>
+            <p id="chatTitle" class="chat-bar-title">New conversation</p>
+          </div>
+          <div id="chatLog" class="chat-log" aria-live="polite">
+            <div id="chatEmpty" class="chat-empty">
+              <p class="chat-empty-title">What should the display show?</p>
+              <p class="chat-empty-sub">
+                Claude drives the 28×28 flip-dot panel through its tools.
+              </p>
+              <div class="chat-chips">
+                <button type="button" class="chat-chip">Write “HELLO” on the display</button>
+                <button type="button" class="chat-chip">Draw a smiley face</button>
+                <button type="button" class="chat-chip">What's on the panel right now?</button>
+              </div>
             </div>
           </div>
-        </div>
-        <p id="chatNote" class="system-note hidden"></p>
-        <form id="chatForm" class="chat-input-row" autocomplete="off">
-          <textarea
-            id="chatInput"
-            rows="4"
-            maxlength="2000"
-            placeholder="Tell the display what to do…"
-            autocomplete="off"
-          ></textarea>
-          <button id="chatStop" type="button" class="secondary hidden">Stop</button>
-          <button id="chatSend" type="submit" class="accent">Send</button>
-        </form>
-      </section>
+          <p id="chatNote" class="system-note hidden"></p>
+          <form id="chatForm" class="chat-composer" autocomplete="off">
+            <textarea
+              id="chatInput"
+              rows="1"
+              maxlength="2000"
+              placeholder="Tell the display what to do…"
+              autocomplete="off"
+            ></textarea>
+            <div class="chat-composer-toolbar">
+              <span id="chatCount" class="chat-count">0 / 2000</span>
+              <div class="chat-composer-actions">
+                <select id="chatModel" class="chat-model" aria-label="Model">
+                  <option value="claude-opus-4-8" selected>Claude Opus 4.8</option>
+                  <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+                </select>
+                <button id="chatStop" type="button" class="chat-stop hidden" title="Stop">
+                  <span aria-hidden="true">■</span>
+                </button>
+                <button id="chatSend" type="submit" class="chat-send" title="Send">
+                  <span aria-hidden="true">↑</span>
+                </button>
+              </div>
+            </div>
+          </form>
+        </section>
+      </div>
     </main>
+    <div id="chatSidebarScrim" class="chat-sidebar-scrim" hidden></div>
   </body>
 </html>

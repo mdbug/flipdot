@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Script Browser</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/scripts.js" defer></script>
+  </head>
+  <body class="metrics-body">
+    <main class="scripts-shell">
+      <header class="metrics-topbar">
+        <div>
+          <p class="eyebrow">Animations</p>
+          <h1>Script Browser</h1>
+          <p class="metrics-subtitle">Saved LLM-generated animation scripts.</p>
+        </div>
+        <nav class="metrics-nav" aria-label="Console pages">
+          <a class="console-link" href="/">Live Console</a>
+          <a class="console-link" href="/chat">Claude Chat</a>
+          <a class="console-link" href="/font-grid">Font Grid</a>
+          <a class="console-link" href="/controller-metrics">Controller Metrics</a>
+        </nav>
+      </header>
+
+      <div class="scripts-workspace">
+        <aside class="scripts-sidebar" aria-label="Saved scripts">
+          <div class="scripts-sidebar-head">
+            <p class="eyebrow">Scripts</p>
+            <button id="scriptsRefresh" type="button" class="icon-button" title="Refresh list" aria-label="Refresh">
+              &#8635;
+            </button>
+          </div>
+          <ul id="scriptList" class="script-list" aria-live="polite" aria-label="Script list"></ul>
+          <p id="scriptListEmpty" class="session-empty hidden">No scripts saved yet.</p>
+          <p id="scriptListError" class="scripts-status error hidden"></p>
+        </aside>
+
+        <section class="scripts-viewer" aria-label="Script viewer">
+          <div id="scriptsPlaceholder" class="scripts-placeholder">
+            <p class="scripts-placeholder-text">Select a script to view its source.</p>
+          </div>
+          <div id="scriptsDetail" class="scripts-detail hidden">
+            <div class="scripts-detail-head">
+              <p id="scriptsDetailName" class="scripts-detail-name"></p>
+              <span id="scriptsDetailStatus" class="status-pill muted">idle</span>
+            </div>
+            <div class="scripts-actions">
+              <button id="scriptsPlay" type="button" class="accent">Play</button>
+              <button id="scriptsDelete" type="button" class="secondary scripts-delete-btn">Delete</button>
+            </div>
+            <p id="scriptsActionStatus" class="scripts-status hidden"></p>
+            <pre id="scriptsCode" class="scripts-code"><code></code></pre>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>
