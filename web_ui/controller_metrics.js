@@ -454,7 +454,7 @@ function renderBatteryChart(metrics) {
   upsertChart("battery", chartEls.battery, "line", data, options);
 }
 
-/** Render RSSI and TX-power signal chart; hides the panel when no data. @param {Object} metrics */
+/** Render the RSSI signal chart; hides the panel when no data. @param {Object} metrics */
 function renderSignalChart(metrics) {
   const keys = controllerKeys(metrics);
   const datasets = [];
@@ -468,14 +468,7 @@ function renderSignalChart(metrics) {
         return value !== null ? point(sample.timestamp, value) : null;
       })
       .filter(Boolean);
-    const txPowerData = metrics.samples
-      .map((sample) => {
-        const status = sampleStatus(sample, key);
-        const value = status ? metricNumber(status.tx_power_dbm) : null;
-        return value !== null ? point(sample.timestamp, value) : null;
-      })
-      .filter(Boolean);
-    signalPointCount += rssiData.length + txPowerData.length;
+    signalPointCount += rssiData.length;
     datasets.push({
       label: `${controllerLabel(metrics, key, index)} RSSI`,
       data: rssiData,
@@ -483,17 +476,6 @@ function renderSignalChart(metrics) {
       backgroundColor: baseColor,
       borderWidth: 2,
       pointRadius: 2,
-      tension: 0.18,
-      spanGaps: false,
-    });
-    datasets.push({
-      label: `${controllerLabel(metrics, key, index)} TX power`,
-      data: txPowerData,
-      borderColor: baseColor,
-      backgroundColor: baseColor,
-      borderDash: [5, 4],
-      borderWidth: 2,
-      pointRadius: 1,
       tension: 0.18,
       spanGaps: false,
     });
@@ -509,8 +491,10 @@ function renderSignalChart(metrics) {
     return;
   }
   const options = baseOptions(metrics, {
+    // BLE RSSI is always negative and rarely above -30 dBm even at point-blank
+    // range; bound the axis to the usable band so the trace fills the chart.
     suggestedMin: -100,
-    suggestedMax: 10,
+    suggestedMax: -30,
     grid: { color: "#343841" },
     ticks: { color: "#a8adb7", callback: (value) => `${value} dBm` },
   });
@@ -749,7 +733,7 @@ function renderSummary(metrics) {
         <div><dt>Conn latency</dt><dd>${connLatency !== null ? connLatency : "--"}</dd></div>
         <div><dt>Supervision timeout</dt><dd>${supervisionTimeoutMs !== null ? `${supervisionTimeoutMs}ms` : "--"}</dd></div>
         <div><dt>RSSI</dt><dd>${Number.isFinite(rssi) ? `${rssi} dBm` : "--"}</dd></div>
-        <div><dt>TX power</dt><dd>${Number.isFinite(txPower) ? `${txPower} dBm` : "--"}</dd></div>
+        <div><dt>TX power</dt><dd>${Number.isFinite(txPower) && txPower !== 0 ? `${txPower} dBm` : "--"}</dd></div>
         <div><dt>Link quality</dt><dd>${Number.isFinite(linkQuality) ? linkQuality : "--"}</dd></div>
       </dl>
     `;
