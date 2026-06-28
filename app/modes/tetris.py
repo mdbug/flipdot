@@ -58,6 +58,19 @@ class Tetris(AutoDrum):
     AI's fixed input cadence, so even the attract mode dies in the end.
     """
 
+    # 5x5 "robot head" icon flagging a game the AI played (high score won't
+    # count).  1 = ink pixel; eyes are the interior gaps.
+    _AI_ICON = np.array(
+        [
+            [0, 0, 1, 0, 0],
+            [0, 1, 1, 1, 0],
+            [1, 1, 1, 1, 1],
+            [1, 0, 1, 0, 1],
+            [1, 1, 1, 1, 1],
+        ],
+        dtype=np.uint8,
+    )
+
     AI_TAKEOVER_DELAY = 15.0  # seconds of absence before AI takes over
     AI_HARD_DROP_DELAY = 0.9  # min visible time before AI may hard drop
     AI_HARD_DROP_MIN_ROW = 3  # avoid instant top-of-board hard drops
@@ -191,8 +204,13 @@ class Tetris(AutoDrum):
             "game_over": False,
             "game_over_time": None,
         }
-        # Latches true for the current round once AI takeover begins.
+        # Latches true for the current round once the AI actually locks a
+        # piece (see _player_lock).  A brief takeover the human recovers from
+        # before any AI piece lands does NOT taint the game.
         self._ai_played_this_game = False
+        # Whether the AI is in control *right now* (this frame).  Set in
+        # _handle_gestures, read in _player_lock to attribute locks.
+        self._ai_in_control = False
         self._ai_target = None  # (target_col, target_rot_idx)
         self._ai_piece_id = None  # piece_seq when _ai_target was computed
         self._last_person_time = time.time()  # startup grace before AI takeover
@@ -284,6 +302,10 @@ class Tetris(AutoDrum):
         p = self._player["piece"]
         if p is None:
             return
+        # Attribute this lock: if the AI is in control as a piece locks, the
+        # game no longer qualifies for the high score.
+        if self._ai_in_control:
+            self._ai_played_this_game = True
         game_over = False
         for dr, dc in p["cells"]:
             r, cc = p["row"] + dr, p["col"] + dc
@@ -612,6 +634,9 @@ class Tetris(AutoDrum):
             return
 
         # ---- Presence detection: route to AI if no person detected ----
+        # Default: a human is driving (or waiting); only the delay-expired
+        # branch below flips this on for the current frame.
+        self._ai_in_control = False
         person_present = (
             pose_results is not None and getattr(pose_results, "pose_landmarks", None) is not None
         )
@@ -630,7 +655,9 @@ class Tetris(AutoDrum):
                 or now - last_manual_input_time >= self.AI_TAKEOVER_DELAY
             )
             if delay_expired:
-                self._ai_played_this_game = True
+                # Taint is decided in _player_lock when an AI-controlled piece
+                # actually locks — not merely because the AI is steering now.
+                self._ai_in_control = True
                 self._handle_ai(now)
             return
 
@@ -656,6 +683,14 @@ class Tetris(AutoDrum):
             if target_col != p["col"] and now - self._last_move_time >= 0.15:
                 self._pending["move"] = 1 if target_col > p["col"] else -1
                 self._last_move_time = now
+
+    def _draw_ai_icon(self, target, x, y):
+        """OR the AI-played icon into ``target`` at top-left (x, y), clipped."""
+        h, w = self._AI_ICON.shape
+        th, tw = target.shape
+        if y < 0 or x < 0 or y + h > th or x + w > tw:
+            return
+        target[y : y + h, x : x + w] |= self._AI_ICON
 
     def get_frame(self, pose_results: Any) -> Frame:
         """Step the game (AI or gesture control), play the soundtrack, and render the board."""
@@ -726,6 +761,10 @@ class Tetris(AutoDrum):
                 x = px + dc
                 if 0 <= x < ui.shape[1]:
                     ui[11 + dr, x] = 1
+            # AI-played marker: the game won't count toward the high score.
+            # Lower band is otherwise empty (score ~rows 3-7, preview ~row 11).
+            if self._ai_played_this_game:
+                self._draw_ai_icon(ui, x=(7 - self._AI_ICON.shape[1]) // 2, y=21)
             frame[:, :7] ^= ui
 
             # Hundreds indicator in row 1 (0-indexed), spanning cols 0..7.
@@ -756,6 +795,10 @@ class Tetris(AutoDrum):
                 text.write_centered(frame, "OVER", y=9, size=5, style="regular")
                 score_str = str(self._player["lines"])
                 text.write_centered(frame, score_str, y=16, size=6, style="regular")
+                # Flag an AI-assisted score: icon at the left of the number.
+                # The HI line still shows the (unchanged) standing record.
+                if self._ai_played_this_game:
+                    self._draw_ai_icon(frame, x=0, y=17)
                 hi_str = "HI " + str(self._best)
                 text.write_centered(frame, hi_str, y=23, size=5, style="regular")
 
