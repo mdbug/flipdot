@@ -349,8 +349,8 @@ class Board:
             self._reset_empty()
 
     def _to_pixel(self, x, y):
-        px = int(max(0.0, min(1.0, float(x))) * (self.width - 1))
-        py = int(max(0.0, min(1.0, float(y))) * (self.height - 1))
+        px = min(self.width - 1, int(max(0.0, min(1.0, float(x))) * self.width))
+        py = min(self.height - 1, int(max(0.0, min(1.0, float(y))) * self.height))
         return px, py
 
     def _clip_pixel(self, x, y):

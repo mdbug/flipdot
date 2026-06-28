@@ -497,8 +497,8 @@ function setPreviewPixel(pixels, x, y, drawValue = 1, lineWidth = 1) {
 /** Convert a normalized [0,1] position to integer grid pixel coords. @param {{x:number,y:number}} pos @returns {{x:number,y:number}} */
 function pixelPointFromNorm(pos) {
   return {
-    x: Math.trunc(Math.max(0, Math.min(1, Number(pos.x))) * (GRID - 1)),
-    y: Math.trunc(Math.max(0, Math.min(1, Number(pos.y))) * (GRID - 1)),
+    x: Math.min(GRID - 1, Math.floor(Math.max(0, Math.min(1, Number(pos.x))) * GRID)),
+    y: Math.min(GRID - 1, Math.floor(Math.max(0, Math.min(1, Number(pos.y))) * GRID)),
   };
 }
 
@@ -604,26 +604,31 @@ function renderShapePreview(currentPos) {
   drawGrid(previewPixels);
 }
 
-/** Map a mouse/pointer event to a normalized [0,1] canvas position. @param {MouseEvent} event @returns {{x:number,y:number}} */
-function normPosFromEvent(event) {
+/**
+ * Map a client point to a normalized [0,1] position over the canvas content box.
+ * getBoundingClientRect() returns the border box, but the backing store (where dots
+ * are drawn) fills only the content box, so we inset by the border via clientLeft/Top
+ * and scale by clientWidth/Height to avoid a progressive offset toward the far edges.
+ * @param {number} clientX @param {number} clientY @returns {{x:number,y:number}}
+ */
+function normPosFromClient(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
-  const x = (event.clientX - rect.left) / rect.width;
-  const y = (event.clientY - rect.top) / rect.height;
+  const x = (clientX - rect.left - canvas.clientLeft) / canvas.clientWidth;
+  const y = (clientY - rect.top - canvas.clientTop) / canvas.clientHeight;
   return {
     x: Math.max(0, Math.min(1, x)),
     y: Math.max(0, Math.min(1, y)),
   };
 }
 
+/** Map a mouse/pointer event to a normalized [0,1] canvas position. @param {MouseEvent} event @returns {{x:number,y:number}} */
+function normPosFromEvent(event) {
+  return normPosFromClient(event.clientX, event.clientY);
+}
+
 /** Map a touch point to a normalized [0,1] canvas position. @param {Touch} touch @returns {{x:number,y:number}} */
 function normPosFromTouch(touch) {
-  const rect = canvas.getBoundingClientRect();
-  const x = (touch.clientX - rect.left) / rect.width;
-  const y = (touch.clientY - rect.top) / rect.height;
-  return {
-    x: Math.max(0, Math.min(1, x)),
-    y: Math.max(0, Math.min(1, y)),
-  };
+  return normPosFromClient(touch.clientX, touch.clientY);
 }
 
 /** POST JSON to a URL, returning the response or null on network error. @param {string} url @param {Object} payload @returns {Promise<Response|null>} */
@@ -679,7 +684,7 @@ function isBoardMode() {
 function toGridPixel(norm) {
   const value = Number(norm);
   const clamped = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
-  return Math.trunc(clamped * (GRID - 1));
+  return Math.min(GRID - 1, Math.floor(clamped * GRID));
 }
 
 /** Parse an integer, returning a fallback if invalid. @param {*} value @param {number} fallback @returns {number} */
