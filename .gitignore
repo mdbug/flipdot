@@ -176,6 +176,10 @@ cython_debug/
 # MediaPipe model files (large binaries, downloaded separately on each machine)
 models/
 
+# Runtime persistence (settings, saved boards/scripts, chat sessions) — machine-local,
+# excluded from deploy rsync; not version-controlled
+state/
+
 # JS dev tooling (Prettier/ESLint) — not part of the runtime
 web_ui/node_modules/
 
