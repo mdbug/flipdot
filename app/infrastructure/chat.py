@@ -190,7 +190,7 @@ async def run_chat(
                 model=model,
                 max_tokens=MAX_TOKENS,
                 system=SYSTEM_PROMPT,
-                thinking={"type": "adaptive"},
+                thinking={"type": "adaptive", "display": "summarized"},
                 tools=tools,
                 messages=messages,
             ) as stream:

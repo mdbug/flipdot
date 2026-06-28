@@ -3,7 +3,7 @@ import globals from "globals";
 
 export default [
   {
-    ignores: ["vendor/**", "node_modules/**", "eslint.config.js"],
+    ignores: ["vendor/**", "node_modules/**", "eslint.config.js", "tests/**"],
   },
   js.configs.recommended,
   {

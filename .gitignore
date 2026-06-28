@@ -178,3 +178,6 @@ models/
 
 # JS dev tooling (Prettier/ESLint) — not part of the runtime
 web_ui/node_modules/
+
+# VS Code
+.vscode/
