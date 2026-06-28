@@ -12,6 +12,7 @@ from app.modes.paint import Paint
 from app.modes.percussion import Percussion
 from app.modes.pong import Pong
 from app.modes.script_mode import ScriptMode
+from app.modes.tank import Tank
 from app.modes.tetris import Tetris
 from app.modes.worldcup import WorldCup
 
@@ -28,6 +29,7 @@ def create_mode_instances(width: int, height: int, mode_manager: ModeManager) ->
         "beatmirror": BeatMirror(width, height, mode_manager),
         "tetris": Tetris(width, height, mode_manager),
         "pong": Pong(width, height, mode_manager),
+        "tank": Tank(width, height, mode_manager),
         "worldcup": WorldCup(width, height, mode_manager),
         "board": Board(width, height, mode_manager),
         "font_preview": FontPreview(width, height, mode_manager),

@@ -23,6 +23,8 @@ class ControllerBridgeState:
     ab_fired: bool = False
     pong_target_y_right: float = 0.5
     pong_target_y_left: float = 0.5
+    tank_prev_right: set[str] = field(default_factory=set)
+    tank_prev_left: set[str] = field(default_factory=set)
 
 
 class ControllerInputBridge:
@@ -59,6 +61,7 @@ class ControllerInputBridge:
         tetris_game: Any,
         pong_game: Any,
         percussion: Any,
+        tank_game: Any = None,
         pressed_events: set[str] | None = None,
     ) -> None:
         """Apply one controller snapshot to the active mode for this frame."""
@@ -240,6 +243,58 @@ class ControllerInputBridge:
 
             if "A" in just_pressed:
                 pong_game.restart_if_game_over()
+        elif mode == ModeManager.MODE_TANK:
+            primary_connected = bool(
+                primary_snapshot
+                and primary_snapshot.get("enabled")
+                and primary_snapshot.get("connected")
+            )
+            secondary_connected = bool(
+                secondary_snapshot
+                and secondary_snapshot.get("enabled")
+                and secondary_snapshot.get("connected")
+            )
+            primary_pressed = (
+                set(primary_snapshot.get("pressed_buttons", []))
+                if primary_connected and primary_snapshot is not None
+                else set()
+            )
+            secondary_pressed = (
+                set(secondary_snapshot.get("pressed_buttons", []))
+                if secondary_connected and secondary_snapshot is not None
+                else set()
+            )
+
+            # Primary drives the right tank; secondary (when present) the left.
+            # With a single controller, fall back to the merged snapshot so a
+            # lone pad still steers the right tank against the AI.
+            sides: list[tuple[str, set[str], str]] = []
+            if primary_connected:
+                sides.append(("right", primary_pressed, "tank_prev_right"))
+            if secondary_connected:
+                sides.append(("left", secondary_pressed, "tank_prev_left"))
+            if not sides and connected:
+                sides.append(("right", pressed, "tank_prev_right"))
+
+            driven = {"left": False, "right": False}
+            for side, held, prev_attr in sides:
+                turning = (1 if "D-Right" in held else 0) - (1 if "D-Left" in held else 0)
+                thrusting = (1 if "D-Up" in held else 0) - (1 if "D-Down" in held else 0)
+                tank_game.set_controller_input(side, turning=turning, thrusting=thrusting)
+                prev = getattr(self._state, prev_attr)
+                if "A" in held and "A" not in prev:
+                    tank_game.fire(side, now)
+                setattr(self._state, prev_attr, set(held))
+                driven[side] = True
+
+            # Keep idle sides' edge state fresh so a later first press still fires.
+            if not driven["right"]:
+                self._state.tank_prev_right = set()
+            if not driven["left"]:
+                self._state.tank_prev_left = set()
+
+            if "A" in just_pressed:
+                tank_game.restart_if_game_over()
         elif mode == ModeManager.MODE_AUTODRUM:
             if "A" in just_pressed or dpad_trigger["D-Right"] or dpad_trigger["D-Left"]:
                 autodrum.next_song()

@@ -220,7 +220,7 @@ class Menu:
                     "TETRIS", 0, width, on_click=self._make_mode_setter(ModeManager.MODE_TETRIS)
                 ),
                 Button("PONG", 1, width, on_click=self._make_mode_setter(ModeManager.MODE_PONG)),
-                Button("PAINT", 2, width, on_click=self._make_mode_setter(ModeManager.MODE_PAINT)),
+                Button("TANK", 2, width, on_click=self._make_mode_setter(ModeManager.MODE_TANK)),
             ],
             [
                 Button("BOARD", 0, width, on_click=self._make_mode_setter(ModeManager.MODE_BOARD)),

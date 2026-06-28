@@ -168,6 +168,7 @@ def main() -> None:
     beatmirror = mode_instances["beatmirror"]
     tetris_game = mode_instances["tetris"]
     pong_game = mode_instances["pong"]
+    tank_game = mode_instances["tank"]
     worldcup = mode_instances["worldcup"]
     board = mode_instances["board"]
     font_preview = mode_instances["font_preview"]
@@ -183,6 +184,7 @@ def main() -> None:
         beatmirror=beatmirror,
         tetris_game=tetris_game,
         pong_game=pong_game,
+        tank_game=tank_game,
         worldcup=worldcup,
         board=board,
         font_preview=font_preview,
@@ -275,6 +277,7 @@ def main() -> None:
                 font_preview=font_preview,
                 tetris_game=tetris_game,
                 pong_game=pong_game,
+                tank_game=tank_game,
                 percussion=percussion,
                 pressed_events=controller_pressed_events,
             )

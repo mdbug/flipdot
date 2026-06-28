@@ -21,6 +21,7 @@ def build_mode_registry(
     beatmirror: Any,
     tetris_game: Any,
     pong_game: Any,
+    tank_game: Any,
     worldcup: Any,
     board: Any,
     font_preview: Any,
@@ -74,6 +75,7 @@ def build_mode_registry(
     registry.register(ModeManager.MODE_BEATMIRROR, lambda c: beatmirror.get_frame(c.pose_results))
     registry.register(ModeManager.MODE_TETRIS, lambda c: tetris_game.get_frame(c.pose_results))
     registry.register(ModeManager.MODE_PONG, lambda c: pong_game.get_frame(c.pose_results))
+    registry.register(ModeManager.MODE_TANK, lambda c: tank_game.get_frame(c.pose_results))
     registry.register(ModeManager.MODE_WORLDCUP, lambda c: worldcup.get_frame(c.pose_results))
     registry.register(
         ModeManager.MODE_BOARD, lambda c: board.get_frame(c.pose_results, input_hub=c.input_hub)

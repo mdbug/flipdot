@@ -21,6 +21,7 @@ class ModeManager:
     MODE_BEATMIRROR = "beatmirror"
     MODE_TETRIS = "tetris"
     MODE_PONG = "pong"
+    MODE_TANK = "tank"
     MODE_WORLDCUP = "worldcup"
     MODE_BOARD = "board"
     MODE_FONT_PREVIEW = "font_preview"
@@ -38,6 +39,7 @@ class ModeManager:
         MODE_BEATMIRROR: 30,
         MODE_TETRIS: 30,
         MODE_PONG: 30,
+        MODE_TANK: 30,
         MODE_WORLDCUP: 30,
         MODE_BOARD: 30,
         MODE_FONT_PREVIEW: 30,
