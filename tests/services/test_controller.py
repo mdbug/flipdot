@@ -406,3 +406,57 @@ def test_bluetooth_reconnect_attempt_is_throttled(monkeypatch):
     ]
     assert calls[0][1]["timeout"] == 2.0
     assert calls[0][1]["check"] is False
+
+
+class _ConnInfoResult:
+    def __init__(self, returncode: int, stdout: str) -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = ""
+
+
+def test_btmgmt_link_metrics_falls_back_to_le_address_type(monkeypatch):
+    hub = ControllerHub(evdev_module=FakeEvdev({}), auto_start=False)
+    calls = []
+    kwargs_seen = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        kwargs_seen.append(kwargs)
+        if "-t" not in args:
+            # BR/EDR query fails for a peripheral connected over BLE.
+            return _ConnInfoResult(
+                1, "Get Conn Info ... (BR/EDR) failed. status 0x02 (Not Connected)"
+            )
+        return _ConnInfoResult(
+            0,
+            "Connection Information for AA:BB:CC:DD:EE:02 (LE Public)\n"
+            "\tRSSI -91\tTX power 0\tmaximum TX power 0\n",
+        )
+
+    monkeypatch.setattr("app.services.controller.subprocess.run", fake_run)
+
+    metrics = hub._read_btmgmt_link_metrics("AA:BB:CC:DD:EE:02")
+
+    assert metrics["rssi_dbm"] == -91
+    assert metrics["tx_power_dbm"] == 0
+    assert metrics["signal_source"] == "btmgmt"
+    # Tried BR/EDR first, then the LE-public address type.
+    assert calls[0] == ["btmgmt", "conn-info", "AA:BB:CC:DD:EE:02"]
+    assert calls[1] == ["btmgmt", "conn-info", "-t", "1", "AA:BB:CC:DD:EE:02"]
+    # An empty stdin pipe is required or btmgmt prints nothing under systemd.
+    assert all(kw.get("input") == "" for kw in kwargs_seen)
+
+
+def test_btmgmt_link_metrics_returns_none_when_all_address_types_fail(monkeypatch):
+    hub = ControllerHub(evdev_module=FakeEvdev({}), auto_start=False)
+
+    monkeypatch.setattr(
+        "app.services.controller.subprocess.run",
+        lambda *a, **k: _ConnInfoResult(1, "failed. status 0x02 (Not Connected)"),
+    )
+
+    metrics = hub._read_btmgmt_link_metrics("AA:BB:CC:DD:EE:01")
+
+    assert metrics["rssi_dbm"] is None
+    assert metrics["signal_source"] == "btmgmt"

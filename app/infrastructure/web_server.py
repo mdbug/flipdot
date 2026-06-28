@@ -17,7 +17,7 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -101,7 +101,8 @@ def _compute_asset_version(static_dir: Path) -> str:
     h = hashlib.sha1()
     skip_dirs = {"node_modules", ".mypy_cache", "tests"}
     paths = [
-        p for p in static_dir.rglob("*")
+        p
+        for p in static_dir.rglob("*")
         if p.suffix in {".js", ".css", ".html"}
         and not any(part in skip_dirs for part in p.relative_to(static_dir).parts)
     ]
@@ -111,13 +112,11 @@ def _compute_asset_version(static_dir: Path) -> str:
     return h.hexdigest()[:12]
 
 
-_ASSET_RE = re.compile(
-    r'((?:href|src)="/static/[^"]+\.(?:js|css))(\?[^"]*)?(")'
-)
+_ASSET_RE = re.compile(r'((?:href|src)="/static/[^"]+\.(?:js|css))(\?[^"]*)?(")')
 
 
 def _inject_version(html: str, version: str) -> str:
-    return _ASSET_RE.sub(lambda m: f'{m.group(1)}?v={version}{m.group(3)}', html)
+    return _ASSET_RE.sub(lambda m: f"{m.group(1)}?v={version}{m.group(3)}", html)
 
 
 class _VersionedStaticFiles(StaticFiles):

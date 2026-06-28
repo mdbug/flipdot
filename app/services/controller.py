@@ -29,8 +29,10 @@ _BLUETOOTHCTL_TX_POWER_RE = re.compile(
     r"TxPower:\s*(?:0x[0-9a-fA-F]+\s*\()?(-?\d+)\)?", re.IGNORECASE
 )
 _BLUETOOTHCTL_LINK_QUALITY_RE = re.compile(r"Link Quality:\s*(\d+)", re.IGNORECASE)
-_BTMGMT_RSSI_RE = re.compile(r"RSSI\s*:\s*(-?\d+)", re.IGNORECASE)
-_BTMGMT_TX_POWER_RE = re.compile(r"TX\s*Power\s*:\s*(-?\d+)", re.IGNORECASE)
+# btmgmt conn-info prints "RSSI -91" / "TX power 0" without colons; keep the colon
+# optional so both colon- and space-separated bluez versions parse.
+_BTMGMT_RSSI_RE = re.compile(r"RSSI\s*:?\s*(-?\d+)", re.IGNORECASE)
+_BTMGMT_TX_POWER_RE = re.compile(r"TX\s*Power\s*:?\s*(-?\d+)", re.IGNORECASE)
 _BTMGMT_LINK_QUALITY_RE = re.compile(r"Link\s*quality\s*:\s*(\d+)", re.IGNORECASE)
 _BTMGMT_CONN_INTERVAL_MS_RE = re.compile(
     r"Connection\s*interval\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*msec", re.IGNORECASE
@@ -39,6 +41,10 @@ _BTMGMT_CONN_LATENCY_RE = re.compile(r"(?:Peripheral\s*)?latency\s*:\s*(\d+)", r
 _BTMGMT_SUPERVISION_TIMEOUT_MS_RE = re.compile(
     r"Supervision\s*timeout\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*msec", re.IGNORECASE
 )
+# btmgmt conn-info defaults to BR/EDR; BLE peripherals (most controllers/keyboards
+# here connect over BLE) need an explicit address type or the query fails with
+# "Not Connected". Try BR/EDR first, then LE public/random.
+_BTMGMT_ADDRESS_TYPE_ARGS: tuple[tuple[str, ...], ...] = ((), ("-t", "1"), ("-t", "2"))
 _BLUETOOTHCTL_CONN_INTERVAL_MS_RE = re.compile(
     r"Connection\s*interval\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*msec", re.IGNORECASE
 )
@@ -813,50 +819,22 @@ class ControllerHub:
         return metrics
 
     def _read_btmgmt_link_metrics(self, address: str) -> dict[str, int | str | None]:
+        none_metrics: dict[str, int | str | None] = {
+            "rssi_dbm": None,
+            "tx_power_dbm": None,
+            "link_quality": None,
+            "signal_source": "btmgmt",
+            "connection_interval_ms": None,
+            "connection_latency": None,
+            "supervision_timeout_ms": None,
+            "connection_params_source": "btmgmt",
+        }
         if not address:
-            return {
-                "rssi_dbm": None,
-                "tx_power_dbm": None,
-                "link_quality": None,
-                "signal_source": "btmgmt",
-                "connection_interval_ms": None,
-                "connection_latency": None,
-                "supervision_timeout_ms": None,
-                "connection_params_source": "btmgmt",
-            }
-        try:
-            result = subprocess.run(
-                ["btmgmt", "conn-info", address],
-                capture_output=True,
-                text=True,
-                timeout=1.5,
-                check=False,
-            )
-        except Exception:
-            return {
-                "rssi_dbm": None,
-                "tx_power_dbm": None,
-                "link_quality": None,
-                "signal_source": "btmgmt",
-                "connection_interval_ms": None,
-                "connection_latency": None,
-                "supervision_timeout_ms": None,
-                "connection_params_source": "btmgmt",
-            }
+            return none_metrics
 
-        if result.returncode != 0:
-            return {
-                "rssi_dbm": None,
-                "tx_power_dbm": None,
-                "link_quality": None,
-                "signal_source": "btmgmt",
-                "connection_interval_ms": None,
-                "connection_latency": None,
-                "supervision_timeout_ms": None,
-                "connection_params_source": "btmgmt",
-            }
-
-        output = result.stdout or ""
+        output = self._run_btmgmt_conn_info(address)
+        if output is None:
+            return none_metrics
 
         def parse_int(regex: re.Pattern[str]) -> int | None:
             match = regex.search(output)
@@ -879,6 +857,32 @@ class ControllerHub:
             ),
             "connection_params_source": "btmgmt",
         }
+
+    def _run_btmgmt_conn_info(self, address: str) -> str | None:
+        """Return ``btmgmt conn-info`` stdout, trying BR/EDR then LE address types.
+
+        btmgmt queries BR/EDR by default; BLE peripherals require an explicit
+        ``-t 1``/``-t 2`` or the command fails with "Not Connected". Return the
+        output for the first address type that yields a successful read.
+        """
+        for type_args in _BTMGMT_ADDRESS_TYPE_ARGS:
+            try:
+                result = subprocess.run(
+                    ["btmgmt", "conn-info", *type_args, address],
+                    capture_output=True,
+                    text=True,
+                    # btmgmt emits no output when its stdin is /dev/null (the systemd
+                    # default, StandardInput=null). Hand it an empty stdin pipe so it
+                    # runs the command and prints the result instead of nothing.
+                    input="",
+                    timeout=1.5,
+                    check=False,
+                )
+            except Exception:
+                return None
+            if result.returncode == 0 and "Connection Information" in (result.stdout or ""):
+                return result.stdout
+        return None
 
     @staticmethod
     def _link_metrics_available(metrics: dict[str, Any]) -> bool:

@@ -6,6 +6,12 @@ After=network.target
 Type=simple
 User=flipdot
 Group=flipdot
+# Read controller link metrics (RSSI/TX power/conn params) from the kernel HCI
+# management socket via `btmgmt conn-info`, which requires CAP_NET_ADMIN. Without
+# it the call returns "Permission Denied" and the metrics show up blank.
+AmbientCapabilities=CAP_NET_ADMIN
+# Read kernel-log disconnect reason codes via `journalctl -k` (group access).
+SupplementaryGroups=systemd-journal
 WorkingDirectory=/home/flipdot/flipdot
 ExecStart=/usr/bin/python3 /home/flipdot/flipdot/flipdot.py
 Restart=always
