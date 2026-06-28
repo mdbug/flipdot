@@ -410,6 +410,19 @@ def build_flipdot_mcp(
         return _require_script_mode().list_scripts()
 
     @mcp.tool()
+    def get_script(name: str) -> dict:
+        """Return the source code of a saved animation script by name.
+
+        Use this to read an existing script before editing it: fetch the code,
+        modify it, then run_script the new version under the same name to
+        overwrite the saved copy.
+        """
+        code = _require_script_mode().get_code(name)
+        if code is None:
+            raise ValueError(f"script '{name}' not found")
+        return {"name": name, "code": code}
+
+    @mcp.tool()
     def save_script(name: str) -> dict:
         """Save the running animation under a name ([A-Za-z0-9_-], up to 64)."""
         saved = _require_script_mode().save_script(name)

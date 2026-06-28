@@ -7,24 +7,20 @@
     <link rel="stylesheet" href="/static/styles.css" />
     <script src="/static/scripts.js" defer></script>
   </head>
-  <body class="metrics-body">
+  <body class="metrics-body scripts-body">
     <main class="scripts-shell">
-      <header class="metrics-topbar">
-        <div>
-          <p class="eyebrow">Animations</p>
-          <h1>Script Browser</h1>
-          <p class="metrics-subtitle">Saved LLM-generated animation scripts.</p>
-        </div>
-        <nav class="metrics-nav" aria-label="Console pages">
-          <a class="console-link" href="/">Live Console</a>
-          <a class="console-link" href="/chat">Claude Chat</a>
+      <header class="page-topbar">
+        <nav class="topbar-nav" aria-label="Console pages">
+          <a class="console-link" href="/">Console</a>
+          <a class="console-link" href="/chat">Chat</a>
+          <a class="console-link active" href="/scripts">Scripts</a>
           <a class="console-link" href="/font-grid">Font Grid</a>
-          <a class="console-link" href="/controller-metrics">Controller Metrics</a>
+          <a class="console-link" href="/controller-metrics">Metrics</a>
         </nav>
       </header>
 
       <div class="scripts-workspace">
-        <aside class="scripts-sidebar" aria-label="Saved scripts">
+        <aside id="scriptsSidebar" class="scripts-sidebar" aria-label="Script list">
           <div class="scripts-sidebar-head">
             <p class="eyebrow">Scripts</p>
             <button id="scriptsRefresh" type="button" class="icon-button" title="Refresh list" aria-label="Refresh">
@@ -37,6 +33,19 @@
         </aside>
 
         <section class="scripts-viewer" aria-label="Script viewer">
+          <div class="scripts-bar">
+            <button
+              id="scriptsSidebarToggle"
+              type="button"
+              class="icon-button scripts-sidebar-toggle"
+              title="Scripts list"
+              aria-label="Toggle scripts list"
+              aria-expanded="false"
+            >
+              <span aria-hidden="true">&#9776;</span>
+            </button>
+            <p id="scriptsBarTitle" class="scripts-bar-title">Script browser</p>
+          </div>
           <div id="scriptsPlaceholder" class="scripts-placeholder">
             <p class="scripts-placeholder-text">Select a script to view its source.</p>
           </div>
@@ -55,5 +64,6 @@
         </section>
       </div>
     </main>
+    <div id="scriptsSidebarScrim" class="scripts-sidebar-scrim" hidden></div>
   </body>
 </html>

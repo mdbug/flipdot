@@ -10,6 +10,10 @@ const scriptsCodeEl = document.getElementById("scriptsCode").querySelector("code
 const scriptsPlay = document.getElementById("scriptsPlay");
 const scriptsDelete = document.getElementById("scriptsDelete");
 const scriptsActionStatus = document.getElementById("scriptsActionStatus");
+const scriptsSidebar = document.getElementById("scriptsSidebar");
+const scriptsSidebarToggle = document.getElementById("scriptsSidebarToggle");
+const scriptsSidebarScrim = document.getElementById("scriptsSidebarScrim");
+const scriptsBarTitle = document.getElementById("scriptsBarTitle");
 
 let scripts = [];
 let selectedName = null;
@@ -73,7 +77,8 @@ async function selectScript(name) {
 
   scriptsPlaceholder.classList.add("hidden");
   scriptsDetail.classList.remove("hidden");
-  scriptsDetailName.textContent = name;
+  if (scriptsBarTitle) scriptsBarTitle.textContent = name;
+  closeSidebar();
   updateDetailStatus();
   scriptsCodeEl.textContent = "Loading…";
   setActionStatus("", false);
@@ -143,6 +148,7 @@ scriptsDelete.addEventListener("click", async () => {
     if (activeName === nameToDelete) activeName = "";
     scriptsDetail.classList.add("hidden");
     scriptsPlaceholder.classList.remove("hidden");
+    if (scriptsBarTitle) scriptsBarTitle.textContent = "Script browser";
     await loadList();
   } catch (err) {
     setActionStatus(`Error: ${err.message}`, true);
@@ -152,5 +158,28 @@ scriptsDelete.addEventListener("click", async () => {
 });
 
 scriptsRefresh.addEventListener("click", loadList);
+
+// ── Sidebar drawer (mobile) ───────────────────────────────────────────────────
+
+function openSidebar() {
+  scriptsSidebar.classList.add("open");
+  scriptsSidebarScrim.hidden = false;
+  if (scriptsSidebarToggle) scriptsSidebarToggle.setAttribute("aria-expanded", "true");
+}
+
+function closeSidebar() {
+  scriptsSidebar.classList.remove("open");
+  scriptsSidebarScrim.hidden = true;
+  if (scriptsSidebarToggle) scriptsSidebarToggle.setAttribute("aria-expanded", "false");
+}
+
+if (scriptsSidebarToggle) {
+  scriptsSidebarToggle.addEventListener("click", () => {
+    if (scriptsSidebar.classList.contains("open")) closeSidebar();
+    else openSidebar();
+  });
+}
+
+if (scriptsSidebarScrim) scriptsSidebarScrim.addEventListener("click", closeSidebar);
 
 loadList();

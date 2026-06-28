@@ -1975,7 +1975,7 @@ if (fontPreviewSpacing) {
 
 canvas.addEventListener("pointermove", (event) => {
   const pos = normPosFromEvent(event);
-  sourceText.textContent = "Source: web";
+  sourceText.textContent = "⊳ web";
 
   if (isBoardMode() && boardDrawToggle.checked && boardStrokeActive) {
     if (boardTool.value === "freehand") {
@@ -1997,7 +1997,7 @@ canvas.addEventListener("pointermove", (event) => {
 
 canvas.addEventListener("pointerdown", async (event) => {
   const pos = normPosFromEvent(event);
-  sourceText.textContent = "Source: web";
+  sourceText.textContent = "⊳ web";
 
   if (isBoardMode() && activeBoardTool === "text") {
     await placeTextAt(pos);
@@ -2085,7 +2085,7 @@ canvas.addEventListener(
     if (!HAS_POINTER_EVENTS && event.touches.length > 0) {
       const pos = normPosFromTouch(event.touches[0]);
       lastTouchPos = pos;
-      sourceText.textContent = "Source: web";
+      sourceText.textContent = "⊳ web";
       if (isBoardMode() && boardDrawToggle.checked) {
         boardStrokeActive = true;
         boardLastPoint = pos;
@@ -2115,7 +2115,7 @@ canvas.addEventListener(
     if (!HAS_POINTER_EVENTS && event.touches.length > 0) {
       const pos = normPosFromTouch(event.touches[0]);
       lastTouchPos = pos;
-      sourceText.textContent = "Source: web";
+      sourceText.textContent = "⊳ web";
       if (isBoardMode() && boardDrawToggle.checked && boardStrokeActive) {
         if (boardTool.value === "freehand") {
           sendBoardStroke([boardLastPoint || pos, pos]);
@@ -2188,7 +2188,8 @@ function startWebSocket() {
   const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
 
   ws.onopen = () => {
-    statusText.textContent = "Connected";
+    statusText.textContent = "⬤ On";
+    statusText.className = "status-pill ok";
     if (pollingTimer !== null) {
       window.clearInterval(pollingTimer);
       pollingTimer = null;
@@ -2217,7 +2218,8 @@ function startWebSocket() {
   };
 
   ws.onclose = () => {
-    statusText.textContent = "WebSocket unavailable, using HTTP fallback";
+    statusText.textContent = "◎ HTTP";
+    statusText.className = "status-pill warn";
     if (pollingTimer === null) {
       pollingTimer = window.setInterval(async () => {
         try {

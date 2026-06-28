@@ -42,46 +42,6 @@ body {
   overflow: hidden;
 }
 
-.page-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.eyebrow {
-  margin: 0;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--muted);
-  font-weight: 700;
-}
-
-h1 {
-  margin: 0.2rem 0;
-  font-size: clamp(1.5rem, 3vw, 2.6rem);
-}
-
-.subhead {
-  margin: 0;
-  color: var(--dim);
-}
-
-.back-link {
-  text-decoration: none;
-  color: #f7fffb;
-  background: var(--teal-dark);
-  padding: 0.55rem 0.85rem;
-  border-radius: 999px;
-  border: 1px solid var(--line-strong);
-  font-weight: 700;
-}
-
-.back-link:hover {
-  background: var(--teal);
-  color: var(--ink);
-}
 
 .controls {
   display: flex;

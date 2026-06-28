@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -15,7 +17,7 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -93,6 +95,36 @@ def _bearer_guard(app: Any, token: str) -> Any:
         await app(scope, receive, send)
 
     return guarded
+
+
+def _compute_asset_version(static_dir: Path) -> str:
+    h = hashlib.sha1()
+    skip_dirs = {"node_modules", ".mypy_cache", "tests"}
+    paths = [
+        p for p in static_dir.rglob("*")
+        if p.suffix in {".js", ".css", ".html"}
+        and not any(part in skip_dirs for part in p.relative_to(static_dir).parts)
+    ]
+    for p in sorted(paths):
+        h.update(p.relative_to(static_dir).as_posix().encode())
+        h.update(p.read_bytes())
+    return h.hexdigest()[:12]
+
+
+_ASSET_RE = re.compile(
+    r'((?:href|src)="/static/[^"]+\.(?:js|css))(\?[^"]*)?(")'
+)
+
+
+def _inject_version(html: str, version: str) -> str:
+    return _ASSET_RE.sub(lambda m: f'{m.group(1)}?v={version}{m.group(3)}', html)
+
+
+class _VersionedStaticFiles(StaticFiles):
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
 
 
 class PointerEventPayload(BaseModel):
@@ -343,27 +375,42 @@ class WebServer:
 
     def _wire_routes(self) -> None:
         static_dir = Path(__file__).resolve().parents[2] / "web_ui"
-        self._app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+        asset_version = _compute_asset_version(static_dir)
+        logger.info("Web UI asset version: %s", asset_version)
+
+        _html_pages: dict[str, bytes] = {
+            name: _inject_version(
+                (static_dir / f"{name}.html").read_text(encoding="utf-8"), asset_version
+            ).encode("utf-8")
+            for name in ("index", "font_grid", "controller_metrics", "chat", "scripts")
+        }
+        _HTML_HEADERS = {"Cache-Control": "no-cache"}
+
+        self._app.mount(
+            "/static",
+            _VersionedStaticFiles(directory=str(static_dir)),
+            name="static",
+        )
 
         @self._app.get("/")
-        def ui_root() -> FileResponse:
-            return FileResponse(static_dir / "index.html")
+        def ui_root() -> HTMLResponse:
+            return HTMLResponse(_html_pages["index"], headers=_HTML_HEADERS)
 
         @self._app.get("/font-grid")
-        def font_grid_page() -> FileResponse:
-            return FileResponse(static_dir / "font_grid.html")
+        def font_grid_page() -> HTMLResponse:
+            return HTMLResponse(_html_pages["font_grid"], headers=_HTML_HEADERS)
 
         @self._app.get("/controller-metrics")
-        def controller_metrics_page() -> FileResponse:
-            return FileResponse(static_dir / "controller_metrics.html")
+        def controller_metrics_page() -> HTMLResponse:
+            return HTMLResponse(_html_pages["controller_metrics"], headers=_HTML_HEADERS)
 
         @self._app.get("/chat")
-        def chat_page() -> FileResponse:
-            return FileResponse(static_dir / "chat.html")
+        def chat_page() -> HTMLResponse:
+            return HTMLResponse(_html_pages["chat"], headers=_HTML_HEADERS)
 
         @self._app.get("/scripts")
-        def scripts_page() -> FileResponse:
-            return FileResponse(static_dir / "scripts.html")
+        def scripts_page() -> HTMLResponse:
+            return HTMLResponse(_html_pages["scripts"], headers=_HTML_HEADERS)
 
         @self._app.get("/favicon.ico")
         def favicon() -> JSONResponse:

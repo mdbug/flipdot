@@ -13,19 +13,17 @@
   <body>
     <main class="app-shell">
       <section class="display-deck" aria-label="Flipdot display console">
-        <header class="topbar">
-          <div>
-            <p class="eyebrow">Live panel</p>
-            <p class="console-links">
-              <a class="console-link" href="/chat">Claude Chat</a>
-              <a class="console-link" href="/scripts">Scripts</a>
-              <a class="console-link" href="/font-grid">Open Font Grid</a>
-              <a class="console-link" href="/controller-metrics">Controller Metrics</a>
-            </p>
-          </div>
+        <header class="page-topbar">
+          <nav class="topbar-nav" aria-label="Console pages">
+            <a class="console-link active" href="/">Console</a>
+            <a class="console-link" href="/chat">Chat</a>
+            <a class="console-link" href="/scripts">Scripts</a>
+            <a class="console-link" href="/font-grid">Font Grid</a>
+            <a class="console-link" href="/controller-metrics">Metrics</a>
+          </nav>
           <div class="connection-strip" aria-live="polite">
             <span id="statusText" class="status-pill">Connecting...</span>
-            <span id="sourceText" class="status-pill muted">Source: none</span>
+            <span id="sourceText" class="status-pill muted">⊳ none</span>
             <span
               id="controllerStatuses"
               class="controller-statuses"

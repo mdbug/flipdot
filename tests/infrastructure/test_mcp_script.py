@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -80,6 +81,23 @@ def test_run_script_rejects_unsafe_code(tmp_path):
         asyncio.run(
             mcp.call_tool("run_script", {"code": "import os\ndef step(s,t,w,h):\n    return 0"})
         )
+
+
+def test_get_script_returns_saved_source(tmp_path):
+    script_mode = _script_mode(tmp_path)
+    script_mode._store.save("life", GAME_OF_LIFE)
+    mcp = _build(DummyModeManager(), script_mode)
+    result = asyncio.run(mcp.call_tool("get_script", {"name": "life"}))
+    payload = json.loads(result[0].text)
+    assert payload["code"] == GAME_OF_LIFE
+    assert payload["name"] == "life"
+
+
+def test_get_script_missing_raises(tmp_path):
+    script_mode = _script_mode(tmp_path)
+    mcp = _build(DummyModeManager(), script_mode)
+    with pytest.raises(Exception):  # noqa: B017
+        asyncio.run(mcp.call_tool("get_script", {"name": "nope"}))
 
 
 @requires_bwrap
