@@ -360,6 +360,40 @@ def bwrap_available() -> bool:
     return shutil.which("bwrap") is not None
 
 
+# The deployed systemd unit grants the host process an *ambient* capability
+# (``CAP_NET_ADMIN``, so the controller code can read link RSSI via ``btmgmt``).
+# Ambient capabilities are inherited into the effective+permitted sets of every
+# child across ``execve``. ``bwrap`` is not installed setuid here (or on most
+# modern distros) and deliberately refuses to run when it starts holding
+# capabilities without being setuid ("Unexpected capabilities but not setuid,
+# old file caps config?"), exiting before the worker can report readiness — so
+# *every* script fails with "worker died during startup". We clear the ambient
+# set in the child between fork and exec so ``bwrap`` launches unprivileged,
+# while the parent keeps CAP_NET_ADMIN for ``btmgmt``. Clearing the ambient set
+# alone suffices: with no file caps on ``bwrap``, an empty ambient set leaves
+# its permitted and effective sets empty too.
+try:
+    import ctypes
+
+    _LIBC: ctypes.CDLL | None = ctypes.CDLL("libc.so.6", use_errno=True)
+except OSError:  # pragma: no cover - non-glibc / non-Linux host
+    _LIBC = None
+
+_PR_CAP_AMBIENT = 47
+_PR_CAP_AMBIENT_CLEAR_ALL = 4
+
+
+def _drop_ambient_caps() -> None:  # pragma: no cover - runs in the forked child
+    """Clear inherited ambient capabilities before ``bwrap`` is exec'd.
+
+    Runs as a ``subprocess`` ``preexec_fn`` (in the forked child, pre-exec).
+    Kept allocation-free and best-effort: on hosts without ambient caps the
+    call is a harmless no-op, and dropping capabilities never requires privilege.
+    """
+    if _LIBC is not None:
+        _LIBC.prctl(_PR_CAP_AMBIENT, _PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0)
+
+
 def _sandbox_argv(bootstrap: str) -> list[str]:
     """Build the ``bwrap``-wrapped command that runs the worker in isolation.
 
@@ -467,6 +501,9 @@ class SandboxedScript:
             self._proc = subprocess.Popen(
                 argv,
                 pass_fds=(child_fd,),
+                # Drop inherited ambient capabilities so bwrap (not setuid here)
+                # does not abort on startup. See _drop_ambient_caps.
+                preexec_fn=_drop_ambient_caps,
             )
         finally:
             child_sock.close()  # the parent keeps only its own end of the pair

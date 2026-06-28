@@ -4,6 +4,7 @@ import sys
 import numpy as np
 import pytest
 
+from app.services import sandbox as sandbox_module
 from app.services.sandbox import (
     MAX_SOURCE_BYTES,
     SandboxedScript,
@@ -179,6 +180,34 @@ def test_sandbox_blocks_filesystem_write(tmp_path):
     finally:
         script.stop()
     assert not target.exists()
+
+
+def test_drop_ambient_caps_is_a_harmless_noop():
+    # With no ambient capabilities held (the normal case off the deployed host),
+    # clearing them must not raise — it runs as a preexec_fn and a failure there
+    # would break every launch.
+    sandbox_module._drop_ambient_caps()
+
+
+def test_start_drops_ambient_caps_before_exec(monkeypatch):
+    # Regression for "worker died during startup": the deployed systemd unit
+    # grants CAP_NET_ADMIN as an ambient cap, which is inherited by children and
+    # makes the non-setuid bwrap abort. The launch must drop ambient caps in the
+    # child via preexec_fn so bwrap starts unprivileged.
+    captured = {}
+
+    class _StopLaunch(RuntimeError):
+        pass
+
+    def _fake_popen(argv, **kwargs):
+        captured.update(kwargs)
+        raise _StopLaunch
+
+    monkeypatch.setattr(sandbox_module.subprocess, "Popen", _fake_popen)
+    script = SandboxedScript("def step(s, t, w, h):\n    return np.zeros((h, w))", 28, 28)
+    with pytest.raises(_StopLaunch):
+        script.start()
+    assert captured["preexec_fn"] is sandbox_module._drop_ambient_caps
 
 
 @requires_bwrap
