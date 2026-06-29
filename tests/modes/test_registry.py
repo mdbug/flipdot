@@ -129,3 +129,41 @@ def test_pose_and_clock_transition_paths(monkeypatch):
 
     assert pose_out.shape == (28, 28)
     assert clock_out.shape == (28, 28)
+
+
+def test_script_mode_dissolves_from_clock(monkeypatch):
+    registry_module = _load_registry_module(monkeypatch)
+    mm = importlib.import_module("app.core.mode_manager")
+
+    # Make the blend identifiable: return the clock frame (the first argument).
+    registry_module.transition.blend = lambda a, b, alpha: a
+
+    clock = _FakeMode(np.full((28, 28), 1, dtype=np.uint8))
+    script_mode = _FakeMode(np.full((28, 28), 13, dtype=np.uint8))
+    blank = _FakeMode(np.zeros((28, 28), dtype=np.uint8))
+    registry = registry_module.build_mode_registry(
+        clock=clock,
+        menu=blank,
+        paint=blank,
+        caricature=blank,
+        percussion=blank,
+        autodrum=blank,
+        beatmirror=blank,
+        tetris_game=blank,
+        pong_game=blank,
+        tank_game=blank,
+        worldcup=blank,
+        board=blank,
+        font_preview=blank,
+        script_mode=script_mode,
+        img_sleep=np.zeros((28, 28), dtype=np.uint8),
+        clock_resolve_time=1.0,
+        clock_disolve_time=1.0,
+    )
+
+    # Inside the dissolve window the script blends with the clock frame.
+    during = registry.render(mm.ModeManager.MODE_SCRIPT, _ctx(mode_time=0.1))
+    assert during[0, 0] == 1
+    # After it, the raw script frame is shown.
+    after = registry.render(mm.ModeManager.MODE_SCRIPT, _ctx(mode_time=2.0))
+    assert after[0, 0] == 13

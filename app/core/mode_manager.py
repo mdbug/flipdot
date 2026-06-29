@@ -55,6 +55,7 @@ class ModeManager:
         self.pose_enabled = True
         self.control_source = self.CONTROL_GESTURE
         self.controller_connected = False
+        self._manual_clock_selection = False
 
     def set_mode(self, mode: str, entered_via: str | None = None) -> None:
         """Switch to ``mode`` (falling back to clock if pose is disabled) and note the source."""
@@ -106,6 +107,20 @@ class ModeManager:
     def reset_menu_click(self):
         """Cancel an in-progress menu dwell."""
         self.menu_click_start = None
+
+    def note_manual_clock_selection(self) -> None:
+        """Record that the user explicitly picked clock from the menu.
+
+        The transition policy consumes this to suppress the live-World-Cup
+        auto-switch until a match that is not already live goes live.
+        """
+        self._manual_clock_selection = True
+
+    def consume_manual_clock_selection(self) -> bool:
+        """Return whether clock was just manually selected, clearing the flag."""
+        flag = self._manual_clock_selection
+        self._manual_clock_selection = False
+        return flag
 
     def get_mode_time(self) -> float:
         """Return seconds elapsed since the current mode was entered."""

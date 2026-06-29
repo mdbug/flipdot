@@ -1,3 +1,4 @@
+import math
 import time
 from datetime import datetime
 from typing import Any
@@ -5,15 +6,25 @@ from typing import Any
 import numpy as np
 
 from app.modes.contracts import Frame
+from app.services.draw import draw_line, fill_circle
 from app.services.text import write, write_centered
 from app.services.weather import get_weather_forecast
 
 
 class Clock:
-    """Clock mode: renders date, time, an hour-progress bar, and a weather strip."""
+    """Clock mode: renders the time as a digital or analog face (web-configurable).
+
+    The digital face shows date, time, an hour-progress bar, and a weather strip.
+    The analog face fills the panel with a clock dial: a rim, 12 hour ticks, and
+    hour/minute hands.
+    """
 
     WEATHER_INTERVAL = 60 * 60
     CLOCK_INTERVAL = 1
+
+    STYLE_DIGITAL = "digital"
+    STYLE_ANALOG = "analog"
+    STYLES = (STYLE_DIGITAL, STYLE_ANALOG)
 
     def __init__(self, width: int, height: int) -> None:
         self.width = width
@@ -21,7 +32,21 @@ class Clock:
         self.last_weather_update = time.time() - Clock.WEATHER_INTERVAL
         self.last_frame_update = time.time() - Clock.CLOCK_INTERVAL
         self.weather: dict[str, Any] | None = None
+        self.style = Clock.STYLE_DIGITAL
         self.frame = np.zeros((height, width), dtype=np.uint8)
+
+    def get_settings(self) -> dict[str, Any]:
+        """Return the current clock settings for the web UI."""
+        return {"style": self.style}
+
+    def update_settings(self, *, style: str) -> dict[str, Any]:
+        """Update the clock face style, ignoring unknown values; return the result."""
+        if style in Clock.STYLES:
+            if style != self.style:
+                self.style = style
+                # Force a re-render on the next get_frame so the change is immediate.
+                self.last_frame_update = time.time() - Clock.CLOCK_INTERVAL
+        return self.get_settings()
 
     def get_weather(self) -> dict[str, Any] | None:
         """Return the cached forecast, refreshing it at most once per ``WEATHER_INTERVAL``."""
@@ -38,8 +63,15 @@ class Clock:
         return self.frame
 
     def update_frame(self) -> None:
-        """Redraw the clock frame: date, time, hour-progress bar, and weather/rain strip."""
+        """Redraw the clock frame using the configured face style."""
         self.frame = np.zeros((self.height, self.width), dtype=np.uint8)
+        if self.style == Clock.STYLE_ANALOG:
+            self._render_analog()
+        else:
+            self._render_digital()
+
+    def _render_digital(self) -> None:
+        """Render the digital face: date, time, hour-progress bar, and weather/rain strip."""
         now = datetime.now()
         date_now = now.strftime("%d.%m.%y")
         time_now = now.strftime("%H:%M")
@@ -76,3 +108,43 @@ class Clock:
                 rain_prob = round(rain_forecasts["rain_probability"] * 4)
                 self.frame[20:24, hour + 1 : 26] = 0
                 self.frame[24 - rain_prob : 24, hour + 1 : 26] = 1
+
+    def _render_analog(self) -> None:
+        """Render an analog face: a white disc with black hour/minute hands.
+
+        The dial is drawn on an odd-diameter circle centered on a single pixel.
+        It touches the left and top edges and leaves a 1px margin on the right
+        and bottom, while staying exactly symmetric about that center. The face
+        is a solid white disc; the hour and minute hands are cut out in black as
+        1px, gap-free strokes (the hour hand shorter than the minute hand).
+        """
+        now = datetime.now()
+        # Integer center so mirror pairs round identically; the radius reaches
+        # the left/top edges and leaves a 1px margin on the right/bottom.
+        cx = (self.width - 1) // 2
+        cy = (self.height - 1) // 2
+        radius = min(cx, cy)
+
+        # White clock face. Drawing it half a pixel larger rounds off the four
+        # cardinal tips so the rim has no protruding single pixels, while the
+        # disc still reaches the left/top edges.
+        fill_circle(self.frame, (cx, cy), radius + 0.5)
+
+        # Hands measured clockwise from 12-o'clock-up: x = cx + L*sin, y = cy - L*cos.
+        minute_angle = math.radians(now.minute * 6)
+        hour_angle = math.radians((now.hour % 12) * 30 + now.minute * 0.5)
+        minute_len = radius - 1
+        hour_len = radius * 0.55
+        # Both hands are a single pixel wide; the hour hand is just shorter.
+        draw_line(
+            self.frame,
+            (cx, cy),
+            (cx + minute_len * math.sin(minute_angle), cy - minute_len * math.cos(minute_angle)),
+            color=0,
+        )
+        draw_line(
+            self.frame,
+            (cx, cy),
+            (cx + hour_len * math.sin(hour_angle), cy - hour_len * math.cos(hour_angle)),
+            color=0,
+        )

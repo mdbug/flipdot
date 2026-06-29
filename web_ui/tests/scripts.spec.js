@@ -3,6 +3,7 @@ import { test, expect } from "@playwright/test";
 const SCRIPTS_RESPONSE = {
   scripts: ["wave.py", "bounce.py"],
   active: "wave.py",
+  excluded: ["bounce.py"],
 };
 
 const CODE_RESPONSE = { code: "import time\nprint('hello')" };
@@ -64,6 +65,24 @@ test("shows active badge on the currently playing script", async ({ page }) => {
   await expect(bounceBadge).not.toBeVisible();
 });
 
+test("shows muted badge on scripts excluded from the rotation", async ({ page }) => {
+  mockScriptsApi(page);
+  await page.goto("/scripts");
+
+  const bounceBadge = page
+    .locator("#scriptList .script-item")
+    .filter({ hasText: "bounce.py" })
+    .locator(".script-muted-badge");
+  await expect(bounceBadge).toBeVisible();
+  await expect(bounceBadge).toHaveText("off");
+
+  const waveBadge = page
+    .locator("#scriptList .script-item")
+    .filter({ hasText: "wave.py" })
+    .locator(".script-muted-badge");
+  await expect(waveBadge).not.toBeVisible();
+});
+
 test("shows error message when the API request fails", async ({ page }) => {
   page.route("/api/scripts", (route) =>
     route.fulfill({ status: 500, body: "Internal Server Error" }),
@@ -82,7 +101,7 @@ test("clicking a script shows detail panel and loads its code", async ({ page })
 
   await expect(page.locator("#scriptsDetail")).toBeVisible();
   await expect(page.locator("#scriptsPlaceholder")).not.toBeVisible();
-  await expect(page.locator("#scriptsDetailName")).toHaveText("bounce.py");
+  await expect(page.locator("#scriptsBarTitle")).toHaveText("bounce.py");
   await expect(page.locator("#scriptsCode code")).toContainText("print('hello')");
 });
 
@@ -112,6 +131,39 @@ test("play button POSTs to the correct endpoint and shows status", async ({ page
   expect(request.method()).toBe("POST");
   await expect(page.locator("#scriptsActionStatus")).toHaveText("Playing.");
   await expect(page.locator("#scriptsActionStatus")).toBeVisible();
+});
+
+test("rotation checkbox reflects exclusion state per script", async ({ page }) => {
+  mockScriptsApi(page);
+  await page.goto("/scripts");
+
+  // wave.py is eligible (not excluded) -> checked.
+  await page.locator("#scriptList .script-item").filter({ hasText: "wave.py" }).click();
+  await expect(page.locator("#scriptsRotation")).toBeChecked();
+
+  // bounce.py is excluded -> unchecked.
+  await page.locator("#scriptList .script-item").filter({ hasText: "bounce.py" }).click();
+  await expect(page.locator("#scriptsRotation")).not.toBeChecked();
+});
+
+test("toggling rotation POSTs the updated exclusion list", async ({ page }) => {
+  mockScriptsApi(page);
+  page.route("/api/settings/scripts", (route) =>
+    route.fulfill({ json: { status: "ok", excluded: [] } }),
+  );
+  await page.goto("/scripts");
+
+  await page.locator("#scriptList .script-item").filter({ hasText: "bounce.py" }).click();
+
+  const [request] = await Promise.all([
+    page.waitForRequest(
+      (req) => req.url().includes("/api/settings/scripts") && req.method() === "POST",
+    ),
+    page.locator("#scriptsRotation").check(),
+  ]);
+
+  expect(request.postDataJSON()).toEqual({ excluded: [] });
+  await expect(page.locator("#scriptsActionStatus")).toHaveText("Added to rotation.");
 });
 
 test("delete button removes the script after confirmation", async ({ page }) => {

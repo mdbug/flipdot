@@ -4,11 +4,11 @@ const scriptListError = document.getElementById("scriptListError");
 const scriptsRefresh = document.getElementById("scriptsRefresh");
 const scriptsPlaceholder = document.getElementById("scriptsPlaceholder");
 const scriptsDetail = document.getElementById("scriptsDetail");
-const scriptsDetailName = document.getElementById("scriptsDetailName");
 const scriptsDetailStatus = document.getElementById("scriptsDetailStatus");
 const scriptsCodeEl = document.getElementById("scriptsCode").querySelector("code");
 const scriptsPlay = document.getElementById("scriptsPlay");
 const scriptsDelete = document.getElementById("scriptsDelete");
+const scriptsRotation = document.getElementById("scriptsRotation");
 const scriptsActionStatus = document.getElementById("scriptsActionStatus");
 const scriptsSidebar = document.getElementById("scriptsSidebar");
 const scriptsSidebarToggle = document.getElementById("scriptsSidebarToggle");
@@ -18,6 +18,7 @@ const scriptsBarTitle = document.getElementById("scriptsBarTitle");
 let scripts = [];
 let selectedName = null;
 let activeName = "";
+let excluded = new Set();
 
 // ── List ─────────────────────────────────────────────────────────────────────
 
@@ -28,6 +29,7 @@ async function loadList() {
     if (!res.ok) throw new Error(`${res.status}`);
     const data = await res.json();
     activeName = data.active || "";
+    excluded = new Set(data.excluded || []);
     scripts = (data.scripts || []).map((name) => ({ name }));
     renderList();
   } catch (err) {
@@ -59,6 +61,14 @@ function renderList() {
       const badge = document.createElement("span");
       badge.className = "script-active-badge";
       badge.textContent = "playing";
+      btn.appendChild(badge);
+    }
+
+    if (excluded.has(name)) {
+      const badge = document.createElement("span");
+      badge.className = "script-muted-badge";
+      badge.textContent = "off";
+      badge.title = "Not in hourly rotation";
       btn.appendChild(badge);
     }
 
@@ -98,6 +108,7 @@ function updateDetailStatus() {
   const isActive = selectedName === activeName;
   scriptsDetailStatus.textContent = isActive ? "playing" : "idle";
   scriptsDetailStatus.className = isActive ? "status-pill ok" : "status-pill muted";
+  scriptsRotation.checked = !excluded.has(selectedName);
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
@@ -132,6 +143,35 @@ scriptsPlay.addEventListener("click", async () => {
   }
 });
 
+scriptsRotation.addEventListener("change", async () => {
+  if (!selectedName) return;
+  const name = selectedName;
+  const include = scriptsRotation.checked;
+  const next = new Set(excluded);
+  if (include) next.delete(name);
+  else next.add(name);
+
+  scriptsRotation.disabled = true;
+  setActionStatus("", false);
+  try {
+    const res = await fetch("/api/settings/scripts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ excluded: [...next] }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `${res.status}`);
+    excluded = new Set(data.excluded || []);
+    if (selectedName === name) scriptsRotation.checked = !excluded.has(name);
+    setActionStatus(include ? "Added to rotation." : "Removed from rotation.", false);
+  } catch (err) {
+    scriptsRotation.checked = !next.has(name); // revert on failure
+    setActionStatus(`Error: ${err.message}`, true);
+  } finally {
+    scriptsRotation.disabled = false;
+  }
+});
+
 scriptsDelete.addEventListener("click", async () => {
   if (!selectedName) return;
   if (!confirm(`Delete script "${selectedName}"?`)) return;
@@ -148,6 +188,7 @@ scriptsDelete.addEventListener("click", async () => {
     if (activeName === nameToDelete) activeName = "";
     scriptsDetail.classList.add("hidden");
     scriptsPlaceholder.classList.remove("hidden");
+    scriptsDetailStatus.classList.add("hidden");
     if (scriptsBarTitle) scriptsBarTitle.textContent = "Script browser";
     await loadList();
   } catch (err) {

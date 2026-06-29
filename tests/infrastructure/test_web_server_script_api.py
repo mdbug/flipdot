@@ -4,6 +4,7 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 from app.infrastructure.web_server import WebServer
+from app.services.settings_store import RuntimeSettingsStore
 
 
 class DummyInputHub:
@@ -25,11 +26,23 @@ class DummyScriptMode:
         self._scripts = scripts or []
         self._active = active
         self._code_map = code_map or {}
+        self._excluded = set()
         self.loaded = None
         self.deleted = None
 
     def list_scripts(self):
-        return {"scripts": self._scripts, "active": self._active}
+        return {
+            "scripts": self._scripts,
+            "active": self._active,
+            "excluded": sorted(self._excluded),
+        }
+
+    def get_interlude_settings(self):
+        return {"excluded": sorted(self._excluded)}
+
+    def update_interlude_settings(self, *, excluded):
+        self._excluded = {str(name) for name in excluded}
+        return self.get_interlude_settings()
 
     def get_code(self, name):
         return self._code_map.get(name)
@@ -156,6 +169,52 @@ def test_delete_not_found():
 
     res = client.delete("/api/scripts/ghost")
     assert res.status_code == 404
+
+
+def test_list_scripts_includes_excluded():
+    script_mode = DummyScriptMode(scripts=["wave", "birthday"])
+    script_mode.update_interlude_settings(excluded=["birthday"])
+    server = _make_server(9209)
+    server.attach_script_mode(script_mode)
+    client = TestClient(server._app)
+
+    res = client.get("/api/scripts")
+    assert res.status_code == 200
+    assert res.json()["excluded"] == ["birthday"]
+
+
+def test_post_script_settings_updates_and_persists(tmp_path):
+    script_mode = DummyScriptMode(scripts=["wave", "birthday"])
+    server = _make_server(9210)
+    server._settings_store = RuntimeSettingsStore(tmp_path / "settings.json")
+    server.attach_script_mode(script_mode)
+    client = TestClient(server._app)
+
+    res = client.post("/api/settings/scripts", json={"excluded": ["birthday"]})
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok", "excluded": ["birthday"]}
+    assert script_mode.get_interlude_settings() == {"excluded": ["birthday"]}
+    # Persisted so it survives a reattach.
+    assert server._settings_store.load_script_settings() == {"excluded": ["birthday"]}
+
+
+def test_attach_script_mode_applies_persisted_exclusions(tmp_path):
+    store = RuntimeSettingsStore(tmp_path / "settings.json")
+    store.save_script_settings(excluded=["birthday"])
+    script_mode = DummyScriptMode(scripts=["wave", "birthday"])
+    server = _make_server(9211)
+    server._settings_store = store
+    server.attach_script_mode(script_mode)
+
+    assert script_mode.get_interlude_settings() == {"excluded": ["birthday"]}
+
+
+def test_script_settings_endpoint_requires_attachment():
+    server = _make_server(9212)
+    client = TestClient(server._app)
+
+    assert client.get("/api/settings/scripts").status_code == 409
+    assert client.post("/api/settings/scripts", json={"excluded": []}).status_code == 409
 
 
 def test_scripts_page_route_serves_html():

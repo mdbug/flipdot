@@ -9,6 +9,7 @@ disturbing the loop.
 
 from __future__ import annotations
 
+import random
 import time
 
 import numpy as np
@@ -39,6 +40,12 @@ class ScriptMode:
         self._script: SandboxedScript | None = None
         self._name: str = ""
         self._start_time = 0.0
+        # Daily play order for the hourly clock interlude: ``_order`` is the
+        # permutation repeated through the day, ``_queue`` what remains this pass.
+        self._order: list[str] = []
+        self._queue: list[str] = []
+        # Scripts the user has excluded from the hourly interlude (web-configurable).
+        self._interlude_excluded: set[str] = set()
 
     # --- render loop -----------------------------------------------------
 
@@ -53,6 +60,63 @@ class ScriptMode:
         if frame is None:
             return self._error_frame(self._script.error or "script stopped")
         return frame
+
+    # --- hourly clock interlude ------------------------------------------
+
+    def _interlude_names(self) -> list[str]:
+        """Saved script names eligible for the hourly clock interlude."""
+        return [n for n in self._store.list_names() if n not in self._interlude_excluded]
+
+    def get_interlude_settings(self) -> dict:
+        """Return which saved scripts are excluded from the hourly interlude."""
+        return {"excluded": sorted(self._interlude_excluded)}
+
+    def update_interlude_settings(self, *, excluded: list[str]) -> dict:
+        """Replace the set of scripts excluded from the hourly interlude; return it."""
+        self._interlude_excluded = {str(name) for name in excluded}
+        return self.get_interlude_settings()
+
+    def reshuffle_day(self) -> None:
+        """Pick a fresh random play order for the day (called overnight by the policy)."""
+        names = self._interlude_names()
+        random.shuffle(names)
+        self._set_order(names)
+
+    def start_next(self) -> bool:
+        """Start the next script in the day's order; return False if none usable.
+
+        Repeats the same daily order, folding in scripts saved since it was built
+        and dropping deleted or excluded ones. Never raises: an empty library or a
+        broken script returns False so the render loop falls back to the clock.
+        """
+        names = self._interlude_names()
+        if not names:
+            return False
+        if not self._order:
+            self.reshuffle_day()  # lazy init when no overnight order exists yet
+        self._reconcile(names)
+        if not self._queue:
+            self._queue = list(self._order)  # repeat the day's order
+        name = self._queue.pop(0)
+        try:
+            self.load_script(name)
+        except Exception:
+            return False  # not consumed as played; the next hour tries the next one
+        return True
+
+    def _set_order(self, order: list[str]) -> None:
+        self._order = order
+        self._queue = list(order)
+
+    def _reconcile(self, names: list[str]) -> None:
+        """Drop deleted scripts and splice newly-saved ones into the remaining order."""
+        known = set(names)
+        self._order = [n for n in self._order if n in known]
+        self._queue = [n for n in self._queue if n in known]
+        for name in names:
+            if name not in self._order:
+                self._order.insert(random.randint(0, len(self._order)), name)
+                self._queue.insert(random.randint(0, len(self._queue)), name)
 
     # --- control (called from MCP tools) ---------------------------------
 
@@ -99,8 +163,12 @@ class ScriptMode:
         return self.run_script(code, name=ScriptStore.sanitize_name(name))
 
     def list_scripts(self) -> dict:
-        """Return stored script names and the active one."""
-        return {"scripts": self._store.list_names(), "active": self._name}
+        """Return stored script names, the active one, and interlude exclusions."""
+        return {
+            "scripts": self._store.list_names(),
+            "active": self._name,
+            "excluded": sorted(self._interlude_excluded),
+        }
 
     def get_code(self, name: str) -> str | None:
         """Return the source code of the saved script ``name``, or None if absent."""

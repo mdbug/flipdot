@@ -40,6 +40,27 @@ class RuntimeSettingsStore:
         }
         self._save_section("sleep", clamped)
 
+    def load_clock_settings(self) -> dict[str, str] | None:
+        """Return the persisted clock face style, or None if unset/invalid."""
+        payload = self._load_payload()
+        if payload is None:
+            return None
+
+        clock_payload = payload.get("clock") if isinstance(payload, dict) else None
+        if not isinstance(clock_payload, dict):
+            return None
+
+        style = clock_payload.get("style", "digital")
+        if style not in ("digital", "analog"):
+            style = "digital"
+        return {"style": style}
+
+    def save_clock_settings(self, *, style: str) -> None:
+        """Persist the clock face style, defaulting unknown values to ``digital``."""
+        if style not in ("digital", "analog"):
+            style = "digital"
+        self._save_section("clock", {"style": style})
+
     def load_font_preview_settings(self) -> dict[str, object] | None:
         """Return persisted font-preview settings, or None if unset/invalid."""
         payload = self._load_payload()
@@ -87,6 +108,27 @@ class RuntimeSettingsStore:
                 "variants": self._normalize_font_preview_variants(variants),
             },
         )
+
+    def load_script_settings(self) -> dict[str, list[str]] | None:
+        """Return persisted script-interlude exclusions, or None if unset/invalid."""
+        payload = self._load_payload()
+        if payload is None:
+            return None
+
+        script_payload = payload.get("scripts") if isinstance(payload, dict) else None
+        if not isinstance(script_payload, dict):
+            return None
+
+        excluded = script_payload.get("excluded")
+        if not isinstance(excluded, list):
+            return None
+
+        return {"excluded": sorted({item for item in excluded if isinstance(item, str)})}
+
+    def save_script_settings(self, *, excluded: list[str]) -> None:
+        """Persist the set of scripts excluded from the hourly clock interlude."""
+        cleaned = sorted({str(name) for name in excluded})
+        self._save_section("scripts", {"excluded": cleaned})
 
     def _normalize_font_preview_variants(self, raw_variants: object) -> list[dict[str, object]]:
         if not isinstance(raw_variants, list):

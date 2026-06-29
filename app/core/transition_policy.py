@@ -25,6 +25,7 @@ class TransitionPolicy:
     """Centralized mode transition logic for the main loop."""
 
     WORLDCUP_LIVE_CHECK_INTERVAL = 30.0
+    HOURLY_SCRIPT_DURATION = 60.0
 
     def __init__(
         self,
@@ -48,23 +49,44 @@ class TransitionPolicy:
         self._cached_face_mesh_results = None
         self._last_worldcup_live_check = 0.0
         self._cached_worldcup_live = False
+        self._cached_worldcup_live_keys: set[Any] = set()
         self._worldcup_lock = threading.Lock()
         self._worldcup_refresh_in_flight = False
+        # Live matches the user has already seen when manually choosing clock;
+        # they no longer trigger the auto-switch back to World Cup.
+        self._acknowledged_live_keys: set[Any] = set()
+        # Hourly random-script interlude on the idle clock.
+        self._last_hourly_script_hour: int | None = None
+        self._hourly_script_active = False
+        self._last_shuffle_date: Any = None
+
+    @staticmethod
+    def _worldcup_event_key(event: dict[str, Any]) -> Any:
+        """Return a stable identity for a live match for new-match detection."""
+        event_id = event.get("event_id")
+        if event_id is not None:
+            return ("id", str(event_id))
+        return ("teams", event.get("home_team"), event.get("away_team"))
 
     def _refresh_worldcup_live_cache(self) -> None:
         """Refresh World Cup live state off the main render thread."""
         live = None
+        live_keys: set[Any] | None = None
         try:
             payload = get_worldcup_scorecard()
             events = payload.get("events") or []
-            live = any(event.get("status_bucket") == "live" for event in events)
+            live_events = [event for event in events if event.get("status_bucket") == "live"]
+            live = bool(live_events)
+            live_keys = {self._worldcup_event_key(event) for event in live_events}
         except Exception:
             # Keep the previous cached value on transient API/network errors.
             live = None
+            live_keys = None
 
         with self._worldcup_lock:
             if live is not None:
                 self._cached_worldcup_live = live
+                self._cached_worldcup_live_keys = live_keys or set()
             self._last_worldcup_live_check = time.monotonic()
             self._worldcup_refresh_in_flight = False
 
@@ -113,6 +135,56 @@ class TransitionPolicy:
 
         return cached_live
 
+    def _should_autoswitch_to_worldcup(self, mode_manager: ModeManager) -> bool:
+        """Decide whether idle clock mode should hand off to live World Cup.
+
+        Returns True only when a match that is not already acknowledged is live.
+        A manual clock selection from the menu acknowledges every currently-live
+        match, so the board stays on clock until a *new* match goes live.
+        """
+        # Kick the throttled refresh; read liveness from the keys it maintains so
+        # the live flag and the key set always agree on the same snapshot.
+        self._is_worldcup_live()
+        with self._worldcup_lock:
+            live_keys = set(self._cached_worldcup_live_keys)
+
+        # Drop acknowledgements for matches that have since finished.
+        self._acknowledged_live_keys &= live_keys
+
+        if mode_manager.consume_manual_clock_selection():
+            # The user explicitly chose clock; treat current live matches as seen.
+            self._acknowledged_live_keys = set(live_keys)
+
+        if not live_keys:
+            return False
+
+        new_live_keys = live_keys - self._acknowledged_live_keys
+        if new_live_keys:
+            # Hand off and reset so returning to clock starts a fresh window.
+            self._acknowledged_live_keys = set()
+            return True
+        return False
+
+    def _maybe_reshuffle_scripts(self, now: datetime, script_mode: Any) -> None:
+        """Rebuild the day's script order once per day, overnight.
+
+        Prefer to do it while asleep; if sleep is disabled, do it from 5 a.m. on.
+        """
+        if self._last_shuffle_date == now.date():
+            return
+        if self.is_sleep_hour(now) or (not self.get_sleep_settings()["enabled"] and now.hour >= 5):
+            script_mode.reshuffle_day()
+            self._last_shuffle_date = now.date()
+
+    def _should_start_hourly_script(self, now: datetime) -> bool:
+        """Return True at most once per clock hour, at the top of the hour."""
+        if now.minute != 0:
+            return False
+        if now.hour == self._last_hourly_script_hour:
+            return False
+        self._last_hourly_script_hour = now.hour
+        return True
+
     def is_sleep_hour(self, now: datetime | None = None) -> bool:
         """Return whether ``now`` (default: local now) falls inside the sleep window."""
         with self._sleep_lock:
@@ -144,6 +216,7 @@ class TransitionPolicy:
         pose_results: Any,
         mode_manager: ModeManager,
         paint_mode: Any,
+        script_mode: Any,
     ) -> TransitionState:
         """Drive ``mode_manager`` from pose/clock/sleep rules and return the frame's pose state."""
         state = TransitionState(
@@ -155,6 +228,7 @@ class TransitionPolicy:
         )
 
         now = datetime.now()
+        self._maybe_reshuffle_scripts(now, script_mode)
         if self.is_sleep_hour(now):
             mode_manager.set_mode(ModeManager.MODE_SLEEP)
             return state
@@ -167,9 +241,32 @@ class TransitionPolicy:
             mode_manager.set_mode(ModeManager.MODE_CLOCK)
             current_mode = mode_manager.mode
 
-        # Prioritize live World Cup information when idle on clock mode.
-        if current_mode == ModeManager.MODE_CLOCK and self._is_worldcup_live():
+        # Prioritize live World Cup information when idle on clock mode, unless
+        # the user manually selected clock and no new match has gone live since.
+        if current_mode == ModeManager.MODE_CLOCK and self._should_autoswitch_to_worldcup(
+            mode_manager
+        ):
             mode_manager.set_mode(ModeManager.MODE_WORLDCUP)
+            return state
+
+        # Clear the interlude flag once we are no longer in the auto-started script
+        # (e.g. the user navigated away manually).
+        if self._hourly_script_active and current_mode != ModeManager.MODE_SCRIPT:
+            self._hourly_script_active = False
+
+        # Once an hour, while idle on the clock, play a short random script as an
+        # interlude, then return to the clock (dissolve handled by the registry).
+        if current_mode == ModeManager.MODE_CLOCK and self._should_start_hourly_script(now):
+            if script_mode.start_next():
+                self._hourly_script_active = True
+                mode_manager.set_mode(ModeManager.MODE_SCRIPT)
+            return state
+
+        if current_mode == ModeManager.MODE_SCRIPT and self._hourly_script_active:
+            if mode_manager.get_mode_time() >= self.HOURLY_SCRIPT_DURATION:
+                script_mode.stop_script()
+                self._hourly_script_active = False
+                mode_manager.set_mode(ModeManager.MODE_CLOCK)
             return state
 
         if current_mode in (

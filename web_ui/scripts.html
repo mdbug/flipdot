@@ -45,18 +45,19 @@
               <span aria-hidden="true">&#9776;</span>
             </button>
             <p id="scriptsBarTitle" class="scripts-bar-title">Script browser</p>
+            <span id="scriptsDetailStatus" class="status-pill muted hidden">idle</span>
           </div>
           <div id="scriptsPlaceholder" class="scripts-placeholder">
             <p class="scripts-placeholder-text">Select a script to view its source.</p>
           </div>
           <div id="scriptsDetail" class="scripts-detail hidden">
-            <div class="scripts-detail-head">
-              <p id="scriptsDetailName" class="scripts-detail-name"></p>
-              <span id="scriptsDetailStatus" class="status-pill muted">idle</span>
-            </div>
             <div class="scripts-actions">
               <button id="scriptsPlay" type="button" class="accent">Play</button>
               <button id="scriptsDelete" type="button" class="secondary scripts-delete-btn">Delete</button>
+              <label class="scripts-rotation">
+                <input id="scriptsRotation" type="checkbox" />
+                <span>In hourly rotation</span>
+              </label>
             </div>
             <p id="scriptsActionStatus" class="scripts-status hidden"></p>
             <pre id="scriptsCode" class="scripts-code"><code></code></pre>

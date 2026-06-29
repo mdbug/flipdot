@@ -7,6 +7,9 @@ const modeControls = document.getElementById("modeControls");
 const boardEditor = document.getElementById("boardEditor");
 const settingsToggle = document.getElementById("settingsToggle");
 const sleepSettings = document.getElementById("sleepSettings");
+const clockSettings = document.getElementById("clockSettings");
+const clockDisplayStyle = document.getElementById("clockDisplayStyle");
+const clockSettingsStatus = document.getElementById("clockSettingsStatus");
 const fontPreviewSettings = document.getElementById("fontPreviewSettings");
 const sleepEnabled = document.getElementById("sleepEnabled");
 const sleepStartHour = document.getElementById("sleepStartHour");
@@ -289,6 +292,9 @@ function activeSettingsPanel() {
   if (currentMode === "font_preview") {
     return fontPreviewSettings;
   }
+  if (currentMode === "clock") {
+    return clockSettings;
+  }
   return sleepSettings;
 }
 
@@ -296,6 +302,9 @@ function activeSettingsPanel() {
 function hideAllSettingsPanels() {
   if (sleepSettings) {
     sleepSettings.classList.add("hidden");
+  }
+  if (clockSettings) {
+    clockSettings.classList.add("hidden");
   }
   if (fontPreviewSettings) {
     fontPreviewSettings.classList.add("hidden");
@@ -1026,6 +1035,54 @@ async function saveSleepSettings() {
   } catch (_err) {
     setSleepStatusWithTimestamp("Sleep settings saved", "ok");
   }
+}
+
+/** Set the clock-settings status line. @param {string} message @param {string} [kind] - "error", "ok", or "". */
+function setClockSettingsStatus(message, kind = "") {
+  if (!clockSettingsStatus) {
+    return;
+  }
+  clockSettingsStatus.textContent = message;
+  clockSettingsStatus.classList.remove("error", "ok");
+  if (kind) {
+    clockSettingsStatus.classList.add(kind);
+  }
+}
+
+/** Load the clock face style and reflect it in the form. */
+async function loadClockSettings() {
+  if (!clockDisplayStyle) {
+    return;
+  }
+  try {
+    const payload = await getJson("/api/settings/clock");
+    clockDisplayStyle.value = payload.style === "analog" ? "analog" : "digital";
+    setClockSettingsStatus("Clock settings loaded.", "ok");
+  } catch (_err) {
+    setClockSettingsStatus("Clock settings unavailable.", "error");
+  }
+}
+
+/** Persist the clock face style and reflect the saved result. */
+async function saveClockSettings() {
+  if (!clockDisplayStyle) {
+    return;
+  }
+  const payload = {
+    style: clockDisplayStyle.value === "analog" ? "analog" : "digital",
+  };
+  const response = await postJson("/api/settings/clock", payload);
+  if (!response || !response.ok) {
+    setClockSettingsStatus("Failed to save clock settings.", "error");
+    return;
+  }
+  try {
+    const saved = await response.json();
+    clockDisplayStyle.value = saved.style === "analog" ? "analog" : "digital";
+  } catch (_err) {
+    // Keep the optimistic value if the response body is unreadable.
+  }
+  setClockSettingsStatus("Clock settings saved.", "ok");
 }
 
 /** Load font-preview settings and the variant catalog, then render the form. */
@@ -1952,6 +2009,12 @@ sleepEndHour.addEventListener("change", () => {
   saveSleepSettings();
 });
 
+if (clockDisplayStyle) {
+  clockDisplayStyle.addEventListener("change", () => {
+    saveClockSettings();
+  });
+}
+
 settingsToggle.addEventListener("click", () => {
   if (currentMode === "font_preview" && fontPreviewSettings) {
     fontPreviewSettings.classList.remove("hidden");
@@ -2578,6 +2641,7 @@ setBoardTool("select");
 syncCanvasResolution();
 window.addEventListener("resize", syncCanvasResolution, { passive: true });
 loadSleepSettings();
+loadClockSettings();
 loadFontPreviewSettings();
 startWebSocket();
 startControllerWebSocket();

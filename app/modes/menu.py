@@ -255,6 +255,10 @@ class Menu:
                 self.mode_manager.set_mode(mode, entered_via=entered_via)
             except TypeError:
                 self.mode_manager.set_mode(mode)
+            if mode == ModeManager.MODE_CLOCK:
+                note_manual = getattr(self.mode_manager, "note_manual_clock_selection", None)
+                if callable(note_manual):
+                    note_manual()
 
         return _set_mode
 

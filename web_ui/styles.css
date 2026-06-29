@@ -1977,6 +1977,18 @@ input:disabled {
   text-transform: uppercase;
 }
 
+.script-muted-badge {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.08rem 0.38rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .scripts-viewer {
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -2024,24 +2036,10 @@ input:disabled {
   font-size: 0.88rem;
 }
 
-.scripts-detail-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.scripts-detail-name {
-  margin: 0;
-  flex: 1;
-  font-weight: 800;
-  font-size: 1.05rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .scripts-actions {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
 
@@ -2054,6 +2052,26 @@ input:disabled {
 .scripts-delete-btn:hover {
   color: var(--coral);
   border-color: var(--coral);
+}
+
+.scripts-rotation {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-left: auto;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.scripts-rotation input {
+  width: auto;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--teal);
+  cursor: pointer;
 }
 
 .scripts-status {

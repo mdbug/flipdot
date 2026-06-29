@@ -336,6 +336,7 @@ def main() -> None:
                 pose_results=pose_results,
                 mode_manager=mode_manager,
                 paint_mode=paint,
+                script_mode=script_mode,
             )
 
             render_context = RenderContext(
@@ -391,6 +392,7 @@ def main() -> None:
                 web_server.attach_board(board)
                 web_server.attach_script_mode(script_mode)
                 web_server.attach_mode_manager(mode_manager)
+                web_server.attach_clock(clock)
                 web_server.attach_font_preview(font_preview)
                 web_server.attach_transition_policy(transition_policy)
                 web_server.attach_controller_status_provider(get_controller_statuses)

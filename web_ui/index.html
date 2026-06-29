@@ -77,6 +77,25 @@
         </section>
 
         <section
+          id="clockSettings"
+          class="rail-section settings-panel hidden"
+          aria-live="polite"
+          aria-label="Clock settings"
+        >
+          <div class="section-head compact">
+            <p class="eyebrow">Clock</p>
+          </div>
+          <div class="field-grid">
+            <label for="clockDisplayStyle">Face</label>
+            <select id="clockDisplayStyle">
+              <option value="digital">Digital</option>
+              <option value="analog">Analog</option>
+            </select>
+          </div>
+          <p id="clockSettingsStatus" class="system-note">Clock settings not loaded yet.</p>
+        </section>
+
+        <section
           id="fontPreviewSettings"
           class="rail-section settings-panel hidden"
           aria-live="polite"

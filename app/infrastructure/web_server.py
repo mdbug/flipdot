@@ -12,7 +12,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
@@ -225,6 +225,14 @@ class SleepSettingsPayload(BaseModel):
     end_hour: int = Field(ge=0, le=23)
 
 
+class ClockSettingsPayload(BaseModel):
+    style: Literal["digital", "analog"] = "digital"
+
+
+class ScriptInterludePayload(BaseModel):
+    excluded: list[str] = Field(default_factory=list)
+
+
 class ChatPayload(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
     model: str | None = Field(default=None, max_length=64)
@@ -281,6 +289,7 @@ class WebServer:
         self._script_mode = None
         self._transition_policy = None
         self._font_preview = None
+        self._clock = None
         self._mode_manager = None
 
         # Single shared conversation for the in-UI Claude chat (one physical
@@ -749,6 +758,18 @@ class WebServer:
             )
             return JSONResponse({"status": "ok", **settings})
 
+        @self._app.get("/api/settings/clock")
+        def get_clock_settings() -> JSONResponse:
+            clock = self._require_clock()
+            return JSONResponse(clock.get_settings())
+
+        @self._app.post("/api/settings/clock")
+        def post_clock_settings(payload: ClockSettingsPayload) -> JSONResponse:
+            clock = self._require_clock()
+            settings = clock.update_settings(style=payload.style)
+            self._settings_store.save_clock_settings(style=str(settings["style"]))
+            return JSONResponse({"status": "ok", **settings})
+
         @self._app.get("/api/settings/font-preview")
         def get_font_preview_settings() -> JSONResponse:
             font_preview = self._require_font_preview()
@@ -785,6 +806,17 @@ class WebServer:
         @self._app.get("/api/scripts")
         def get_scripts() -> JSONResponse:
             return JSONResponse(self._require_script_mode().list_scripts())
+
+        @self._app.get("/api/settings/scripts")
+        def get_script_settings() -> JSONResponse:
+            return JSONResponse(self._require_script_mode().get_interlude_settings())
+
+        @self._app.post("/api/settings/scripts")
+        def post_script_settings(payload: ScriptInterludePayload) -> JSONResponse:
+            script_mode = self._require_script_mode()
+            settings = script_mode.update_interlude_settings(excluded=payload.excluded)
+            self._settings_store.save_script_settings(excluded=list(settings["excluded"]))
+            return JSONResponse({"status": "ok", **settings})
 
         @self._app.get("/api/scripts/{name}/code")
         def get_script_code(name: str) -> JSONResponse:
@@ -1062,6 +1094,9 @@ class WebServer:
 
     def attach_script_mode(self, script_mode) -> None:
         self._script_mode = script_mode
+        persisted = self._settings_store.load_script_settings()
+        if persisted is not None:
+            script_mode.update_interlude_settings(excluded=list(persisted["excluded"]))
 
     def attach_mode_manager(self, mode_manager) -> None:
         self._mode_manager = mode_manager
@@ -1075,6 +1110,12 @@ class WebServer:
                 start_hour=int(persisted["start_hour"]),
                 end_hour=int(persisted["end_hour"]),
             )
+
+    def attach_clock(self, clock) -> None:
+        self._clock = clock
+        persisted = self._settings_store.load_clock_settings()
+        if persisted is not None:
+            clock.update_settings(style=str(persisted["style"]))
 
     def attach_font_preview(self, font_preview) -> None:
         self._font_preview = font_preview
@@ -1720,6 +1761,11 @@ class WebServer:
         if self._font_preview is None:
             raise HTTPException(status_code=409, detail="font preview mode is not attached")
         return self._font_preview
+
+    def _require_clock(self) -> Any:
+        if self._clock is None:
+            raise HTTPException(status_code=409, detail="clock mode is not attached")
+        return self._clock
 
     def _require_script_mode(self) -> Any:
         if self._script_mode is None:

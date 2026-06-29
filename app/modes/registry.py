@@ -54,6 +54,13 @@ def build_mode_registry(
             dots = transition.blend(clock_dots, dots, context.mode_time / clock_disolve_time)
         return dots
 
+    def render_script(context: RenderContext) -> np.ndarray:
+        dots = script_mode.get_frame()
+        if context.mode_time < clock_disolve_time:
+            clock_dots = clock.get_frame()
+            dots = transition.blend(clock_dots, dots, context.mode_time / clock_disolve_time)
+        return dots
+
     def render_clock(context: RenderContext) -> np.ndarray:
         dots = clock.get_frame()
         if context.mode_time < clock_resolve_time:
@@ -84,6 +91,6 @@ def build_mode_registry(
         ModeManager.MODE_FONT_PREVIEW,
         lambda c: font_preview.get_frame(c.pose_results, input_hub=c.input_hub),
     )
-    registry.register(ModeManager.MODE_SCRIPT, lambda c: script_mode.get_frame())
+    registry.register(ModeManager.MODE_SCRIPT, render_script)
 
     return registry
