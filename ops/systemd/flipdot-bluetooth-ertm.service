@@ -13,10 +13,11 @@ Conflicts=shutdown.target
 Type=oneshot
 RemainAfterExit=yes
 # ERTM (Enhanced Re-Transmission Mode) can cause multi-second input stalls with
-# Xbox-compatible HID controllers over Bluetooth on Linux. The IINE mini
-# controllers identify with Xbox-compatible HID IDs, so this fix still applies.
-# The leading '-' tells systemd to ignore a non-zero exit (e.g. if the sysfs
-# parameter is absent on a non-Jetson kernel).
+# BR/EDR Xbox-compatible HID controllers on Linux. The primary IINE controllers
+# now connect over BLE (via the external UB500 Plus dongle), where ERTM does not
+# apply, so this is kept as insurance for any BR/EDR controllers such as the
+# genuine Xbox Wireless Controllers. The leading '-' tells systemd to ignore a
+# non-zero exit (e.g. if the sysfs parameter is absent on a non-Jetson kernel).
 ExecStart=-/bin/sh -c 'echo 1 > /sys/module/bluetooth/parameters/disable_ertm'
 
 [Install]

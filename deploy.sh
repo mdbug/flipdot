@@ -81,11 +81,6 @@ if ! sudo cmp -s "${REMOTE_DIR}/ops/systemd/flipdot-bluetooth-ertm.service" /etc
   daemon_reload_needed=true
 fi
 
-if ! sudo cmp -s "${REMOTE_DIR}/ops/systemd/flipdot-bluetooth-tune.service" /etc/systemd/system/flipdot-bluetooth-tune.service; then
-  sudo install -m 644 "${REMOTE_DIR}/ops/systemd/flipdot-bluetooth-tune.service" /etc/systemd/system/flipdot-bluetooth-tune.service
-  daemon_reload_needed=true
-fi
-
 if ! sudo cmp -s "${REMOTE_DIR}/ops/logrotate/flipdot" /etc/logrotate.d/flipdot; then
   sudo install -m 644 "${REMOTE_DIR}/ops/logrotate/flipdot" /etc/logrotate.d/flipdot
 fi
@@ -105,10 +100,6 @@ fi
 # Xbox-compatible HID controllers such as the IINE mini controllers.
 sudo systemctl enable --now flipdot-bluetooth-ertm.service
 sudo systemctl restart flipdot-bluetooth-ertm.service
-# Keep Bluetooth HID links out of low-power policies that can cause latency or
-# connection churn with game controllers.
-sudo systemctl enable --now flipdot-bluetooth-tune.service
-sudo systemctl restart flipdot-bluetooth-tune.service
 sudo systemctl restart flipdot.service
 sudo systemctl --no-pager --full status flipdot.service | sed -n '1,20p'
 EOF
