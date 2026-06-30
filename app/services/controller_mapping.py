@@ -278,9 +278,9 @@ class ControllerInputBridge:
 
             driven = {"left": False, "right": False}
             for side, held, prev_attr in sides:
-                turning = (1 if "D-Right" in held else 0) - (1 if "D-Left" in held else 0)
-                thrusting = (1 if "D-Up" in held else 0) - (1 if "D-Down" in held else 0)
-                tank_game.set_controller_input(side, turning=turning, thrusting=thrusting)
+                move_x = (1 if "D-Right" in held else 0) - (1 if "D-Left" in held else 0)
+                move_y = (1 if "D-Down" in held else 0) - (1 if "D-Up" in held else 0)
+                tank_game.set_controller_input(side, move_x=move_x, move_y=move_y)
                 prev = getattr(self._state, prev_attr)
                 if "A" in held and "A" not in prev:
                     tank_game.fire(side, now)

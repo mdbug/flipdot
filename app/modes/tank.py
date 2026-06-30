@@ -15,25 +15,38 @@ _HEADING_VECS = [
     for h in range(HEADINGS)
 ]
 
+# The four cardinal move directions map to a subset of the headings above.
+# Keys are unit (dx, dy) vectors with y pointing down.
+_MOVE_HEADINGS = {
+    (1, 0): 0,  # right
+    (0, 1): 4,  # down
+    (-1, 0): 8,  # left
+    (0, -1): 12,  # up
+}
+
 
 class Tank:
     """Two-tank combat in the style of Atari *Combat*.
 
-    Each tank rotates and thrusts (D-pad Left/Right turn, Up/Down drive) and
-    fires shells with Button A.  Shells ricochet off the arena walls and border
-    a limited number of times before expiring, so bank shots score.
+    Each tank moves and aims in one of four cardinal directions with the D-pad
+    and fires shells with Button A.  Shells ricochet off the arena walls and
+    border a limited number of times before expiring, so bank shots score.
 
     Controls
     --------
     * Primary controller  → right tank (side ``1``)
     * Secondary controller → left tank (side ``0``)
-    * D-Left / D-Right     → rotate, D-Up / D-Down → thrust / reverse
+    * D-Up/Down/Left/Right → drive and aim in that direction
     * Button A             → fire (and restart once a match is won)
+
+    A held D-pad direction snaps the tank's heading to that cardinal direction
+    and drives it forward; the gun always points the way the tank last moved.
+    Tanks are solid: neither can drive through the other, so they never overlap.
 
     When a side provides no input for ``AI_TAKEOVER_DELAY`` seconds, an AI takes
     it over so the mode is playable solo and works as an attract loop.  The AI
-    turns toward its opponent, drives forward, and fires when roughly aligned;
-    it is deliberately beatable.
+    steers toward its opponent along the dominant axis and fires when roughly
+    aligned; it is deliberately beatable.
 
     Tanks are told apart on the monochrome panel by shape: the left tank is a
     solid 3x3 block, the right tank a hollow 3x3 ring.
@@ -44,17 +57,18 @@ class Tank:
     MAX_DT = 0.05  # clamp dt to avoid tunneling fast shells
 
     TANK_HALF = 1  # tank is (2*TANK_HALF+1) px square -> 3x3
-    TURN_INTERVAL = 0.11  # seconds per 1/16 turn while held
     THRUST_ACCEL = 28.0  # px/s^2
     FRICTION = 22.0  # px/s^2 deceleration when coasting
     MAX_SPEED = 12.0  # px/s
 
+    AI_STANDOFF = 18.0  # px the AI keeps between itself and its foe
+
     SHELL_SPEED = 22.0  # px/s
-    SHELL_BOUNCES = 3
+    SHELL_BOUNCES = 1  # one ricochet, then the shell expires (tight arena)
     FIRE_COOLDOWN = 0.6  # seconds between a tank's shots
     MAX_SHELLS_PER_TANK = 2
 
-    RESPAWN_DELAY = 1.2  # seconds a hit tank stays down
+    RESPAWN_DELAY = 1.2  # seconds both tanks stay down between rounds
     MODE_NAME_TIME = 2.0
     WIN_RESTART_TIME = 8.0
 
@@ -95,9 +109,9 @@ class Tank:
             "vel": 0.0,
             "alive": True,
             "respawn_at": None,
-            "next_turn_at": 0.0,
             "fire_cd_until": 0.0,
-            "intent": {"turning": 0, "thrusting": 0},
+            "ai_strafe": 1,  # AI sidestep direction when its shot is walled off
+            "intent": {"move": (0, 0)},
             "last_input_time": None,
             "side": side,
         }
@@ -149,6 +163,23 @@ class Tank:
                 return True
         return False
 
+    def _move_blocked(self, tank: dict, cx: float, cy: float) -> bool:
+        """True if ``tank`` may not occupy ``(cx, cy)``.
+
+        Combines the wall/border test with a tank-vs-tank check so the two
+        tanks can never share any pixel: their 3x3 footprints overlap whenever
+        their centres are within ``2 * TANK_HALF`` on both axes.
+        """
+        if self._tank_blocked(cx, cy):
+            return True
+        other = self.tanks[1 - tank["side"]]
+        if other is tank or not other["alive"]:
+            return False
+        oxi, oyi = int(round(other["pos"][0])), int(round(other["pos"][1]))
+        xi, yi = int(round(cx)), int(round(cy))
+        reach = 2 * self.TANK_HALF
+        return abs(xi - oxi) <= reach and abs(yi - oyi) <= reach
+
     # ------------------------------------------------------------------
     # Input + AI
     # ------------------------------------------------------------------
@@ -158,19 +189,22 @@ class Tank:
             return 0 if side == "left" else 1
         return int(side)
 
-    def set_controller_input(self, side, *, turning: int, thrusting: int) -> None:
+    def set_controller_input(self, side, *, move_x: int, move_y: int) -> None:
         """Set a tank's drive intent from a controller (called every frame).
 
-        ``turning`` and ``thrusting`` are each in ``{-1, 0, 1}``.  The AI
-        takeover timer only resets while there is actual input, so an idle
-        controller still hands the tank to the AI after the delay.
+        ``move_x`` and ``move_y`` are each in ``{-1, 0, 1}`` (y points down).
+        Movement is restricted to the four cardinal directions, so a diagonal
+        press is resolved to the horizontal axis.  The AI takeover timer only
+        resets while there is actual input, so an idle controller still hands
+        the tank to the AI after the delay.
         """
+        mx = int(max(-1, min(1, move_x)))
+        my = int(max(-1, min(1, move_y)))
+        if mx != 0:
+            my = 0  # keep movement to a single cardinal direction
         tank = self.tanks[self._side_index(side)]
-        tank["intent"] = {
-            "turning": int(max(-1, min(1, turning))),
-            "thrusting": int(max(-1, min(1, thrusting))),
-        }
-        if turning or thrusting:
+        tank["intent"] = {"move": (mx, my)}
+        if mx or my:
             tank["last_input_time"] = time.time()
 
     def fire(self, side, now: float | None = None) -> None:
@@ -191,20 +225,62 @@ class Tank:
         )
 
     def _ai_intent(self, idx: int, now: float) -> dict:
-        """Beatable AI: turn toward the opponent, drive in, fire when aligned."""
+        """Beatable AI: line up on the opponent's row/column, then hold range.
+
+        The AI closes the gap on the axis it is *nearest* aligned on (so it
+        ends up sharing a row or column with its foe) while keeping at least
+        ``AI_STANDOFF`` pixels on the firing axis, so it no longer drives
+        straight in and overlaps the opponent.
+        """
         tank = self.tanks[idx]
         foe = self.tanks[1 - idx]
         if not foe["alive"]:
-            return {"turning": 0, "thrusting": 0}
-        want = self._heading_to(tank["pos"], foe["pos"])
-        diff = (want - tank["heading"] + HEADINGS // 2) % HEADINGS - HEADINGS // 2
-        turning = 1 if diff > 0 else (-1 if diff < 0 else 0)
-        dist = math.hypot(foe["pos"][0] - tank["pos"][0], foe["pos"][1] - tank["pos"][1])
-        thrusting = 1 if dist > 6 else 0
-        # Fire when roughly aligned; small random hold keeps the AI beatable.
-        if abs(diff) <= 1 and self.rng.random() < 0.25:
-            self._spawn_shell(idx, now)
-        return {"turning": turning, "thrusting": thrusting}
+            return {"move": (0, 0)}
+        dx = foe["pos"][0] - tank["pos"][0]
+        dy = foe["pos"][1] - tank["pos"][1]
+        adx, ady = abs(dx), abs(dy)
+
+        # Pick the firing axis: the one the foe is further away on. The other
+        # (smaller) offset is what we close to share a row/column.
+        if adx >= ady:
+            face = (1 if dx > 0 else -1, 0)
+            along, perp_offset = adx, ady
+            align_move = (0, 1 if dy > 0 else -1)
+        else:
+            face = (0, 1 if dy > 0 else -1)
+            along, perp_offset = ady, adx
+            align_move = (1 if dx > 0 else -1, 0)
+
+        # Stop advancing early enough that coasting halts at the standoff
+        # rather than ploughing through it into the foe.
+        brake_dist = tank["vel"] ** 2 / (2 * self.FRICTION)
+        if perp_offset > 1:
+            move = align_move  # still getting onto the foe's line
+        elif along - brake_dist > self.AI_STANDOFF:
+            move = face  # aligned but too far -> close to standoff range
+        else:
+            move = (0, 0)  # at range and lined up -> hold and shoot
+
+        # When lined up, aim straight at the foe. Fire on a random hold if the
+        # lane is open; otherwise a wall is between them, so sidestep to hunt
+        # for a clear shot instead of freezing in a stalemate.
+        if perp_offset <= 1:
+            tank["heading"] = _MOVE_HEADINGS[face]
+            tip_x = tank["pos"][0] + face[0] * (self.TANK_HALF + 1)
+            tip_y = tank["pos"][1] + face[1] * (self.TANK_HALF + 1)
+            if self._point_blocked(tip_x, tip_y):
+                strafe = (
+                    (0, tank["ai_strafe"]) if face[1] == 0 else (tank["ai_strafe"], 0)
+                )
+                nx = tank["pos"][0] + strafe[0]
+                ny = tank["pos"][1] + strafe[1]
+                if self._tank_blocked(nx, ny):  # wall ahead -> reverse the sidestep
+                    tank["ai_strafe"] = -tank["ai_strafe"]
+                    strafe = (-strafe[0], -strafe[1])
+                move = strafe
+            elif self.rng.random() < 0.25:
+                self._spawn_shell(idx, now)
+        return {"move": move}
 
     # ------------------------------------------------------------------
     # Core update
@@ -231,34 +307,27 @@ class Tank:
         self._update_shells(now, dt)
 
     def _drive_tank(self, tank: dict, intent: dict, now: float, dt: float) -> None:
-        turning = intent["turning"]
-        if turning == 0:
-            tank["next_turn_at"] = 0.0
-        elif now >= tank["next_turn_at"]:
-            tank["heading"] = (tank["heading"] + turning) % HEADINGS
-            tank["next_turn_at"] = now + self.TURN_INTERVAL
-
-        thrust = intent["thrusting"]
-        if thrust != 0:
-            tank["vel"] += thrust * self.THRUST_ACCEL * dt
-        elif tank["vel"] > 0:
+        move = intent["move"]
+        if move != (0, 0):
+            # Snap heading to the pressed cardinal direction and drive forward.
+            tank["heading"] = _MOVE_HEADINGS[move]
+            tank["vel"] += self.THRUST_ACCEL * dt
+        else:
             tank["vel"] = max(0.0, tank["vel"] - self.FRICTION * dt)
-        elif tank["vel"] < 0:
-            tank["vel"] = min(0.0, tank["vel"] + self.FRICTION * dt)
-        tank["vel"] = max(-self.MAX_SPEED, min(self.MAX_SPEED, tank["vel"]))
+        tank["vel"] = min(self.MAX_SPEED, tank["vel"])
 
         dx, dy = _HEADING_VECS[tank["heading"]]
         x, y = tank["pos"]
         nx, ny = x + dx * tank["vel"] * dt, y + dy * tank["vel"] * dt
         moved = False
-        if not self._tank_blocked(nx, ny):
+        if not self._move_blocked(tank, nx, ny):
             tank["pos"] = [nx, ny]
             moved = True
         else:  # try sliding along one axis before giving up
-            if not self._tank_blocked(nx, y):
+            if not self._move_blocked(tank, nx, y):
                 tank["pos"] = [nx, y]
                 moved = True
-            elif not self._tank_blocked(x, ny):
+            elif not self._move_blocked(tank, x, ny):
                 tank["pos"] = [x, ny]
                 moved = True
         if not moved:
@@ -311,7 +380,10 @@ class Tank:
             shell["pos"] = [nx, ny]
             shell["vel"] = [vx, vy]
             if self._resolve_hit(shell, now):
-                continue
+                # A hit ends the round and resets both tanks, so drop every
+                # remaining shell rather than carrying it into the next round.
+                self.shells = []
+                return
             survivors.append(shell)
         self.shells = survivors
 
@@ -329,11 +401,14 @@ class Tank:
     def _register_hit(self, shooter: int, victim: int, now: float) -> None:
         self.score[shooter] += 1
         vtank = self.tanks[victim]
-        vtank["alive"] = False
-        vtank["respawn_at"] = now + self.RESPAWN_DELAY
         self.fx.append(
             {"x": vtank["pos"][0], "y": vtank["pos"][1], "start": now, "until": now + 0.5}
         )
+        # A scored point ends the round: both tanks go down briefly and respawn
+        # at their starting positions (the caller clears any in-flight shells).
+        for tank in self.tanks:
+            tank["alive"] = False
+            tank["respawn_at"] = now + self.RESPAWN_DELAY
         if self.score[shooter] >= self.WIN_SCORE:
             self.winner = shooter
             self.win_time = now
