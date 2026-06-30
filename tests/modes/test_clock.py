@@ -115,14 +115,49 @@ def test_update_settings_validates_style(monkeypatch):
     clock_module = _load_clock_module(monkeypatch)
     clock = clock_module.Clock(width=28, height=28)
 
-    assert clock.get_settings() == {"style": "digital"}
+    assert clock.get_settings() == {"style": "digital", "seconds": False}
 
-    assert clock.update_settings(style="analog") == {"style": "analog"}
+    assert clock.update_settings(style="analog") == {"style": "analog", "seconds": False}
     assert clock.style == "analog"
 
     # Unknown styles are ignored, leaving the previous value intact.
-    assert clock.update_settings(style="bogus") == {"style": "analog"}
+    assert clock.update_settings(style="bogus") == {"style": "analog", "seconds": False}
     assert clock.style == "analog"
+
+
+def test_update_settings_toggles_second_hand(monkeypatch):
+    clock_module = _load_clock_module(monkeypatch)
+    clock = clock_module.Clock(width=28, height=28)
+
+    assert clock.seconds is False
+    assert clock.update_settings(style="analog", seconds=True) == {
+        "style": "analog",
+        "seconds": True,
+    }
+    assert clock.seconds is True
+
+    # Omitting ``seconds`` leaves the toggle untouched.
+    assert clock.update_settings(style="digital")["seconds"] is True
+    assert clock.update_settings(style="digital", seconds=False)["seconds"] is False
+
+
+def test_second_hand_only_rendered_when_enabled(monkeypatch):
+    clock_module = _load_clock_module(monkeypatch)
+    monkeypatch.setattr(clock_module, "datetime", FakeNoonDateTime)
+    monkeypatch.setattr(clock_module.Clock, "get_weather", lambda self: None)
+
+    clock = clock_module.Clock(width=28, height=28)
+    clock.update_settings(style="analog")
+    clock.update_frame()
+    without_seconds = clock.frame.copy()
+
+    clock.update_settings(style="analog", seconds=True)
+    clock.update_frame()
+    with_seconds = clock.frame.copy()
+
+    # At 12:00:30 the second hand sweeps straight down, carving dark pixels the
+    # second-less face leaves white in the lower half of the dial.
+    assert int(without_seconds.sum()) > int(with_seconds.sum())
 
 
 def test_analog_render_lights_pixels(monkeypatch):
@@ -153,6 +188,7 @@ class FakeNoonDateTime:
         class Now:
             hour = 12
             minute = 0
+            second = 30
 
             @staticmethod
             def strftime(fmt):

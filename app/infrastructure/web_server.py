@@ -227,6 +227,7 @@ class SleepSettingsPayload(BaseModel):
 
 class ClockSettingsPayload(BaseModel):
     style: Literal["digital", "analog"] = "digital"
+    seconds: bool = False
 
 
 class ScriptInterludePayload(BaseModel):
@@ -766,8 +767,10 @@ class WebServer:
         @self._app.post("/api/settings/clock")
         def post_clock_settings(payload: ClockSettingsPayload) -> JSONResponse:
             clock = self._require_clock()
-            settings = clock.update_settings(style=payload.style)
-            self._settings_store.save_clock_settings(style=str(settings["style"]))
+            settings = clock.update_settings(style=payload.style, seconds=payload.seconds)
+            self._settings_store.save_clock_settings(
+                style=str(settings["style"]), seconds=bool(settings["seconds"])
+            )
             return JSONResponse({"status": "ok", **settings})
 
         @self._app.get("/api/settings/font-preview")
@@ -1115,7 +1118,9 @@ class WebServer:
         self._clock = clock
         persisted = self._settings_store.load_clock_settings()
         if persisted is not None:
-            clock.update_settings(style=str(persisted["style"]))
+            clock.update_settings(
+                style=str(persisted["style"]), seconds=bool(persisted.get("seconds", False))
+            )
 
     def attach_font_preview(self, font_preview) -> None:
         self._font_preview = font_preview

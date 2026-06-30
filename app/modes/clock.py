@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 
 from app.modes.contracts import Frame
-from app.services.draw import draw_line, fill_circle
+from app.services.draw import draw_line, fill_circle, thick_line
 from app.services.text import write, write_centered
 from app.services.weather import get_weather_forecast
 
@@ -33,19 +33,29 @@ class Clock:
         self.last_frame_update = time.time() - Clock.CLOCK_INTERVAL
         self.weather: dict[str, Any] | None = None
         self.style = Clock.STYLE_DIGITAL
+        self.seconds = False
         self.frame = np.zeros((height, width), dtype=np.uint8)
 
     def get_settings(self) -> dict[str, Any]:
         """Return the current clock settings for the web UI."""
-        return {"style": self.style}
+        return {"style": self.style, "seconds": self.seconds}
 
-    def update_settings(self, *, style: str) -> dict[str, Any]:
-        """Update the clock face style, ignoring unknown values; return the result."""
-        if style in Clock.STYLES:
-            if style != self.style:
-                self.style = style
-                # Force a re-render on the next get_frame so the change is immediate.
-                self.last_frame_update = time.time() - Clock.CLOCK_INTERVAL
+    def update_settings(self, *, style: str, seconds: bool | None = None) -> dict[str, Any]:
+        """Update the clock face style and second-hand toggle; return the result.
+
+        Unknown ``style`` values are ignored. ``seconds`` only affects the analog
+        face but is stored regardless so the toggle persists across face changes.
+        """
+        changed = False
+        if style in Clock.STYLES and style != self.style:
+            self.style = style
+            changed = True
+        if seconds is not None and bool(seconds) != self.seconds:
+            self.seconds = bool(seconds)
+            changed = True
+        if changed:
+            # Force a re-render on the next get_frame so the change is immediate.
+            self.last_frame_update = time.time() - Clock.CLOCK_INTERVAL
         return self.get_settings()
 
     def get_weather(self) -> dict[str, Any] | None:
@@ -134,17 +144,31 @@ class Clock:
         minute_angle = math.radians(now.minute * 6)
         hour_angle = math.radians((now.hour % 12) * 30 + now.minute * 0.5)
         minute_len = radius - 1
-        hour_len = radius * 0.55
-        # Both hands are a single pixel wide; the hour hand is just shorter.
+        hour_len = radius * 0.7
+        # The minute hand is a single pixel wide; the hour hand is shorter and
+        # 3px wide so it reads as the bolder of the two.
         draw_line(
             self.frame,
             (cx, cy),
             (cx + minute_len * math.sin(minute_angle), cy - minute_len * math.cos(minute_angle)),
             color=0,
         )
-        draw_line(
+        thick_line(
             self.frame,
             (cx, cy),
             (cx + hour_len * math.sin(hour_angle), cy - hour_len * math.cos(hour_angle)),
+            width=3,
             color=0,
         )
+
+        # Optional second hand: a 1px black stroke reaching the rim, drawn last so
+        # it sweeps over the hour and minute hands.
+        if self.seconds:
+            second_angle = math.radians(now.second * 6)
+            second_len = radius
+            draw_line(
+                self.frame,
+                (cx, cy),
+                (cx + second_len * math.sin(second_angle), cy - second_len * math.cos(second_angle)),
+                color=0,
+            )

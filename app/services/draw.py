@@ -84,27 +84,46 @@ def thick_line(
 ) -> None:
     """Draw a gap-free line from ``p0`` to ``p1`` with the given pixel ``width``.
 
-    Built from parallel :func:`draw_line` passes offset perpendicular to the
-    segment, so it stays gap-free at any angle. An odd ``width`` includes the
-    exact centerline; an even ``width`` straddles it.
+    Fills the oriented rectangle of the segment: a pixel is lit when its
+    perpendicular distance to the centerline is within ``width / 2`` *and* its
+    projection along the segment falls between the endpoints. This is gap-free at
+    any angle and has flat (square) caps — unlike offsetting parallel Bresenham
+    passes, which interleave into a checkerboard on diagonals.
     """
-    strokes = max(int(round(width)), 1)
-    if strokes <= 1:
+    if width <= 1.0:
         draw_line(frame, p0, p1, color=color)
         return
 
     x0, y0 = p0
     x1, y1 = p1
-    length = math.hypot(x1 - x0, y1 - y0) or 1.0
-    # Unit vector perpendicular to the segment.
-    px = -(y1 - y0) / length
-    py = (x1 - x0) / length
-    half = (strokes - 1) / 2.0
-    for i in range(strokes):
-        offset = i - half
-        draw_line(
-            frame,
-            (x0 + px * offset, y0 + py * offset),
-            (x1 + px * offset, y1 + py * offset),
-            color=color,
-        )
+    length = math.hypot(x1 - x0, y1 - y0)
+    if length == 0.0:
+        draw_line(frame, p0, p1, color=color)
+        return
+
+    value = 0 if int(color) == 0 else 1
+    radius = width / 2.0
+    height, width_px = frame.shape
+
+    # Unit vectors along the segment and perpendicular to it.
+    ux = (x1 - x0) / length
+    uy = (y1 - y0) / length
+    px, py = -uy, ux
+
+    # Bounding box of the segment, expanded by the half-width.
+    xlo = max(int(math.floor(min(x0, x1) - radius)), 0)
+    xhi = min(int(math.ceil(max(x0, x1) + radius)), width_px - 1)
+    ylo = max(int(math.floor(min(y0, y1) - radius)), 0)
+    yhi = min(int(math.ceil(max(y0, y1) + radius)), height - 1)
+    if xlo > xhi or ylo > yhi:
+        return
+
+    ys = np.arange(ylo, yhi + 1).reshape(-1, 1)
+    xs = np.arange(xlo, xhi + 1).reshape(1, -1)
+    dx = xs - x0
+    dy = ys - y0
+    along = dx * ux + dy * uy
+    perp = dx * px + dy * py
+    eps = 1e-9
+    mask = (np.abs(perp) <= radius) & (along >= -eps) & (along <= length + eps)
+    frame[ylo : yhi + 1, xlo : xhi + 1][mask] = value

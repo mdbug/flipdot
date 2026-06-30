@@ -9,6 +9,7 @@ const settingsToggle = document.getElementById("settingsToggle");
 const sleepSettings = document.getElementById("sleepSettings");
 const clockSettings = document.getElementById("clockSettings");
 const clockDisplayStyle = document.getElementById("clockDisplayStyle");
+const clockSeconds = document.getElementById("clockSeconds");
 const clockSettingsStatus = document.getElementById("clockSettingsStatus");
 const fontPreviewSettings = document.getElementById("fontPreviewSettings");
 const sleepEnabled = document.getElementById("sleepEnabled");
@@ -1057,6 +1058,9 @@ async function loadClockSettings() {
   try {
     const payload = await getJson("/api/settings/clock");
     clockDisplayStyle.value = payload.style === "analog" ? "analog" : "digital";
+    if (clockSeconds) {
+      clockSeconds.checked = Boolean(payload.seconds);
+    }
     setClockSettingsStatus("Clock settings loaded.", "ok");
   } catch (_err) {
     setClockSettingsStatus("Clock settings unavailable.", "error");
@@ -1070,6 +1074,7 @@ async function saveClockSettings() {
   }
   const payload = {
     style: clockDisplayStyle.value === "analog" ? "analog" : "digital",
+    seconds: clockSeconds ? clockSeconds.checked : false,
   };
   const response = await postJson("/api/settings/clock", payload);
   if (!response || !response.ok) {
@@ -1079,6 +1084,9 @@ async function saveClockSettings() {
   try {
     const saved = await response.json();
     clockDisplayStyle.value = saved.style === "analog" ? "analog" : "digital";
+    if (clockSeconds) {
+      clockSeconds.checked = Boolean(saved.seconds);
+    }
   } catch (_err) {
     // Keep the optimistic value if the response body is unreadable.
   }
@@ -2011,6 +2019,12 @@ sleepEndHour.addEventListener("change", () => {
 
 if (clockDisplayStyle) {
   clockDisplayStyle.addEventListener("change", () => {
+    saveClockSettings();
+  });
+}
+
+if (clockSeconds) {
+  clockSeconds.addEventListener("change", () => {
     saveClockSettings();
   });
 }

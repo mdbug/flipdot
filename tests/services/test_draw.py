@@ -89,3 +89,14 @@ def test_thick_line_width_three_includes_centerline():
         assert frame[i, i] == 1
     # A thicker stroke lights more pixels than the bare 1px centerline.
     assert int(frame.sum()) > 10
+
+
+def test_thick_line_diagonal_is_gap_free():
+    # A 45-degree stroke used to interleave into a checkerboard; assert the
+    # lit pixels in each interior row form one contiguous run (no holes).
+    frame = np.zeros((20, 20), dtype=np.uint8)
+    thick_line(frame, (2, 2), (17, 17), width=3)
+    for row in frame:
+        cols = np.flatnonzero(row)
+        if cols.size:
+            assert cols[-1] - cols[0] + 1 == cols.size, "gap in thick diagonal row"

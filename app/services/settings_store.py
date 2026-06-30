@@ -40,8 +40,8 @@ class RuntimeSettingsStore:
         }
         self._save_section("sleep", clamped)
 
-    def load_clock_settings(self) -> dict[str, str] | None:
-        """Return the persisted clock face style, or None if unset/invalid."""
+    def load_clock_settings(self) -> dict[str, object] | None:
+        """Return the persisted clock face style and second-hand toggle, or None."""
         payload = self._load_payload()
         if payload is None:
             return None
@@ -53,13 +53,13 @@ class RuntimeSettingsStore:
         style = clock_payload.get("style", "digital")
         if style not in ("digital", "analog"):
             style = "digital"
-        return {"style": style}
+        return {"style": style, "seconds": bool(clock_payload.get("seconds", False))}
 
-    def save_clock_settings(self, *, style: str) -> None:
-        """Persist the clock face style, defaulting unknown values to ``digital``."""
+    def save_clock_settings(self, *, style: str, seconds: bool = False) -> None:
+        """Persist the clock face style and second-hand toggle, defaulting unknown styles."""
         if style not in ("digital", "analog"):
             style = "digital"
-        self._save_section("clock", {"style": style})
+        self._save_section("clock", {"style": style, "seconds": bool(seconds)})
 
     def load_font_preview_settings(self) -> dict[str, object] | None:
         """Return persisted font-preview settings, or None if unset/invalid."""
