@@ -19,23 +19,7 @@ const chartEls = {
 };
 
 const COLORS = ["#2ab7a9", "#ef6b55", "#7fb069", "#e2bf52"];
-const BUTTONS = [
-  "A",
-  "B",
-  "X",
-  "Y",
-  "L1",
-  "R1",
-  "L2",
-  "R2",
-  "Start",
-  "Select",
-  "D-Up",
-  "D-Down",
-  "D-Left",
-  "D-Right",
-  "Home",
-];
+const BUTTONS = ["A", "B", "D-Up", "D-Down", "D-Left", "D-Right"];
 const charts = {};
 const MIN_WINDOW_SEC = 10;
 const WHEEL_ZOOM_FACTOR = 1.2;
@@ -643,6 +627,13 @@ function renderButtonChart(metrics) {
     min: -0.5,
     max: BUTTONS.length + 0.5,
     grid: { color: "#343841" },
+    // Pin ticks to integer rows so each one indexes BUTTONS exactly. With the
+    // padded -0.5/+0.5 bounds, Chart.js would otherwise place ticks at
+    // half-integer values, where BUTTONS[value] is undefined and every label
+    // collapses to "Other".
+    afterBuildTicks: (axis) => {
+      axis.ticks = Array.from({ length: BUTTONS.length + 1 }, (_, value) => ({ value }));
+    },
     ticks: {
       color: "#a8adb7",
       stepSize: 1,
