@@ -1,0 +1,9 @@
+# Disable the Jetson's onboard Realtek Bluetooth radio (USB 13d3:3549).
+#
+# The controllers are driven by an external TP-Link UB500 Plus dongle (RTL8761B)
+# whose external antenna gives ~17 dB better RSSI than the enclosure-buried
+# onboard radio. Deauthorizing the onboard device at boot leaves the dongle as
+# the sole Bluetooth adapter (hci0), which avoids two-radio contention and keeps
+# the management-socket / btmgmt metrics on the default index. Remove this file
+# to restore the onboard radio.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="13d3", ATTR{idProduct}=="3549", ATTR{authorized}="0"

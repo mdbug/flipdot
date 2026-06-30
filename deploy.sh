@@ -90,6 +90,13 @@ if ! sudo cmp -s "${REMOTE_DIR}/ops/logrotate/flipdot" /etc/logrotate.d/flipdot;
   sudo install -m 644 "${REMOTE_DIR}/ops/logrotate/flipdot" /etc/logrotate.d/flipdot
 fi
 
+# Disable the onboard Bluetooth radio so the external UB500 Plus dongle is the
+# sole adapter (better antenna; avoids two-radio contention).
+if ! sudo cmp -s "${REMOTE_DIR}/ops/udev/99-flipdot-disable-onboard-bt.rules" /etc/udev/rules.d/99-flipdot-disable-onboard-bt.rules; then
+  sudo install -m 644 "${REMOTE_DIR}/ops/udev/99-flipdot-disable-onboard-bt.rules" /etc/udev/rules.d/99-flipdot-disable-onboard-bt.rules
+  sudo udevadm control --reload
+fi
+
 if [[ "${daemon_reload_needed}" == "true" ]]; then
   sudo systemctl daemon-reload
 fi
