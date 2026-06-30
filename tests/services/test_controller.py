@@ -460,3 +460,63 @@ def test_btmgmt_link_metrics_returns_none_when_all_address_types_fail(monkeypatc
 
     assert metrics["rssi_dbm"] is None
     assert metrics["signal_source"] == "btmgmt"
+
+
+def test_find_connection_handle_parses_hcitool_con(monkeypatch):
+    hub = ControllerHub(evdev_module=FakeEvdev({}), auto_start=False)
+    out = "Connections:\n\t< LE 95:C2:BE:6D:6B:AC handle 16 state 1 lm CENTRAL\n"
+    monkeypatch.setattr(
+        "app.services.controller.subprocess.run",
+        lambda *a, **k: _ConnInfoResult(0, out),
+    )
+
+    assert hub._find_connection_handle("95:C2:BE:6D:6B:AC") == 16
+    assert hub._find_connection_handle("AA:BB:CC:DD:EE:FF") is None
+
+
+def test_apply_connection_params_issues_lecup_with_converted_units(monkeypatch):
+    hub = ControllerHub(
+        evdev_module=FakeEvdev({}),
+        auto_start=False,
+        connection_supervision_timeout_ms=2000.0,
+        connection_min_interval_ms=15.0,
+        connection_max_interval_ms=30.0,
+    )
+    calls = []
+    con_out = "\t< LE 95:C2:BE:6D:6B:AC handle 16 state 1 lm CENTRAL\n"
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if args[:2] == ["hcitool", "con"]:
+            return _ConnInfoResult(0, con_out)
+        return _ConnInfoResult(0, "")  # lecup success
+
+    monkeypatch.setattr("app.services.controller.subprocess.run", fake_run)
+
+    assert hub._apply_connection_params("95:C2:BE:6D:6B:AC") is True
+    lecup = next(c for c in calls if c[:2] == ["hcitool", "lecup"])
+    # 15ms/1.25=12, 30ms/1.25=24, 2000ms/10=200, latency default 0.
+    assert lecup == [
+        "hcitool",
+        "lecup",
+        "--handle",
+        "16",
+        "--min",
+        "12",
+        "--max",
+        "24",
+        "--latency",
+        "0",
+        "--timeout",
+        "200",
+    ]
+
+
+def test_apply_connection_params_returns_false_when_handle_missing(monkeypatch):
+    hub = ControllerHub(evdev_module=FakeEvdev({}), auto_start=False)
+    monkeypatch.setattr(
+        "app.services.controller.subprocess.run",
+        lambda *a, **k: _ConnInfoResult(0, "Connections:\n"),
+    )
+
+    assert hub._apply_connection_params("95:C2:BE:6D:6B:AC") is False

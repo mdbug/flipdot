@@ -37,6 +37,13 @@ PAINT_CLEAR_HOLD_SEC = 1.0
 PRIMARY_CONTROLLER_ADDRESS = os.getenv("PRIMARY_CONTROLLER_ADDRESS", "AA:BB:CC:DD:EE:02")
 PRIMARY_CONTROLLER_NAME = os.getenv("PRIMARY_CONTROLLER_NAME", "IINE_keyboard")
 SECONDARY_CONTROLLER_ADDRESS = os.getenv("SECONDARY_CONTROLLER_ADDRESS", "AA:BB:CC:DD:EE:03")
+# BLE connection params requested after each controller connects (see
+# ControllerHub). A longer supervision timeout lets weak controllers ride
+# through brief signal fades instead of dropping; set the timeout to 0 to
+# disable the LE Connection Update entirely.
+CONTROLLER_SUPERVISION_TIMEOUT_MS = float(os.getenv("CONTROLLER_SUPERVISION_TIMEOUT_MS", "2000"))
+CONTROLLER_CONN_MIN_INTERVAL_MS = float(os.getenv("CONTROLLER_CONN_MIN_INTERVAL_MS", "15"))
+CONTROLLER_CONN_MAX_INTERVAL_MS = float(os.getenv("CONTROLLER_CONN_MAX_INTERVAL_MS", "30"))
 
 # Modes that are fully driven by the controller UI and never render pose.
 # When the controller is the active control source, pose inference can be
@@ -145,11 +152,20 @@ def main() -> None:
     panel = Panel(preview=preview)
     fps_tracker = FPSTracker()
     input_hub = InputHub()
+    controller_conn_params = {
+        "connection_supervision_timeout_ms": CONTROLLER_SUPERVISION_TIMEOUT_MS,
+        "connection_min_interval_ms": CONTROLLER_CONN_MIN_INTERVAL_MS,
+        "connection_max_interval_ms": CONTROLLER_CONN_MAX_INTERVAL_MS,
+    }
     primary_controller_hub = ControllerHub(
         target_address=PRIMARY_CONTROLLER_ADDRESS,
         target_name_hint=PRIMARY_CONTROLLER_NAME,
+        **controller_conn_params,
     )
-    secondary_controller_hub = ControllerHub(target_address=SECONDARY_CONTROLLER_ADDRESS)
+    secondary_controller_hub = ControllerHub(
+        target_address=SECONDARY_CONTROLLER_ADDRESS,
+        **controller_conn_params,
+    )
     controller_bridge = ControllerInputBridge()
     web_server = None
     web_server_start_pending = enable_web_ui

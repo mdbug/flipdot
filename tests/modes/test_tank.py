@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 
 from app.core.mode_manager import ModeManager
-from app.modes.tank import HEADINGS, Tank
 from app.modes.contracts import ModeRegistry, RenderContext
+from app.modes.tank import HEADINGS, Tank
 
 
 @pytest.fixture
@@ -47,7 +47,6 @@ def test_wall_blocks_movement(tank):
     t = tank.tanks[0]
     t["pos"] = [float(c0 - 2), float((r0 + r1) / 2)]
     t["heading"] = 0  # +x, toward the wall
-    blocked_x = t["pos"][0]
     now = 2000.0
     for _ in range(40):
         now += 0.05
@@ -69,9 +68,7 @@ def test_shell_hits_opponent_and_scores(tank):
     for t in tank.tanks:
         t["last_input_time"] = now  # idle controller -> AI stays off, tanks hold still
     # A shell two pixels right of the victim, moving left into it.
-    tank.shells = [
-        {"pos": [8.0, 24.0], "vel": [-tank.SHELL_SPEED, 0.0], "bounces": 3, "owner": 1}
-    ]
+    tank.shells = [{"pos": [8.0, 24.0], "vel": [-tank.SHELL_SPEED, 0.0], "bounces": 3, "owner": 1}]
     tank._update_match(now, 0.05)
     assert tank.score[1] == 1
     assert victim["alive"] is False
@@ -83,9 +80,7 @@ def test_shell_bounces_then_expires(tank):
     for t in tank.tanks:
         t["last_input_time"] = now  # idle controller -> AI never fires its own shells
     # Aim a shell straight at the left border so it keeps reflecting in place.
-    tank.shells = [
-        {"pos": [1.0, 24.0], "vel": [-tank.SHELL_SPEED, 0.0], "bounces": 1, "owner": 0}
-    ]
+    tank.shells = [{"pos": [1.0, 24.0], "vel": [-tank.SHELL_SPEED, 0.0], "bounces": 1, "owner": 0}]
     # First reflection: heading flips, one bounce consumed.
     tank._update_match(now, 0.05)
     assert len(tank.shells) == 1

@@ -90,7 +90,7 @@ mypy is gradual (`disallow_untyped_defs=false`) and checks the `app` package. `p
 - **Config via `.env`** (loaded by `python-dotenv`). Common keys:
   - Core: `CAMERA_INDEX`, `PREVIEW`, `DEBUG`, `LOG_LEVEL`, `SLEEP_HOUR_START`/`SLEEP_HOUR_END`, `FOCAL_SCALE`.
   - Web/AI: `ENABLE_WEB_UI`, `WEB_UI_HOST`, `WEB_UI_PORT`, `WEB_UI_ALLOWED_ORIGINS`, `ENABLE_MCP`, `MCP_AUTH_TOKEN`, `MCP_ALLOWED_HOSTS`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`.
-  - Controllers: `PRIMARY_CONTROLLER_ADDRESS`/`PRIMARY_CONTROLLER_NAME`, `SECONDARY_CONTROLLER_ADDRESS`.
+  - Controllers: `PRIMARY_CONTROLLER_ADDRESS`/`PRIMARY_CONTROLLER_NAME`, `SECONDARY_CONTROLLER_ADDRESS`. BLE link tuning applied after each connect: `CONTROLLER_SUPERVISION_TIMEOUT_MS` (default 2000; 0 disables the LE Connection Update), `CONTROLLER_CONN_MIN_INTERVAL_MS`/`CONTROLLER_CONN_MAX_INTERVAL_MS` (default 15/30) — a longer supervision timeout lets weak controllers ride through brief signal fades instead of dropping.
   - Integrations: `OPENWEATHER_API_KEY` (weather), `API_FOOTBALL_API_KEY` (worldcup), `PIXELLAB_API_KEY`/`FAL_API_KEY`/`OPENAI_API_KEY` (image generation).
   - Sandbox/models: `SANDBOX_MEM_MB`, `SANDBOX_CPU_SECONDS`, `SANDBOX_NPROC`, `SANDBOX_FRAME_TIMEOUT`, `SANDBOX_STARTUP_TIMEOUT`, `SANDBOX_MAX_SOURCE_BYTES`, `MEDIAPIPE_MODELS_DIR`, `POSE_MODEL`.
   - `DEBUG=true` overlays distance/angle text on the bottom rows; `LOG_LEVEL` controls logging verbosity (default `INFO`, set `DEBUG` for per-second performance logs).

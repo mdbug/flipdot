@@ -223,7 +223,9 @@ class Tank:
                     self.tanks[idx] = self._spawn(idx)
                     self.tanks[idx]["last_input_time"] = tank["last_input_time"]
                 continue
-            intent = tank["intent"] if self._controller_active(tank, now) else self._ai_intent(idx, now)
+            intent = (
+                tank["intent"] if self._controller_active(tank, now) else self._ai_intent(idx, now)
+            )
             self._drive_tank(tank, intent, now, dt)
 
         self._update_shells(now, dt)
@@ -329,7 +331,9 @@ class Tank:
         vtank = self.tanks[victim]
         vtank["alive"] = False
         vtank["respawn_at"] = now + self.RESPAWN_DELAY
-        self.fx.append({"x": vtank["pos"][0], "y": vtank["pos"][1], "start": now, "until": now + 0.5})
+        self.fx.append(
+            {"x": vtank["pos"][0], "y": vtank["pos"][1], "start": now, "until": now + 0.5}
+        )
         if self.score[shooter] >= self.WIN_SCORE:
             self.winner = shooter
             self.win_time = now

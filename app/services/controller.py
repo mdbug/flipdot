@@ -56,6 +56,7 @@ _DISCONNECT_REASON_RE = re.compile(r"reason\s*0x([0-9a-fA-F]{2})", re.IGNORECASE
 _UPOWER_PERCENTAGE_RE = re.compile(r"percentage:\s*([0-9]+(?:\.[0-9]+)?)\s*%", re.IGNORECASE)
 _UPOWER_SERIAL_RE = re.compile(r"serial:\s*([^\n]+)", re.IGNORECASE)
 _UPOWER_NATIVE_PATH_RE = re.compile(r"native-path:\s*([^\n]+)", re.IGNORECASE)
+_HCITOOL_CON_HANDLE_RE = re.compile(r"handle\s+(\d+)", re.IGNORECASE)
 
 
 class ControllerHub:
@@ -71,6 +72,10 @@ class ControllerHub:
         bluetooth_connect_interval_sec: float = 5.0,
         battery_refresh_interval_sec: float = 20.0,
         battery_unknown_retry_interval_sec: float = 2.0,
+        connection_supervision_timeout_ms: float = 2000.0,
+        connection_min_interval_ms: float = 15.0,
+        connection_max_interval_ms: float = 30.0,
+        connection_latency: int = 0,
         auto_start: bool = True,
         evdev_module=_UNSET,
     ) -> None:
@@ -88,10 +93,24 @@ class ControllerHub:
         self._battery_unknown_retry_interval_sec = max(
             0.5, min(float(battery_unknown_retry_interval_sec), self._battery_refresh_interval_sec)
         )
+        # After each connect, request a longer BLE supervision timeout (and a
+        # short interval) via an LE Connection Update so brief signal fades from
+        # weak controllers no longer trip the ~420ms kernel-default timeout and
+        # tear down the link. Set the timeout to 0 to disable. Applied once per
+        # connection (it resets on the peripheral when it reconnects).
+        self._connection_supervision_timeout_ms = max(0.0, float(connection_supervision_timeout_ms))
+        self._connection_min_interval_ms = max(7.5, float(connection_min_interval_ms))
+        self._connection_max_interval_ms = max(
+            self._connection_min_interval_ms, float(connection_max_interval_ms)
+        )
+        self._connection_update_latency = max(0, int(connection_latency))
 
         self._lock = threading.Lock()
         self._enabled = self._evdev is not None
         self._connected = False
+        # Whether the LE connection-parameter update has been applied for the
+        # current connection; reset on disconnect so each reconnect re-applies.
+        self._connection_params_applied = False
         self._device_name = ""
         self._device_path = ""
         self._device_address = self._target_address
@@ -497,6 +516,7 @@ class ControllerHub:
         paths = [str(getattr(device, "path", "") or "") for device in devices if device is not None]
         with self._lock:
             self._connected = True
+            self._connection_params_applied = False
             self._device_name = ", ".join(name for name in names if name)
             self._device_path = ",".join(path for path in paths if path)
             self._device_address = self._extract_device_address(primary)
@@ -536,6 +556,7 @@ class ControllerHub:
 
         with self._lock:
             self._connected = False
+            self._connection_params_applied = False
             self._pressed_buttons.clear()
             self._pressed_buttons_by_device = {}
             self._just_pressed.clear()
@@ -677,8 +698,16 @@ class ControllerHub:
             with self._lock:
                 connected = self._connected
                 address = self._device_address or self._target_address
+                params_applied = self._connection_params_applied
 
             if connected:
+                # Raise the BLE supervision timeout once per connection so weak
+                # controllers ride through brief fades instead of dropping.
+                if not params_applied and self._connection_supervision_timeout_ms > 0:
+                    if self._apply_connection_params(address):
+                        with self._lock:
+                            self._connection_params_applied = True
+
                 battery_poll_start = time.monotonic()
                 percentage, battery_source = self._read_battery_percentage(address)
                 battery_poll_duration_ms = int(
@@ -730,6 +759,94 @@ class ControllerHub:
             # event requests a fresh read.
             if self._battery_wakeup.wait(wait_seconds):
                 self._battery_wakeup.clear()
+
+    def _find_connection_handle(self, address: str) -> int | None:
+        """Return the active connection handle for ``address`` via ``hcitool con``."""
+        if not address:
+            return None
+        try:
+            result = subprocess.run(
+                ["hcitool", "con"],
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+                check=False,
+            )
+        except Exception:
+            return None
+        if result.returncode != 0:
+            return None
+
+        normalized = self._normalize_address(address)
+        for line in (result.stdout or "").splitlines():
+            if normalized not in self._normalize_address(line):
+                continue
+            match = _HCITOOL_CON_HANDLE_RE.search(line)
+            if match is not None:
+                try:
+                    return int(match.group(1))
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    def _apply_connection_params(self, address: str) -> bool:
+        """Request a longer BLE supervision timeout for ``address``'s connection.
+
+        Sends an LE Connection Update (``hcitool lecup``) so the link tolerates
+        brief signal fades instead of dropping at the kernel-default ~420ms.
+        Requires CAP_NET_ADMIN. Returns True when the update was issued.
+        """
+        handle = self._find_connection_handle(address)
+        if handle is None:
+            return False
+
+        # hcitool units: intervals are multiples of 1.25ms, timeout of 10ms.
+        min_units = max(6, round(self._connection_min_interval_ms / 1.25))
+        max_units = max(min_units, round(self._connection_max_interval_ms / 1.25))
+        timeout_units = max(10, round(self._connection_supervision_timeout_ms / 10))
+        try:
+            result = subprocess.run(
+                [
+                    "hcitool",
+                    "lecup",
+                    "--handle",
+                    str(handle),
+                    "--min",
+                    str(min_units),
+                    "--max",
+                    str(max_units),
+                    "--latency",
+                    str(self._connection_update_latency),
+                    "--timeout",
+                    str(timeout_units),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+                check=False,
+            )
+        except Exception as exc:
+            logger.debug("LE connection update failed: address=%s error=%s", address, exc)
+            return False
+
+        if result.returncode != 0:
+            logger.debug(
+                "LE connection update rejected: address=%s rc=%s output=%s",
+                address,
+                result.returncode,
+                (result.stderr or result.stdout).strip(),
+            )
+            return False
+
+        logger.info(
+            "Applied LE connection params: address=%s interval=%.1f-%.1fms latency=%d supervision=%dms",
+            address,
+            self._connection_min_interval_ms,
+            self._connection_max_interval_ms,
+            self._connection_update_latency,
+            int(self._connection_supervision_timeout_ms),
+        )
+        return True
 
     def _read_bluetooth_battery_percentage(self, address: str) -> int | None:
         output = self._read_bluetoothctl_info(address)
