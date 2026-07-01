@@ -865,9 +865,17 @@ class WebServer:
                 async with self._chat_lock:
                     new_session = self._chat_session_id is None
                     self._chat_messages.append({"role": "user", "content": message})
+                    turn_usage: dict | None = None
                     async for event in chat_backend.run_chat(
                         self._mcp, self._chat_messages, model=payload.model
                     ):
+                        # Snatch this turn's token/cost totals off the stream so we
+                        # can fold them into the persisted session total below.
+                        if '"type": "usage"' in event:
+                            try:
+                                turn_usage = json.loads(event)
+                            except json.JSONDecodeError:
+                                turn_usage = None
                         yield event
 
                     # Only persist once the assistant has actually replied; a turn
@@ -883,6 +891,7 @@ class WebServer:
                         messages=chat_backend.serialize_messages(self._chat_messages),
                         title=message if new_session else None,
                         model=payload.model,
+                        usage=turn_usage,
                     )
                     yield (
                         json.dumps(

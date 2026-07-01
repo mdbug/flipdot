@@ -13,6 +13,7 @@ const chatEmpty = document.getElementById("chatEmpty");
 const chatModel = document.getElementById("chatModel");
 const chatCount = document.getElementById("chatCount");
 const chatTitle = document.getElementById("chatTitle");
+const chatUsageTotal = document.getElementById("chatUsageTotal");
 const chatNew = document.getElementById("chatNew");
 const sessionList = document.getElementById("sessionList");
 const sessionEmpty = document.getElementById("sessionEmpty");
@@ -52,7 +53,9 @@ function updateEmptyState() {
 /** Remove every rendered message/tool/thinking node, leaving the empty state. */
 function clearLog() {
   chatLog
-    .querySelectorAll(".chat-bubble, .chat-tool, .chat-thinking, .chat-thinking-block")
+    .querySelectorAll(
+      ".chat-bubble, .chat-tool, .chat-thinking, .chat-thinking-block, .chat-usage",
+    )
     .forEach((el) => el.remove());
   lastToolPill = null;
   thinkingEl = null;
@@ -261,6 +264,63 @@ function addTool(name, input) {
   scrollToBottom();
 }
 
+// --- Token usage & cost ------------------------------------------------------
+
+/**
+ * Format a token count compactly (e.g. 1234 -> "1.2k", 950 -> "950").
+ * @param {number} n - Token count.
+ * @returns {string} Compact count.
+ */
+function formatTokens(n) {
+  const value = Number(n) || 0;
+  if (value < 1000) return String(value);
+  return `${(value / 1000).toFixed(value < 10000 ? 1 : 0)}k`;
+}
+
+/**
+ * Build a human summary of a usage record (tokens + optional estimated cost).
+ * @param {Object} usage - {input, output, cache_write, cache_read, cost}.
+ * @returns {string} e.g. "1.2k in · 340 out · 3.1k cached · ~$0.0210".
+ */
+function formatUsage(usage) {
+  if (!usage) return "";
+  const cached = (Number(usage.cache_read) || 0) + (Number(usage.cache_write) || 0);
+  const parts = [`${formatTokens(usage.input)} in`, `${formatTokens(usage.output)} out`];
+  if (cached > 0) parts.push(`${formatTokens(cached)} cached`);
+  if (typeof usage.cost === "number") parts.push(`~$${usage.cost.toFixed(4)}`);
+  return parts.join(" · ");
+}
+
+/**
+ * Append a per-response usage line beneath the latest assistant reply.
+ * @param {Object} usage - The turn's usage record.
+ */
+function addUsageLine(usage) {
+  const text = formatUsage(usage);
+  if (!text) return;
+  const line = document.createElement("div");
+  line.className = "chat-usage";
+  line.textContent = text;
+  chatLog.appendChild(line);
+  scrollToBottom();
+}
+
+/**
+ * Update (or hide) the running session-total badge in the chat bar.
+ * @param {Object|null} usage - The cumulative session usage, or null to hide.
+ */
+function setSessionUsage(usage) {
+  if (!chatUsageTotal) return;
+  const text = formatUsage(usage);
+  if (!text) {
+    chatUsageTotal.textContent = "";
+    chatUsageTotal.classList.add("hidden");
+    return;
+  }
+  chatUsageTotal.textContent = `Σ ${text}`;
+  chatUsageTotal.classList.remove("hidden");
+}
+
 // --- Session history rendering ----------------------------------------------
 
 /**
@@ -413,6 +473,7 @@ async function selectSession(id) {
     currentSessionId = id;
     setTitle(record.title);
     renderHistory(record.messages);
+    setSessionUsage(record.usage);
     markActiveSession();
     closeSidebar();
   } catch (_err) {
@@ -474,6 +535,7 @@ async function newConversation() {
   currentSessionId = null;
   clearLog();
   setTitle("New conversation");
+  setSessionUsage(null);
   markActiveSession();
   closeSidebar();
   chatInput.focus();
@@ -602,10 +664,15 @@ async function submitMessage(message) {
           assistantBubble = null; // start a fresh bubble after a tool call
           addTool(event.name, event.input);
           showThinking();
+        } else if (event.type === "usage") {
+          addUsageLine(event);
         } else if (event.type === "session_saved") {
           currentSessionId = event.session.id;
           setTitle(event.session.title);
+          setSessionUsage(event.session.usage);
           loadSessions();
+        } else if (event.type === "notice") {
+          addBubble("notice", event.text || "");
         } else if (event.type === "error") {
           hideThinking();
           addBubble("error", event.message || "Chat error");

@@ -60,6 +60,39 @@ def test_rename_and_delete(tmp_path):
     assert store.load(record["id"]) is None
 
 
+def test_save_accumulates_usage_and_exposes_it(tmp_path):
+    store = ChatSessionStore(tmp_path)
+    record = store.create(title="usage", model="claude-opus-4-8")
+    msgs = [{"role": "user", "content": "hi"}]
+
+    store.save(record["id"], messages=msgs, usage={"input": 100, "output": 20, "cost": 0.001})
+    summary = store.save(
+        record["id"], messages=msgs, usage={"input": 50, "output": 5, "cost": 0.0005}
+    )
+
+    # Running total is the element-wise sum across both turns.
+    assert summary["usage"]["input"] == 150
+    assert summary["usage"]["output"] == 25
+    assert summary["usage"]["cost"] == 0.0015
+    # Persisted on the record and surfaced by list_summaries too.
+    assert store.load(record["id"])["usage"]["input"] == 150
+    listed = next(s for s in store.list_summaries() if s["id"] == record["id"])
+    assert listed["usage"]["input"] == 150
+
+
+def test_save_without_usage_leaves_total_untouched(tmp_path):
+    store = ChatSessionStore(tmp_path)
+    record = store.create(title="usage", model=None)
+    msgs = [{"role": "user", "content": "hi"}]
+
+    store.save(record["id"], messages=msgs, usage={"input": 100, "output": 20, "cost": None})
+    # A later save with no usage (e.g. an errored turn) keeps the prior total.
+    summary = store.save(record["id"], messages=msgs)
+    assert summary["usage"]["input"] == 100
+    # None cost contributes zero rather than erroring.
+    assert summary["usage"]["cost"] == 0
+
+
 def test_sanitize_id_rejects_traversal(tmp_path):
     store = ChatSessionStore(tmp_path)
     import pytest

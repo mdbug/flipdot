@@ -19,10 +19,30 @@ from typing import Any
 
 # Default model. Override with the ANTHROPIC_MODEL env var.
 DEFAULT_MODEL = "claude-opus-4-8"
-# Models the in-UI selector may choose. Both support the adaptive-thinking
-# request shape used below, so no per-model thinking handling is needed.
-ALLOWED_MODELS = ("claude-opus-4-8", "claude-sonnet-4-6")
+# Models the in-UI selector may choose. All support the adaptive-thinking
+# request shape used below, so no per-model thinking handling is needed
+# (Fable 5 has thinking always on, which the same shape covers).
+ALLOWED_MODELS = ("claude-opus-4-8", "claude-sonnet-5", "claude-fable-5")
 MAX_TOKENS = 32768
+
+# Claude Fable 5's safety classifiers can decline a request (a successful
+# response with stop_reason "refusal"). Server-side fallbacks transparently
+# re-serve a declined request on a broader-availability model within the same
+# call; enabled only for the models that need it (the beta endpoint is required).
+FALLBACK_MODEL = "claude-opus-4-8"
+SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-06-01"
+FALLBACK_ENABLED_MODELS = ("claude-fable-5",)
+
+# USD per 1M tokens, per model. ``cache_write`` is the 5-minute-TTL rate (1.25x
+# input) and ``cache_read`` the cache-hit rate (0.1x input) — the standard
+# Anthropic cache economics. A model missing from this table renders tokens
+# without a dollar figure (cost is None) rather than a guessed number.
+PRICING: dict[str, dict[str, float]] = {
+    "claude-opus-4-8": {"input": 5.0, "output": 25.0, "cache_write": 6.25, "cache_read": 0.5},
+    "claude-fable-5": {"input": 10.0, "output": 50.0, "cache_write": 12.5, "cache_read": 1.0},
+    # TODO: claude-sonnet-5 pricing is unconfirmed — fill in the real rates. Until
+    # then it is intentionally absent so the UI shows tokens without a cost.
+}
 
 SYSTEM_PROMPT = (
     "You control a 28x28 monochrome flip-dot display through "
@@ -163,6 +183,84 @@ def serialize_messages(messages: list[dict]) -> list[dict]:
     return serialized
 
 
+def _add_usage(acc: dict[str, int], usage: Any) -> None:
+    """Fold one turn's ``final.usage`` into a running token accumulator."""
+    for key in ("input", "output", "cache_write", "cache_read"):
+        acc.setdefault(key, 0)
+    acc["input"] += getattr(usage, "input_tokens", 0) or 0
+    acc["output"] += getattr(usage, "output_tokens", 0) or 0
+    acc["cache_write"] += getattr(usage, "cache_creation_input_tokens", 0) or 0
+    acc["cache_read"] += getattr(usage, "cache_read_input_tokens", 0) or 0
+
+
+def _cost(model: str | None, tokens: dict[str, int]) -> float | None:
+    """Return the USD cost of ``tokens`` for ``model``, or None if unpriced."""
+    rates = PRICING.get(model or "")
+    if rates is None:
+        return None
+    return round(
+        sum(tokens.get(k, 0) * rates[k] for k in ("input", "output", "cache_write", "cache_read"))
+        / 1_000_000,
+        6,
+    )
+
+
+def _usage_dict(model: str | None, tokens: dict[str, int]) -> dict[str, Any]:
+    """Build the ``usage`` event payload: token counts plus computed cost."""
+    return {
+        "input": tokens.get("input", 0),
+        "output": tokens.get("output", 0),
+        "cache_write": tokens.get("cache_write", 0),
+        "cache_read": tokens.get("cache_read", 0),
+        "cost": _cost(model, tokens),
+    }
+
+
+def _fallback_served_by(final: Any) -> str | None:
+    """Return the model that took over if a server-side fallback fired this turn.
+
+    Each switch point is a ``fallback`` content block whose ``to.model`` names the
+    model that continued. Returns None when no fallback occurred.
+    """
+    served = None
+    for block in getattr(final, "content", None) or []:
+        if getattr(block, "type", None) == "fallback":
+            to = getattr(block, "to", None)
+            served = getattr(to, "model", None) or served
+    return served
+
+
+def _refusal_message(final: Any) -> str:
+    """Build a user-facing message for a response the safety system declined."""
+    msg = "The request was declined by the model's safety system"
+    details = getattr(final, "stop_details", None)
+    category = getattr(details, "category", None) if details is not None else None
+    if category:
+        msg += f" ({category})"
+    return msg + ". Try rephrasing your request."
+
+
+def _replayable_content(content: list) -> list:
+    """Strip model-internal blocks emitted before a server-side fallback boundary.
+
+    When the primary model is declined mid-turn, the discarded partial may carry
+    thinking/tool_use blocks that the API rejects on replay. Blocks at and after
+    the last ``fallback`` marker replay unchanged; text blocks always do.
+    """
+    last_fallback = -1
+    for i, block in enumerate(content):
+        if getattr(block, "type", None) == "fallback":
+            last_fallback = i
+    if last_fallback < 0:
+        return content
+    internal = ("thinking", "redacted_thinking", "tool_use", "server_tool_use")
+    return [
+        block
+        for i, block in enumerate(content)
+        if i >= last_fallback or getattr(block, "type", None) not in internal
+    ]
+
+
 async def run_chat(
     mcp: Any, messages: list[dict], *, model: str | None = None
 ) -> AsyncIterator[str]:
@@ -186,16 +284,32 @@ async def run_chat(
         model = DEFAULT_MODEL
     tools = await _mcp_tool_schemas(mcp)
 
+    # ``messages`` is mutated in place each turn; the stream reads the live list.
+    stream_kwargs: dict[str, Any] = {
+        "model": model,
+        "max_tokens": MAX_TOKENS,
+        "system": SYSTEM_PROMPT,
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "tools": tools,
+        "messages": messages,
+    }
+    if model in FALLBACK_ENABLED_MODELS:
+        # Opt into server-side refusal fallbacks (requires the beta endpoint).
+        stream_factory = client.beta.messages.stream
+        stream_kwargs["betas"] = [SERVER_SIDE_FALLBACK_BETA]
+        stream_kwargs["fallbacks"] = [{"model": FALLBACK_MODEL}]
+    else:
+        stream_factory = client.messages.stream
+
+    # Token usage accrues across every turn of the loop (one user message can
+    # produce several ``final`` messages via tool use); ``served_model`` follows
+    # the model that actually billed the turn, which differs after a fallback.
+    tokens: dict[str, int] = {}
+    served_model = model
+
     try:
         while True:
-            async with client.messages.stream(
-                model=model,
-                max_tokens=MAX_TOKENS,
-                system=SYSTEM_PROMPT,
-                thinking={"type": "adaptive", "display": "summarized"},
-                tools=tools,
-                messages=messages,
-            ) as stream:
+            async with stream_factory(**stream_kwargs) as stream:
                 async for event in stream:
                     if event.type != "content_block_delta":
                         continue
@@ -206,15 +320,37 @@ async def run_chat(
                         yield _event({"type": "thinking", "text": delta.thinking})
                 final = await stream.get_final_message()
 
-            # Preserve the full assistant content (text + thinking + tool_use) so
-            # the next turn replays it unchanged on the same model.
-            messages.append({"role": "assistant", "content": final.content})
+            _add_usage(tokens, getattr(final, "usage", None))
+            served_model = getattr(final, "model", None) or served_model
+
+            # A fallback block means the primary model was declined and another
+            # model served (part of) this turn — tell the user which one.
+            served_by = _fallback_served_by(final)
+            if served_by:
+                yield _event(
+                    {
+                        "type": "notice",
+                        "text": f"Fable declined this request — continued on {served_by}.",
+                    }
+                )
+
+            # Whole chain refused: surface it instead of ending silently, and
+            # don't persist the empty/partial assistant turn.
+            if final.stop_reason == "refusal":
+                yield _event({"type": "usage", **_usage_dict(served_model, tokens)})
+                yield _event({"type": "error", "message": _refusal_message(final)})
+                return
+
+            # Preserve the assistant content so the next turn replays it (text +
+            # thinking + tool_use); after a fallback, drop pre-boundary internals.
+            assistant_content = _replayable_content(final.content)
+            messages.append({"role": "assistant", "content": assistant_content})
 
             if final.stop_reason != "tool_use":
                 break
 
             tool_results = []
-            for block in final.content:
+            for block in assistant_content:
                 if block.type != "tool_use":
                     continue
                 yield _event({"type": "tool", "name": block.name, "input": block.input})
@@ -232,4 +368,5 @@ async def run_chat(
         yield _event({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
         return
 
+    yield _event({"type": "usage", **_usage_dict(served_model, tokens)})
     yield _event({"type": "done"})

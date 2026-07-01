@@ -1368,6 +1368,14 @@ input:disabled {
   text-overflow: ellipsis;
 }
 
+.chat-bar-usage {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .chat-sidebar-toggle {
   display: none;
 }
@@ -1393,7 +1401,8 @@ input:disabled {
 }
 
 .chat-user,
-.chat-error {
+.chat-error,
+.chat-notice {
   white-space: pre-wrap;
 }
 
@@ -1540,6 +1549,23 @@ input:disabled {
   color: var(--coral);
   border: 1px solid rgba(239, 107, 85, 0.4);
   font-size: 0.85rem;
+}
+
+.chat-notice {
+  align-self: center;
+  background: transparent;
+  color: var(--dim);
+  border: 1px dashed var(--line);
+  font-size: 0.78rem;
+}
+
+.chat-usage {
+  align-self: flex-end;
+  max-width: 92%;
+  font-size: 0.68rem;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  padding: 0 0.2rem;
 }
 
 .chat-tool {

@@ -30,6 +30,20 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+_USAGE_KEYS = ("input", "output", "cache_write", "cache_read", "cost")
+
+
+def _add_usage(existing: dict | None, delta: dict) -> dict:
+    """Return the element-wise sum of two usage dicts (tokens and cost).
+
+    ``cost`` may be None for an unpriced model; a None on either side contributes
+    zero, so a session that mixes priced and unpriced turns reports the cost of
+    only the priced ones rather than erroring.
+    """
+    base = existing or {}
+    return {key: (base.get(key) or 0) + (delta.get(key) or 0) for key in _USAGE_KEYS}
+
+
 def derive_title(message: str) -> str:
     """Build a short, single-line session title from the first user message."""
     collapsed = " ".join(str(message or "").split())
@@ -80,8 +94,13 @@ class ChatSessionStore:
         messages: list[dict],
         title: str | None = None,
         model: str | None = None,
+        usage: dict | None = None,
     ) -> dict:
-        """Update a session's messages (and optionally title/model) in place."""
+        """Update a session's messages (and optionally title/model/usage) in place.
+
+        ``usage`` is one turn's token/cost totals; it is *added* onto any usage
+        already recorded so the stored figure is the running session total.
+        """
         with self._lock:
             record = self._read(session_id) or {
                 "id": self.sanitize_id(session_id),
@@ -94,6 +113,8 @@ class ChatSessionStore:
                 record["title"] = derive_title(title)
             if model is not None:
                 record["model"] = model
+            if usage is not None:
+                record["usage"] = _add_usage(record.get("usage"), usage)
             record["updated_at"] = _now_iso()
             self._write(record, lock=False)
             return self._summary(record)
@@ -156,6 +177,7 @@ class ChatSessionStore:
             "created_at": record.get("created_at"),
             "updated_at": record.get("updated_at"),
             "message_count": turns,
+            "usage": record.get("usage"),
         }
 
     def _read(self, session_id: str) -> dict | None:

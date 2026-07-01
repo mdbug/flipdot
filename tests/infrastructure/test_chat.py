@@ -113,10 +113,39 @@ class _FakeBlock:
         self.id = id
 
 
+class _FakeStopDetails:
+    def __init__(self, category=None):
+        self.category = category
+
+
+class _FakeTo:
+    def __init__(self, model):
+        self.model = model
+
+
+class _FakeFallbackBlock:
+    """Mimics the ``fallback`` content block the API emits at a switch point."""
+
+    def __init__(self, to_model):
+        self.type = "fallback"
+        self.to = _FakeTo(to_model)
+
+
+class _FakeUsage:
+    def __init__(self, input=0, output=0, cache_write=0, cache_read=0):
+        self.input_tokens = input
+        self.output_tokens = output
+        self.cache_creation_input_tokens = cache_write
+        self.cache_read_input_tokens = cache_read
+
+
 class _FakeFinal:
-    def __init__(self, content, stop_reason):
+    def __init__(self, content, stop_reason, stop_details=None, usage=None, model=None):
         self.content = content
         self.stop_reason = stop_reason
+        self.stop_details = stop_details
+        self.usage = usage
+        self.model = model
 
 
 class _FakeDelta:
@@ -165,9 +194,16 @@ class _FakeMessages:
         return _FakeStream(turn["texts"], turn["final"], turn.get("thoughts"))
 
 
+class _FakeBeta:
+    def __init__(self, script):
+        self.messages = _FakeMessages(script)
+
+
 class _FakeClient:
     def __init__(self, script):
         self.messages = _FakeMessages(script)
+        # The Fable 5 path uses the beta endpoint; give it its own turn counter.
+        self.beta = _FakeBeta(script)
 
 
 def test_run_chat_full_loop_executes_tool(monkeypatch):
@@ -210,7 +246,7 @@ def test_run_chat_full_loop_executes_tool(monkeypatch):
     events = asyncio.run(collect())
     types = [e["type"] for e in events]
 
-    assert types == ["thinking", "thinking", "text", "tool", "text", "done"]
+    assert types == ["thinking", "thinking", "text", "tool", "text", "usage", "done"]
     assert (
         "".join(e["text"] for e in events if e["type"] == "thinking")
         == "I should call show_message."
@@ -221,6 +257,177 @@ def test_run_chat_full_loop_executes_tool(monkeypatch):
     assert board.text_objects[-1]["text"] == "HELLO"
     # History captured the assistant turn, the tool result, and the final turn.
     assert any(m["role"] == "user" and isinstance(m["content"], list) for m in messages)
+
+
+def test_run_chat_surfaces_refusal(monkeypatch):
+    mcp = _build_mcp()
+    script = [
+        {
+            "texts": [],
+            "final": _FakeFinal(
+                content=[],
+                stop_reason="refusal",
+                stop_details=_FakeStopDetails("cyber"),
+            ),
+        },
+    ]
+    monkeypatch.setattr(chat_backend, "get_async_client", lambda: _FakeClient(script))
+
+    messages = [{"role": "user", "content": "..."}]
+
+    async def collect():
+        return [json.loads(line) async for line in chat_backend.run_chat(mcp, messages)]
+
+    events = asyncio.run(collect())
+
+    assert events[-1]["type"] == "error"
+    assert "declined" in events[-1]["message"].lower()
+    assert "cyber" in events[-1]["message"]
+    # Refusal ends the stream without a "done" and without persisting a turn.
+    assert all(e["type"] != "done" for e in events)
+    assert all(m["role"] != "assistant" for m in messages)
+
+
+def test_run_chat_reports_fallback_served_model(monkeypatch):
+    mcp = _build_mcp()
+    script = [
+        {
+            "texts": ["Sure."],
+            "final": _FakeFinal(
+                content=[
+                    _FakeFallbackBlock("claude-opus-4-8"),
+                    _FakeBlock("text", text="Sure."),
+                ],
+                stop_reason="end_turn",
+            ),
+        },
+    ]
+    monkeypatch.setattr(chat_backend, "get_async_client", lambda: _FakeClient(script))
+
+    messages = [{"role": "user", "content": "hi"}]
+
+    async def collect():
+        return [
+            json.loads(line)
+            async for line in chat_backend.run_chat(mcp, messages, model="claude-fable-5")
+        ]
+
+    events = asyncio.run(collect())
+    types = [e["type"] for e in events]
+
+    # Fable 5 declined and Opus 4.8 served — the user is told which, then it completes.
+    assert "notice" in types
+    notice = next(e for e in events if e["type"] == "notice")
+    assert "claude-opus-4-8" in notice["text"]
+    assert types[-1] == "done"
+
+
+def test_usage_dict_prices_known_model_and_skips_unknown():
+    tokens = {"input": 1_000_000, "output": 1_000_000, "cache_write": 0, "cache_read": 1_000_000}
+    priced = chat_backend._usage_dict("claude-opus-4-8", tokens)
+    # 5 (input) + 25 (output) + 0.5 (cache read) per the PRICING table.
+    assert priced["cost"] == pytest.approx(30.5)
+    assert priced["input"] == 1_000_000
+
+    unpriced = chat_backend._usage_dict("claude-sonnet-5", tokens)
+    assert unpriced["cost"] is None
+    assert unpriced["output"] == 1_000_000
+
+
+def test_run_chat_emits_summed_usage_across_turns(monkeypatch):
+    mode_manager = DummyModeManager()
+    board = DummyBoard()
+    mcp = _build_mcp(mode_manager=mode_manager, board=board)
+
+    script = [
+        {
+            "texts": ["Showing it. "],
+            "final": _FakeFinal(
+                content=[
+                    _FakeBlock("tool_use", name="show_message", input={"text": "HI"}, id="t1"),
+                ],
+                stop_reason="tool_use",
+                usage=_FakeUsage(input=100, output=50),
+                model="claude-opus-4-8",
+            ),
+        },
+        {
+            "texts": ["Done!"],
+            "final": _FakeFinal(
+                content=[_FakeBlock("text", text="Done!")],
+                stop_reason="end_turn",
+                usage=_FakeUsage(input=200, output=30, cache_read=1000),
+                model="claude-opus-4-8",
+            ),
+        },
+    ]
+    monkeypatch.setattr(chat_backend, "get_async_client", lambda: _FakeClient(script))
+
+    async def collect():
+        return [
+            json.loads(line)
+            async for line in chat_backend.run_chat(
+                mcp, [{"role": "user", "content": "hi"}], model="claude-opus-4-8"
+            )
+        ]
+
+    events = asyncio.run(collect())
+    usage = next(e for e in events if e["type"] == "usage")
+    # Tokens summed across both turns.
+    assert usage["input"] == 300
+    assert usage["output"] == 80
+    assert usage["cache_read"] == 1000
+    # cost = (300*5 + 80*25 + 1000*0.5) / 1e6
+    assert usage["cost"] == pytest.approx(0.004)
+
+
+def test_run_chat_usage_prices_by_served_model(monkeypatch):
+    """After a fallback, the served model (final.model) drives pricing."""
+    mcp = _build_mcp()
+    script = [
+        {
+            "texts": ["Sure."],
+            "final": _FakeFinal(
+                content=[_FakeFallbackBlock("claude-opus-4-8"), _FakeBlock("text", text="Sure.")],
+                stop_reason="end_turn",
+                usage=_FakeUsage(input=1_000_000),
+                model="claude-opus-4-8",
+            ),
+        },
+    ]
+    monkeypatch.setattr(chat_backend, "get_async_client", lambda: _FakeClient(script))
+
+    async def collect():
+        return [
+            json.loads(line)
+            async for line in chat_backend.run_chat(
+                mcp, [{"role": "user", "content": "hi"}], model="claude-fable-5"
+            )
+        ]
+
+    events = asyncio.run(collect())
+    usage = next(e for e in events if e["type"] == "usage")
+    # Priced at Opus ($5/1M input), not Fable ($10/1M) — the model that served.
+    assert usage["cost"] == pytest.approx(5.0)
+
+
+def test_replayable_content_strips_pre_fallback_internals():
+    content = [
+        _FakeBlock("thinking"),
+        _FakeBlock("text", text="partial"),
+        _FakeFallbackBlock("claude-opus-4-8"),
+        _FakeBlock("thinking"),
+        _FakeBlock("text", text="answer"),
+        _FakeBlock("tool_use", name="show_message", input={}, id="t1"),
+    ]
+    kept = [b.type for b in chat_backend._replayable_content(content)]
+    # Pre-boundary thinking dropped; pre-boundary text kept; boundary and after kept.
+    assert kept == ["text", "fallback", "thinking", "text", "tool_use"]
+
+
+def test_replayable_content_noop_without_fallback():
+    content = [_FakeBlock("thinking"), _FakeBlock("text", text="hi")]
+    assert chat_backend._replayable_content(content) is content
 
 
 def test_serialize_messages_converts_blocks_to_json():
