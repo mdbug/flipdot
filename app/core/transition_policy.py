@@ -277,6 +277,7 @@ class TransitionPolicy:
             ModeManager.MODE_BEATMIRROR,
             ModeManager.MODE_TETRIS,
             ModeManager.MODE_PONG,
+            ModeManager.MODE_TANK,
             ModeManager.MODE_WORLDCUP,
             ModeManager.MODE_FONT_PREVIEW,
         ):
