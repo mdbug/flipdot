@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import AsyncIterator
+from datetime import date
 from typing import Any
 
 # Default model. Override with the ANTHROPIC_MODEL env var.
@@ -40,9 +41,14 @@ FALLBACK_ENABLED_MODELS = ("claude-fable-5",)
 PRICING: dict[str, dict[str, float]] = {
     "claude-opus-4-8": {"input": 5.0, "output": 25.0, "cache_write": 6.25, "cache_read": 0.5},
     "claude-fable-5": {"input": 10.0, "output": 50.0, "cache_write": 12.5, "cache_read": 1.0},
-    # TODO: claude-sonnet-5 pricing is unconfirmed — fill in the real rates. Until
-    # then it is intentionally absent so the UI shows tokens without a cost.
+    "claude-sonnet-5": {"input": 3.0, "output": 15.0, "cache_write": 3.75, "cache_read": 0.3},
 }
+
+# Claude Sonnet 5 launched with introductory pricing (cache rates scale with the
+# discounted input rate) that applies through 2026-08-31; the standard PRICING
+# entry above takes over from 2026-09-01.
+SONNET_5_INTRO_PRICING = {"input": 2.0, "output": 10.0, "cache_write": 2.5, "cache_read": 0.2}
+SONNET_5_INTRO_END = date(2026, 8, 31)
 
 SYSTEM_PROMPT = (
     "You control a 28x28 monochrome flip-dot display through "
@@ -193,9 +199,16 @@ def _add_usage(acc: dict[str, int], usage: Any) -> None:
     acc["cache_read"] += getattr(usage, "cache_read_input_tokens", 0) or 0
 
 
+def _rates(model: str | None) -> dict[str, float] | None:
+    """Return the per-MTok rates in effect for ``model`` today, or None if unpriced."""
+    if model == "claude-sonnet-5" and date.today() <= SONNET_5_INTRO_END:
+        return SONNET_5_INTRO_PRICING
+    return PRICING.get(model or "")
+
+
 def _cost(model: str | None, tokens: dict[str, int]) -> float | None:
     """Return the USD cost of ``tokens`` for ``model``, or None if unpriced."""
-    rates = PRICING.get(model or "")
+    rates = _rates(model)
     if rates is None:
         return None
     return round(

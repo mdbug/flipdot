@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import date
 
 import pytest
 
@@ -329,9 +330,33 @@ def test_usage_dict_prices_known_model_and_skips_unknown():
     assert priced["cost"] == pytest.approx(30.5)
     assert priced["input"] == 1_000_000
 
-    unpriced = chat_backend._usage_dict("claude-sonnet-5", tokens)
+    unpriced = chat_backend._usage_dict("claude-not-a-model", tokens)
     assert unpriced["cost"] is None
     assert unpriced["output"] == 1_000_000
+
+
+def test_sonnet_5_switches_from_intro_to_standard_pricing(monkeypatch):
+    tokens = {"input": 1_000_000, "output": 1_000_000, "cache_write": 0, "cache_read": 1_000_000}
+
+    class _IntroDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 8, 31)
+
+    monkeypatch.setattr(chat_backend, "date", _IntroDate)
+    # 2 (input) + 10 (output) + 0.2 (cache read) at the introductory rate.
+    intro = chat_backend._usage_dict("claude-sonnet-5", tokens)
+    assert intro["cost"] == pytest.approx(12.2)
+
+    class _StandardDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 9, 1)
+
+    monkeypatch.setattr(chat_backend, "date", _StandardDate)
+    # 3 (input) + 15 (output) + 0.3 (cache read) at the standard rate.
+    standard = chat_backend._usage_dict("claude-sonnet-5", tokens)
+    assert standard["cost"] == pytest.approx(18.3)
 
 
 def test_run_chat_emits_summed_usage_across_turns(monkeypatch):
