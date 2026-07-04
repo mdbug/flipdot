@@ -8,6 +8,8 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
+from app.services import figure
+
 logger = logging.getLogger(__name__)
 
 CLOSE_FACE_DISTANCE = float(os.getenv("CLOSE_FACE_DISTANCE", "0.9"))
@@ -285,15 +287,6 @@ FACE_PERSPECTIVE_PIVOT_Y = float(os.getenv("FACE_PERSPECTIVE_PIVOT_Y", "0.30"))
 MOUTH_Y_OFFSET_PX = int(os.getenv("MOUTH_Y_OFFSET_PX", "1"))
 FACE_FEATURE_Y_OFFSET_PX = int(os.getenv("FACE_FEATURE_Y_OFFSET_PX", "-1"))
 SILHOUETTE_Y_OFFSET_PX = int(os.getenv("SILHOUETTE_Y_OFFSET_PX", "1"))
-ARM_OUTLINE_RADIUS_PX = int(os.getenv("ARM_OUTLINE_RADIUS_PX", "1"))
-ARM_MIN_VISIBILITY = float(os.getenv("ARM_MIN_VISIBILITY", "0.45"))
-ARM_CORE_RADIUS_PX = int(os.getenv("ARM_CORE_RADIUS_PX", "1"))
-FOREARM_MIN_VISIBILITY = float(os.getenv("FOREARM_MIN_VISIBILITY", "0.20"))
-ARM_HAND_JOIN_CLEAR_RADIUS_PX = int(os.getenv("ARM_HAND_JOIN_CLEAR_RADIUS_PX", "2"))
-ARM_SHOULDER_JOIN_CLEAR_RADIUS_PX = int(os.getenv("ARM_SHOULDER_JOIN_CLEAR_RADIUS_PX", "1"))
-ARM_SHOULDER_TORSO_CLEAR_LEN_PX = int(os.getenv("ARM_SHOULDER_TORSO_CLEAR_LEN_PX", "2"))
-ARM_SHOULDER_TORSO_BRIDGE_LEN_PX = int(os.getenv("ARM_SHOULDER_TORSO_BRIDGE_LEN_PX", "4"))
-ARM_SHOULDER_TORSO_CONNECT_RADIUS_PX = int(os.getenv("ARM_SHOULDER_TORSO_CONNECT_RADIUS_PX", "2"))
 
 
 def should_draw_face_features(estimated_distance: float | None) -> bool:
@@ -320,51 +313,6 @@ def _apply_face_perspective_correction(x, y):
     return x, min(1.0, max(0.0, y_corrected))
 
 
-def _apply_perspective_to_mask(mask):
-    height, width = mask.shape
-    strength = min(0.95, max(0.0, FACE_PERSPECTIVE_STRENGTH))
-    pivot_y = min(1.0, max(0.0, FACE_PERSPECTIVE_PIVOT_Y))
-
-    if strength == 0.0:
-        return mask
-
-    ys = np.linspace(0.0, 1.0, height, dtype=np.float32)
-    src_y_norm = np.where(
-        ys <= pivot_y,
-        ys,
-        (ys - (strength * pivot_y)) / (1.0 - strength),
-    )
-    src_y = np.clip(src_y_norm * (height - 1), 0.0, float(height - 1)).astype(np.float32)
-
-    map_x = np.tile(np.arange(width, dtype=np.float32), (height, 1))
-    map_y = np.tile(src_y.reshape(height, 1), (1, width))
-
-    return cv2.remap(
-        mask,
-        map_x,
-        map_y,
-        interpolation=cv2.INTER_NEAREST,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=0,
-    )
-
-
-def _shift_mask_y(mask, y_offset_px):
-    if y_offset_px == 0:
-        return mask
-
-    shifted = np.zeros_like(mask)
-    height = mask.shape[0]
-
-    if y_offset_px > 0:
-        shifted[y_offset_px:, :] = mask[: height - y_offset_px, :]
-    else:
-        up = -y_offset_px
-        shifted[: height - up, :] = mask[up:, :]
-
-    return shifted
-
-
 def _draw_line(dots, x0, y0, x1, y1, value=0):
     h, w = dots.shape
     steps = max(abs(x1 - x0), abs(y1 - y0))
@@ -377,37 +325,6 @@ def _draw_line(dots, x0, y0, x1, y1, value=0):
     ys = np.linspace(y0, y1, steps + 1).astype(int)
     valid = (xs >= 0) & (xs < w) & (ys >= 0) & (ys < h)
     dots[ys[valid], xs[valid]] = value
-
-
-def _draw_disk(dots, cx, cy, radius, value):
-    h, w = dots.shape
-    if not (0 <= cx < w and 0 <= cy < h):
-        return
-    if radius <= 0:
-        dots[cy, cx] = value
-        return
-
-    y0 = max(0, cy - radius)
-    y1 = min(h - 1, cy + radius)
-    x0 = max(0, cx - radius)
-    x1 = min(w - 1, cx + radius)
-
-    yy, xx = np.ogrid[y0 : y1 + 1, x0 : x1 + 1]
-    mask = (xx - cx) ** 2 + (yy - cy) ** 2 <= radius**2
-    region = dots[y0 : y1 + 1, x0 : x1 + 1]
-    region[mask] = value
-
-
-def _draw_brush_line(dots, x0, y0, x1, y1, radius, value):
-    steps = max(abs(x1 - x0), abs(y1 - y0))
-    if steps == 0:
-        _draw_disk(dots, x0, y0, radius, value)
-        return
-
-    xs = np.linspace(x0, x1, steps + 1).astype(int)
-    ys = np.linspace(y0, y1, steps + 1).astype(int)
-    for x, y in zip(xs, ys, strict=True):
-        _draw_disk(dots, x, y, radius, value)
 
 
 def _is_eye_open(landmarks, corner_indices, vertical_pairs):
@@ -454,187 +371,25 @@ def _offset_points(points, dx, dy, width, height):
     return shifted
 
 
-def _pose_landmark_to_panel_xy(landmark, width, height):
+def _pose_landmark_to_panel_xy(landmark: Any, width: int, height: int) -> tuple[float, float]:
+    """Map a pose landmark to unclamped float panel coords (may lie off-panel)."""
     x, y = _apply_face_perspective_correction(landmark.x, landmark.y)
-    px, py = _xy_to_panel_xy(x, y, width, height)
-    py = min(height - 1, max(0, py + SILHOUETTE_Y_OFFSET_PX))
-    return px, py
+    return width - (x * width), (y * height) + SILHOUETTE_Y_OFFSET_PX
 
 
-def _get_arm_point(landmarks, primary_idx, fallback_idx, min_visibility):
-    primary = landmarks[primary_idx]
-    if primary.visibility >= min_visibility:
-        return primary
+def draw_face_features(
+    dots: np.ndarray,
+    face_mesh_results: Any,
+    width: int,
+    height: int,
+    draw_details: bool = False,
+    value: int = 0,
+) -> np.ndarray:
+    """Overlay eyes and mouth (plus brows when ``draw_details``) from face-mesh landmarks.
 
-    if fallback_idx is None:
-        return None
-
-    fallback = landmarks[fallback_idx]
-    if fallback.visibility >= min_visibility:
-        return fallback
-
-    return None
-
-
-def _draw_arm_outlines(dots, pose_results, width, height):
-    if pose_results is None or pose_results.pose_landmarks is None:
-        return
-
-    landmarks = pose_results.pose_landmarks.landmark
-    arm_segments = [
-        {
-            "start": mp_pose.PoseLandmark.LEFT_SHOULDER,
-            "end": mp_pose.PoseLandmark.LEFT_ELBOW,
-            "end_fallback": None,
-            "min_visibility": ARM_MIN_VISIBILITY,
-            "torso_anchor": mp_pose.PoseLandmark.LEFT_HIP,
-        },
-        {
-            "start": mp_pose.PoseLandmark.LEFT_ELBOW,
-            "end": mp_pose.PoseLandmark.LEFT_WRIST,
-            "end_fallback": mp_pose.PoseLandmark.LEFT_INDEX,
-            "min_visibility": FOREARM_MIN_VISIBILITY,
-            "torso_anchor": None,
-        },
-        {
-            "start": mp_pose.PoseLandmark.RIGHT_SHOULDER,
-            "end": mp_pose.PoseLandmark.RIGHT_ELBOW,
-            "end_fallback": None,
-            "min_visibility": ARM_MIN_VISIBILITY,
-            "torso_anchor": mp_pose.PoseLandmark.RIGHT_HIP,
-        },
-        {
-            "start": mp_pose.PoseLandmark.RIGHT_ELBOW,
-            "end": mp_pose.PoseLandmark.RIGHT_WRIST,
-            "end_fallback": mp_pose.PoseLandmark.RIGHT_INDEX,
-            "min_visibility": FOREARM_MIN_VISIBILITY,
-            "torso_anchor": None,
-        },
-    ]
-
-    outline_radius = max(0, ARM_OUTLINE_RADIUS_PX)
-    core_radius = max(0, ARM_CORE_RADIUS_PX)
-    arm_mask = np.zeros_like(dots, dtype=np.uint8)
-    hand_join_points = []
-    shoulder_join_points = []
-    shoulder_torso_clear_segments = []
-
-    for segment in arm_segments:
-        min_visibility = segment["min_visibility"]
-        start = _get_arm_point(landmarks, segment["start"], None, min_visibility)
-        end = _get_arm_point(landmarks, segment["end"], segment["end_fallback"], min_visibility)
-        if start is None or end is None:
-            continue
-
-        x0, y0 = _pose_landmark_to_panel_xy(start, width, height)
-        x1, y1 = _pose_landmark_to_panel_xy(end, width, height)
-
-        _draw_brush_line(arm_mask, x0, y0, x1, y1, core_radius, 1)
-        if segment["end_fallback"] is not None:
-            hand_join_points.append((x1, y1))
-        if segment["start"] in (
-            mp_pose.PoseLandmark.LEFT_SHOULDER,
-            mp_pose.PoseLandmark.RIGHT_SHOULDER,
-        ):
-            shoulder_join_points.append((x0, y0))
-
-            torso_anchor_idx = segment.get("torso_anchor")
-            if torso_anchor_idx is not None:
-                torso_anchor = _get_arm_point(landmarks, torso_anchor_idx, None, ARM_MIN_VISIBILITY)
-                if torso_anchor is not None:
-                    tx, ty = _pose_landmark_to_panel_xy(torso_anchor, width, height)
-                    vec_x = tx - x0
-                    vec_y = ty - y0
-                else:
-                    # Fallback for partial-body framing where hip landmarks are unreliable.
-                    vec_x = 0
-                    vec_y = 1
-
-                dist = np.hypot(vec_x, vec_y)
-                if dist > 0:
-                    clear_len = max(1, ARM_SHOULDER_TORSO_CLEAR_LEN_PX)
-                    clear_scale = min(1.0, clear_len / dist)
-                    cx = int(round(x0 + (vec_x * clear_scale)))
-                    cy = int(round(y0 + (vec_y * clear_scale)))
-                    shoulder_torso_clear_segments.append((x0, y0, cx, cy))
-
-                    bridge_len = max(1, ARM_SHOULDER_TORSO_BRIDGE_LEN_PX)
-                    bridge_scale = min(1.0, bridge_len / dist)
-                    bx = int(round(x0 + (vec_x * bridge_scale)))
-                    by = int(round(y0 + (vec_y * bridge_scale)))
-                    _draw_brush_line(arm_mask, x0, y0, bx, by, max(1, core_radius), 1)
-
-    if not np.any(arm_mask):
-        return
-
-    if outline_radius > 0:
-        kernel_size = (outline_radius * 2) + 1
-        kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
-        dilated_mask = cv2.dilate(arm_mask, kernel, iterations=1)
-        outline_mask = (dilated_mask == 1) & (arm_mask == 0)
-
-        join_clear_mask = np.zeros_like(dots, dtype=np.uint8)
-
-        if hand_join_points:
-            clear_radius = max(0, ARM_HAND_JOIN_CLEAR_RADIUS_PX)
-            for x, y in hand_join_points:
-                _draw_disk(join_clear_mask, x, y, clear_radius, 1)
-
-        if shoulder_join_points:
-            clear_radius = max(0, ARM_SHOULDER_JOIN_CLEAR_RADIUS_PX)
-            for x, y in shoulder_join_points:
-                _draw_disk(join_clear_mask, x, y, clear_radius, 1)
-
-            for sx, sy, ex, ey in shoulder_torso_clear_segments:
-                _draw_brush_line(join_clear_mask, sx, sy, ex, ey, clear_radius, 1)
-
-        outline_mask &= join_clear_mask == 0
-
-        dots[outline_mask] = 0
-
-    dots[arm_mask == 1] = 1
-
-
-def _draw_shoulder_torso_connectors(dots, pose_results, width, height):
-    if pose_results is None or pose_results.pose_landmarks is None:
-        return
-
-    landmarks = pose_results.pose_landmarks.landmark
-    connectors = [
-        (mp_pose.PoseLandmark.LEFT_SHOULDER, mp_pose.PoseLandmark.LEFT_HIP),
-        (mp_pose.PoseLandmark.RIGHT_SHOULDER, mp_pose.PoseLandmark.RIGHT_HIP),
-    ]
-
-    radius = max(1, ARM_SHOULDER_TORSO_CONNECT_RADIUS_PX)
-    bridge_len = max(1, ARM_SHOULDER_TORSO_BRIDGE_LEN_PX)
-
-    for shoulder_idx, hip_idx in connectors:
-        shoulder = _get_arm_point(landmarks, shoulder_idx, None, ARM_MIN_VISIBILITY)
-        if shoulder is None:
-            continue
-
-        sx, sy = _pose_landmark_to_panel_xy(shoulder, width, height)
-        hip = _get_arm_point(landmarks, hip_idx, None, ARM_MIN_VISIBILITY)
-
-        if hip is not None:
-            hx, hy = _pose_landmark_to_panel_xy(hip, width, height)
-            vec_x = hx - sx
-            vec_y = hy - sy
-        else:
-            vec_x = 0
-            vec_y = 1
-
-        dist = np.hypot(vec_x, vec_y)
-        if dist == 0:
-            continue
-
-        scale = min(1.0, bridge_len / dist)
-        ex = int(round(sx + (vec_x * scale)))
-        ey = int(round(sy + (vec_y * scale)))
-        _draw_brush_line(dots, sx, sy, ex, ey, radius, 1)
-
-
-def _draw_face_features(dots, face_mesh_results, width, height, draw_details=False):
+    ``value`` is the pixel value drawn: 0 punches features into a filled head
+    (pose mode), 1 lights them inside an outlined silhouette (sandfall mode).
+    """
     if face_mesh_results is None or not face_mesh_results.multi_face_landmarks:
         return dots
 
@@ -655,10 +410,10 @@ def _draw_face_features(dots, face_mesh_results, width, height, draw_details=Fal
 
     if 0 <= left_eye[0] < width and 0 <= left_eye[1] < height:
         if _is_eye_open(landmarks, LEFT_EYE_INDICES, LEFT_EYE_VERTICAL_INDICES):
-            dots[left_eye[1], left_eye[0]] = 0
+            dots[left_eye[1], left_eye[0]] = value
     if 0 <= right_eye[0] < width and 0 <= right_eye[1] < height:
         if _is_eye_open(landmarks, RIGHT_EYE_INDICES, RIGHT_EYE_VERTICAL_INDICES):
-            dots[right_eye[1], right_eye[0]] = 0
+            dots[right_eye[1], right_eye[0]] = value
 
     upper_points = _landmarks_to_panel_points(landmarks, MOUTH_UPPER_INDICES, width, height)
     lower_points = _landmarks_to_panel_points(landmarks, MOUTH_LOWER_INDICES, width, height)
@@ -677,10 +432,10 @@ def _draw_face_features(dots, face_mesh_results, width, height, draw_details=Fal
             )
             for i in range(len(upper_points))
         ]
-        _draw_points_polyline(dots, center_points, value=0)
+        _draw_points_polyline(dots, center_points, value=value)
     else:
-        _draw_points_polyline(dots, upper_points, value=0)
-        _draw_points_polyline(dots, lower_points, value=0)
+        _draw_points_polyline(dots, upper_points, value=value)
+        _draw_points_polyline(dots, lower_points, value=value)
 
     if draw_details:
         left_brow_points = _landmarks_to_panel_points(
@@ -705,10 +460,46 @@ def _draw_face_features(dots, face_mesh_results, width, height, draw_details=Fal
                 dy = 2 - gap
                 brow_points[:] = _offset_points(brow_points, 0, -dy, width, height)
 
-        _draw_points_polyline(dots, left_brow_points, value=0)
-        _draw_points_polyline(dots, right_brow_points, value=0)
+        _draw_points_polyline(dots, left_brow_points, value=value)
+        _draw_points_polyline(dots, right_brow_points, value=value)
 
     return dots
+
+
+def _face_feature_panel_points(
+    face_mesh_results: Any, width: int, height: int
+) -> list[tuple[float, float]]:
+    """Panel points that `draw_face_features` will draw, for sizing the head disc."""
+    if face_mesh_results is None or not face_mesh_results.multi_face_landmarks:
+        return []
+
+    landmarks = face_mesh_results.multi_face_landmarks[0].landmark
+    points: list[tuple[float, float]] = []
+
+    for eye_indices in (LEFT_EYE_INDICES, RIGHT_EYE_INDICES):
+        eye_points = _landmarks_to_panel_points(landmarks, eye_indices, width, height)
+        points.append(
+            (
+                float(np.mean([p[0] for p in eye_points])),
+                float(np.mean([p[1] for p in eye_points])) + FACE_FEATURE_Y_OFFSET_PX,
+            )
+        )
+
+    mouth_total_offset = MOUTH_Y_OFFSET_PX + FACE_FEATURE_Y_OFFSET_PX
+    for mouth_indices in (MOUTH_UPPER_INDICES, MOUTH_LOWER_INDICES):
+        mouth_points = _landmarks_to_panel_points(landmarks, mouth_indices, width, height)
+        points.extend(_offset_points(mouth_points, 0, mouth_total_offset, width, height))
+
+    for brow_indices in (LEFT_EYEBROW_INDICES, RIGHT_EYEBROW_INDICES):
+        brow_points = _landmarks_to_panel_points(landmarks, brow_indices, width, height)
+        points.extend(_offset_points(brow_points, 0, FACE_FEATURE_Y_OFFSET_PX, width, height))
+
+    return points
+
+
+# Cross-frame head smoothing for the single tracked viewer; resets itself
+# after a pause, so a new viewer doesn't inherit the previous head.
+_head_state = figure.HeadState()
 
 
 def display_human_pose(
@@ -718,22 +509,29 @@ def display_human_pose(
     estimated_distance: float | None = None,
     face_mesh_results: Any = None,
 ) -> np.ndarray:
-    """Render the detected pose (silhouette, limbs, face) to a panel-sized frame."""
-    dots = np.zeros((width, height), dtype=np.uint8)
-    if pose_results.segmentation_mask is not None:
-        dots = cv2.resize(pose_results.segmentation_mask, (width, height), cv2.INTER_AREA)
-        dots = (dots > 0.5).astype(np.uint8)
-        dots = np.fliplr(dots)
-        dots = _apply_perspective_to_mask(dots)
-        dots = _shift_mask_y(dots, SILHOUETTE_Y_OFFSET_PX)
-        _draw_arm_outlines(dots, pose_results, width, height)
-        _draw_shoulder_torso_connectors(dots, pose_results, width, height)
+    """Render the constructed character (torso, head, limbs, face) to a panel-sized frame."""
+    dots = np.zeros((height, width), dtype=np.uint8)
+    if pose_results is None or pose_results.pose_landmarks is None:
+        return dots
 
-        if should_draw_face_features(estimated_distance):
-            draw_details = should_draw_detailed_face_features(estimated_distance)
-            dots = _draw_face_features(
-                dots, face_mesh_results, width, height, draw_details=draw_details
-            )
+    def to_panel(landmark: Any) -> tuple[float, float]:
+        return _pose_landmark_to_panel_xy(landmark, width, height)
+
+    draw_faces = should_draw_face_features(estimated_distance)
+    cover_points = (
+        _face_feature_panel_points(face_mesh_results, width, height) if draw_faces else None
+    )
+    figure.draw_figure(
+        dots,
+        pose_results.pose_landmarks.landmark,
+        to_panel,
+        head_cover_points=cover_points,
+        head_state=_head_state,
+    )
+
+    if draw_faces:
+        draw_details = should_draw_detailed_face_features(estimated_distance)
+        dots = draw_face_features(dots, face_mesh_results, width, height, draw_details=draw_details)
 
     return dots
 

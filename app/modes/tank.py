@@ -232,7 +232,7 @@ class Tank:
         """Count 4-connected components of set pixels in ``mask``."""
         seen = np.zeros(mask.shape, dtype=bool)
         count = 0
-        for r, c in zip(*np.nonzero(mask)):
+        for r, c in zip(*np.nonzero(mask), strict=True):
             if seen[r, c]:
                 continue
             count += 1
@@ -251,9 +251,7 @@ class Tank:
                         stack.append((ny, nx))
         return count
 
-    def _mirror_rect(
-        self, rect: tuple[int, int, int, int]
-    ) -> tuple[int, int, int, int]:
+    def _mirror_rect(self, rect: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
         """The 180-degree rotation of ``rect`` about the panel centre."""
         r0, r1, c0, c1 = rect
         h, w = self.height, self.width
@@ -574,7 +572,11 @@ class Tank:
             dirs.append((1 if dx > 0 else -1, 0))
         if adx <= self.AI_ALIGN_TOL and ady > self.AI_ALIGN_TOL:
             dirs.append((0, 1 if dy > 0 else -1))
-        if abs(adx - ady) <= self.AI_ALIGN_TOL and adx > self.AI_ALIGN_TOL and ady > self.AI_ALIGN_TOL:
+        if (
+            abs(adx - ady) <= self.AI_ALIGN_TOL
+            and adx > self.AI_ALIGN_TOL
+            and ady > self.AI_ALIGN_TOL
+        ):
             dirs.append((1 if dx > 0 else -1, 1 if dy > 0 else -1))
         return dirs
 
@@ -676,16 +678,12 @@ class Tank:
         # that is never noticed at all, so the AI is not an unhittable wall.
         # A tank's own shell becomes a threat too once it has ricocheted
         # (outbound it only ever flies away faster than the tank can drive).
-        threats = [
-            s
-            for s in self.shells
-            if s["owner"] != idx or s["bounces"] < self.SHELL_BOUNCES
-        ]
+        threats = [s for s in self.shells if s["owner"] != idx or s["bounces"] < self.SHELL_BOUNCES]
         if threats:
             if not tank["ai_had_threat"]:
                 tank["ai_threat_react_at"] = now + react
-                tank["ai_threat_ignored"] = (
-                    self.rng.random() < self.AI_DODGE_MISS * (0.5 + tank["ai_skill"])
+                tank["ai_threat_ignored"] = self.rng.random() < self.AI_DODGE_MISS * (
+                    0.5 + tank["ai_skill"]
                 )
             tank["ai_had_threat"] = True
         else:
@@ -753,9 +751,7 @@ class Tank:
             else:
                 px, py = x + mx * self.AI_LOOKAHEAD, y + my * self.AI_LOOKAHEAD
             s = -self.AI_W_DANGER * self._ai_danger(shell_cells, px, py)
-            if any(
-                self._lane_clear(px, py, d, fcx, fcy) for d in self._aligned_dirs(px, py, foe)
-            ):
+            if any(self._lane_clear(px, py, d, fcx, fcy) for d in self._aligned_dirs(px, py, foe)):
                 s += self.AI_W_SHOT
             # While a shell is inbound the alignment pull is muted, otherwise it
             # yanks the tank straight back onto the lane it just dodged out of
@@ -845,7 +841,7 @@ class Tank:
         self.tanks_spawned_at = now
         last_inputs = [tank["last_input_time"] for tank in self.tanks]
         self.tanks = [self._spawn(0), self._spawn(1)]
-        for tank, last_input in zip(self.tanks, last_inputs):
+        for tank, last_input in zip(self.tanks, last_inputs, strict=True):
             tank["last_input_time"] = last_input
 
     def _drive_tank(self, tank: dict, intent: dict, now: float, dt: float) -> None:

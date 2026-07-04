@@ -40,7 +40,11 @@ def _set_now(monkeypatch, module, when):
 
 
 def _load_transition_policy_module(monkeypatch):
-    importlib.import_module("app.services")
+    # transition_policy binds human_pose via `import app.services.human_pose as
+    # human_pose`, i.e. attribute access on the package, so stub both sys.modules
+    # and the package attribute. Patching only sys.modules leaks the real module
+    # whenever it was imported earlier in the suite.
+    services_pkg = importlib.import_module("app.services")
 
     human_pose_stub = types.SimpleNamespace(
         is_arms_crossed=lambda pose_results: False,
@@ -52,6 +56,8 @@ def _load_transition_policy_module(monkeypatch):
     worldcup_stub = types.SimpleNamespace(get_worldcup_scorecard=lambda: {"events": []})
     monkeypatch.setitem(sys.modules, "app.services.human_pose", human_pose_stub)
     monkeypatch.setitem(sys.modules, "app.services.worldcup", worldcup_stub)
+    monkeypatch.setattr(services_pkg, "human_pose", human_pose_stub, raising=False)
+    monkeypatch.setattr(services_pkg, "worldcup", worldcup_stub, raising=False)
     sys.modules.pop("app.core.transition_policy", None)
     return importlib.import_module("app.core.transition_policy")
 
@@ -426,6 +432,120 @@ def test_reshuffle_runs_once_per_day_during_sleep(monkeypatch):
     assert scripts.reshuffle_calls == 2
 
 
+class _FaceMeshResults:
+    """Minimal face-mesh results stand-in with one detected face."""
+
+    def __init__(self, has_face=True):
+        self.multi_face_landmarks = [object()] if has_face else None
+
+
+def _apply_policy(policy, manager, pose_results=None):
+    return policy.apply(
+        frame=None,
+        pose_results=pose_results,
+        mode_manager=manager,
+        paint_mode=_Paint(),
+        script_mode=_Scripts(),
+    )
+
+
+def _pose_with_landmarks():
+    """Minimal pose results stand-in with a detected person."""
+    return types.SimpleNamespace(pose_landmarks=object())
+
+
+def _set_distance(monkeypatch, module, value):
+    monkeypatch.setattr(module.human_pose, "estimate_distance", lambda pose_results: (value, []))
+
+
+def _set_facing(monkeypatch, module, facing=True):
+    monkeypatch.setattr(
+        module.human_pose,
+        "eyes_visible_and_facing_camera",
+        lambda pose_results: (facing, "", 5.0),
+    )
+
+
+def _set_monotonic(monkeypatch, module, start=100.0):
+    """Fake ``time.monotonic`` in the policy module; returns the mutable clock."""
+    mono = {"value": start}
+    monkeypatch.setattr(module.time, "monotonic", lambda: mono["value"])
+    return mono
+
+
+def test_caricature_face_keeps_mode_alive_and_supplies_mesh(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_CARICATURE)
+    results = _FaceMeshResults()
+    monkeypatch.setattr(module.human_pose, "get_face_mesh", lambda frame: results)
+    # Stale well past the timeout: a present face must still keep the mode alive.
+    manager.mode_update_time = time.time() - (policy.CARICATURE_NO_FACE_TIMEOUT + 5.0)
+
+    state = _apply_policy(policy, manager)
+
+    assert manager.mode == ModeManager.MODE_CARICATURE
+    assert state.face_mesh_results is results
+    assert manager.get_time_since_last_mode_update() < 1.0
+
+
+def test_caricature_without_face_returns_to_clock_after_timeout(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_CARICATURE)
+    monkeypatch.setattr(module.human_pose, "get_face_mesh", lambda frame: None)
+
+    # Within the grace window: stays in caricature (mesh results may lag entry).
+    manager.mode_update_time = time.time() - 1.0
+    _apply_policy(policy, manager)
+    assert manager.mode == ModeManager.MODE_CARICATURE
+
+    manager.mode_update_time = time.time() - (policy.CARICATURE_NO_FACE_TIMEOUT + 1.0)
+    _apply_policy(policy, manager)
+    assert manager.mode == ModeManager.MODE_CLOCK
+
+
+def test_caricature_face_mesh_submit_is_throttled(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_CARICATURE)
+    calls = {"count": 0}
+
+    def fake_get_face_mesh(frame):
+        calls["count"] += 1
+        return _FaceMeshResults()
+
+    monkeypatch.setattr(module.human_pose, "get_face_mesh", fake_get_face_mesh)
+    mono = {"value": 100.0}
+    monkeypatch.setattr(module.time, "monotonic", lambda: mono["value"])
+
+    _apply_policy(policy, manager)
+    _apply_policy(policy, manager)  # same instant: served from cache
+    assert calls["count"] == 1
+
+    mono["value"] += policy.face_mesh_submit_interval + 0.01
+    _apply_policy(policy, manager)
+    assert calls["count"] == 2
+
+
+def test_caricature_arms_crossed_opens_menu(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_CARICATURE)
+    monkeypatch.setattr(module.human_pose, "get_face_mesh", lambda frame: None)
+    monkeypatch.setattr(module.human_pose, "is_arms_crossed", lambda pose_results: True)
+    clicks = {"count": 0}
+    monkeypatch.setattr(
+        manager,
+        "click_menu",
+        lambda entered_via=None: clicks.__setitem__("count", clicks["count"] + 1),
+    )
+
+    _apply_policy(policy, manager)
+
+    assert clicks["count"] == 1
+
+
 def test_reshuffle_when_sleep_disabled_fires_from_5am(monkeypatch):
     module, policy = _make_policy(monkeypatch)
     policy.set_sleep_settings(enabled=False, start_hour=1, end_hour=7)
@@ -447,3 +567,362 @@ def test_reshuffle_when_sleep_disabled_fires_from_5am(monkeypatch):
 
     _apply(datetime(2026, 6, 13, 5, 0, 0))
     assert scripts.reshuffle_calls == 1
+
+
+def test_clock_switches_to_sandfall_when_person_detected(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_CLOCK)
+    _set_distance(monkeypatch, module, 1.0)
+    _set_facing(monkeypatch, module)
+
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+
+    assert manager.mode == ModeManager.MODE_SANDFALL
+    assert policy._sandfall_via_chain is True
+
+
+def test_clock_ignores_person_not_facing(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_CLOCK)
+    _set_distance(monkeypatch, module, 1.0)
+    _set_facing(monkeypatch, module, facing=False)
+
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+
+    assert manager.mode == ModeManager.MODE_CLOCK
+
+
+def test_clock_ignores_person_when_pose_disabled(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_CLOCK)
+    manager.pose_enabled = False
+    _set_distance(monkeypatch, module, 1.0)
+    _set_facing(monkeypatch, module)
+
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+
+    assert manager.mode == ModeManager.MODE_CLOCK
+
+
+def test_disabling_pose_ends_chain_sandfall(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_SANDFALL)
+    policy._sandfall_via_chain = True
+    manager.pose_enabled = False
+    _set_distance(monkeypatch, module, 1.0)
+
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+
+    assert manager.mode == ModeManager.MODE_CLOCK
+    assert policy._sandfall_via_chain is False
+
+
+def test_disabling_pose_ends_auto_caricature(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_CARICATURE)
+    policy._caricature_return_mode = ModeManager.MODE_SANDFALL
+    policy._sandfall_via_chain = True
+    manager.pose_enabled = False
+    monkeypatch.setattr(module.human_pose, "get_face_mesh", lambda frame: _FaceMeshResults())
+
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+
+    assert manager.mode == ModeManager.MODE_CLOCK
+    assert policy._caricature_return_mode is None
+    assert policy._sandfall_via_chain is False
+
+
+def test_menu_launched_sandfall_survives_pose_disabled(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_SANDFALL)
+    manager.pose_enabled = False
+
+    _apply_policy(policy, manager)
+
+    assert manager.mode == ModeManager.MODE_SANDFALL
+
+
+def test_pose_mode_keepalive_and_timeout(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_POSE)
+    manager.mode_update_time = time.time() - 100.0
+
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+    assert manager.mode == ModeManager.MODE_POSE
+    assert manager.get_time_since_last_mode_update() < 1.0
+
+    manager.mode_update_time = time.time() - (policy.pose_timeout + 1.0)
+    _apply_policy(policy, manager)
+    assert manager.mode == ModeManager.MODE_CLOCK
+
+
+def test_sandfall_supplies_face_mesh_when_close(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_SANDFALL)
+    results = _FaceMeshResults()
+    monkeypatch.setattr(module.human_pose, "get_face_mesh", lambda frame: results)
+    monkeypatch.setattr(module.human_pose, "should_draw_face_features", lambda distance: True)
+
+    state = _apply_policy(policy, manager)
+
+    assert state.face_mesh_results is results
+
+
+def test_chain_sandfall_very_close_without_facing_never_enters_caricature(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    mono = _set_monotonic(monkeypatch, module)
+    manager = ModeManager(mode=ModeManager.MODE_SANDFALL)
+    policy._sandfall_via_chain = True
+    # A turned-away viewer produces wild low readings; they must not trigger.
+    _set_distance(monkeypatch, module, 0.4)
+    _set_facing(monkeypatch, module, facing=False)
+
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+    mono["value"] += policy.CARICATURE_ENTER_HOLD_SECONDS + 5.0
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+
+    assert manager.mode == ModeManager.MODE_SANDFALL
+
+
+def test_chain_sandfall_close_blip_does_not_enter_caricature(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    mono = _set_monotonic(monkeypatch, module)
+    manager = ModeManager(mode=ModeManager.MODE_SANDFALL)
+    policy._sandfall_via_chain = True
+    _set_facing(monkeypatch, module)
+
+    # Close frame starts the hold, a far frame resets it, close again restarts.
+    _set_distance(monkeypatch, module, 0.4)
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+    mono["value"] += 0.5
+    _set_distance(monkeypatch, module, 1.0)
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+    mono["value"] += 0.7
+    _set_distance(monkeypatch, module, 0.4)
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+
+    assert manager.mode == ModeManager.MODE_SANDFALL
+
+
+def test_chain_sandfall_enters_caricature_after_sustained_very_close(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    mono = _set_monotonic(monkeypatch, module)
+    manager = ModeManager(mode=ModeManager.MODE_SANDFALL)
+    policy._sandfall_via_chain = True
+    _set_distance(monkeypatch, module, 0.4)
+    _set_facing(monkeypatch, module)
+
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+    assert manager.mode == ModeManager.MODE_SANDFALL
+    mono["value"] += policy.CARICATURE_ENTER_HOLD_SECONDS + 0.1
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+
+    assert manager.mode == ModeManager.MODE_CARICATURE
+    assert policy._caricature_return_mode == ModeManager.MODE_SANDFALL
+    # The chain flag survives the hop so the round trip stays a chain.
+    assert policy._sandfall_via_chain is True
+
+
+def test_auto_caricature_returns_to_origin_after_sustained_backing_away(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    mono = _set_monotonic(monkeypatch, module)
+    manager = ModeManager(mode=ModeManager.MODE_CARICATURE)
+    policy._caricature_return_mode = ModeManager.MODE_SANDFALL
+    policy._sandfall_via_chain = True
+    monkeypatch.setattr(module.human_pose, "get_face_mesh", lambda frame: _FaceMeshResults())
+    _set_distance(monkeypatch, module, 0.7)
+
+    # First backing-away frame only starts the hold.
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+    assert manager.mode == ModeManager.MODE_CARICATURE
+
+    mono["value"] += policy.CARICATURE_EXIT_HOLD_SECONDS + 0.1
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+
+    assert manager.mode == ModeManager.MODE_SANDFALL
+    assert policy._caricature_return_mode is None
+
+
+def test_auto_caricature_far_blip_does_not_exit(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    mono = _set_monotonic(monkeypatch, module)
+    manager = ModeManager(mode=ModeManager.MODE_CARICATURE)
+    policy._caricature_return_mode = ModeManager.MODE_SANDFALL
+    monkeypatch.setattr(module.human_pose, "get_face_mesh", lambda frame: _FaceMeshResults())
+
+    # Far frame starts the hold, a close frame resets it, far again restarts.
+    _set_distance(monkeypatch, module, 0.7)
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+    mono["value"] += 1.5
+    _set_distance(monkeypatch, module, 0.4)
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+    mono["value"] += 1.0
+    _set_distance(monkeypatch, module, 0.7)
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+
+    assert manager.mode == ModeManager.MODE_CARICATURE
+    assert policy._caricature_return_mode == ModeManager.MODE_SANDFALL
+
+
+def test_auto_caricature_exit_hold_reports_progress(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    mono = _set_monotonic(monkeypatch, module)
+    manager = ModeManager(mode=ModeManager.MODE_CARICATURE)
+    policy._caricature_return_mode = ModeManager.MODE_SANDFALL
+    monkeypatch.setattr(module.human_pose, "get_face_mesh", lambda frame: _FaceMeshResults())
+    _set_distance(monkeypatch, module, 0.7)
+
+    state = _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+    assert state.caricature_exit_progress == 0.0
+
+    mono["value"] += policy.CARICATURE_EXIT_HOLD_SECONDS / 2.0
+    state = _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+    assert state.caricature_exit_progress == 0.5
+    assert manager.mode == ModeManager.MODE_CARICATURE
+
+    # An aborted hold stops reporting progress.
+    _set_distance(monkeypatch, module, 0.4)
+    state = _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+    assert state.caricature_exit_progress is None
+
+
+def test_auto_caricature_holds_in_hysteresis_dead_band(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    mono = _set_monotonic(monkeypatch, module)
+    manager = ModeManager(mode=ModeManager.MODE_CARICATURE)
+    policy._caricature_return_mode = ModeManager.MODE_SANDFALL
+    monkeypatch.setattr(module.human_pose, "get_face_mesh", lambda frame: _FaceMeshResults())
+    _set_distance(monkeypatch, module, 0.6)
+
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+    mono["value"] += policy.CARICATURE_EXIT_HOLD_SECONDS + 5.0
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+
+    assert manager.mode == ModeManager.MODE_CARICATURE
+    assert policy._caricature_return_mode == ModeManager.MODE_SANDFALL
+    assert policy._backing_away_since is None
+
+
+def test_auto_caricature_no_face_timeout_falls_back_to_clock(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_CARICATURE)
+    policy._caricature_return_mode = ModeManager.MODE_SANDFALL
+    monkeypatch.setattr(module.human_pose, "get_face_mesh", lambda frame: None)
+    manager.mode_update_time = time.time() - (policy.CARICATURE_NO_FACE_TIMEOUT + 1.0)
+
+    _apply_policy(policy, manager)
+
+    assert manager.mode == ModeManager.MODE_CLOCK
+    assert policy._caricature_return_mode is None
+
+
+def test_manual_caricature_ignores_distance(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_CARICATURE)
+    monkeypatch.setattr(module.human_pose, "get_face_mesh", lambda frame: _FaceMeshResults())
+    _set_distance(monkeypatch, module, 2.0)
+
+    state = _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+
+    assert manager.mode == ModeManager.MODE_CARICATURE
+    # Manual caricature never runs the exit hold, so no shrink is reported.
+    assert state.caricature_exit_progress is None
+
+
+def test_chain_sandfall_returns_to_clock_when_person_leaves(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_SANDFALL)
+    policy._sandfall_via_chain = True
+    manager.mode_update_time = time.time() - (policy.pose_timeout + 1.0)
+
+    _apply_policy(policy, manager)
+
+    assert manager.mode == ModeManager.MODE_CLOCK
+
+
+def test_chain_sandfall_keepalive_with_person_present(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_SANDFALL)
+    policy._sandfall_via_chain = True
+    manager.mode_update_time = time.time() - (policy.pose_timeout + 1.0)
+    _set_distance(monkeypatch, module, 1.0)
+
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+
+    assert manager.mode == ModeManager.MODE_SANDFALL
+    assert manager.get_time_since_last_mode_update() < 1.0
+
+
+def test_menu_launched_sandfall_idles_without_person(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_SANDFALL)
+    manager.mode_update_time = time.time() - 100.0
+
+    _apply_policy(policy, manager)
+
+    assert manager.mode == ModeManager.MODE_SANDFALL
+
+
+def test_menu_launched_sandfall_ignores_very_close_person(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    mono = _set_monotonic(monkeypatch, module)
+    manager = ModeManager(mode=ModeManager.MODE_SANDFALL)
+    _set_distance(monkeypatch, module, 0.4)
+    _set_facing(monkeypatch, module)
+
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+    mono["value"] += policy.CARICATURE_ENTER_HOLD_SECONDS + 5.0
+    _apply_policy(policy, manager, pose_results=_pose_with_landmarks())
+
+    assert manager.mode == ModeManager.MODE_SANDFALL
+
+
+def test_sandfall_arms_crossed_opens_menu(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_SANDFALL)
+    monkeypatch.setattr(module.human_pose, "is_arms_crossed", lambda pose_results: True)
+    clicks = {"count": 0}
+    monkeypatch.setattr(
+        manager,
+        "click_menu",
+        lambda entered_via=None: clicks.__setitem__("count", clicks["count"] + 1),
+    )
+
+    _apply_policy(policy, manager)
+
+    assert clicks["count"] == 1
+
+
+def test_external_mode_change_clears_chain_flags(monkeypatch):
+    module, policy = _make_policy(monkeypatch)
+    _set_now(monkeypatch, module, datetime(2026, 6, 13, 12, 30, 0))
+    manager = ModeManager(mode=ModeManager.MODE_MENU)
+    policy._caricature_return_mode = ModeManager.MODE_SANDFALL
+    policy._sandfall_via_chain = True
+
+    _apply_policy(policy, manager)
+
+    assert policy._caricature_return_mode is None
+    assert policy._sandfall_via_chain is False

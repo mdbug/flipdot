@@ -40,6 +40,22 @@ class RuntimeSettingsStore:
         }
         self._save_section("sleep", clamped)
 
+    def load_pose_settings(self) -> dict[str, bool] | None:
+        """Return the persisted person-detection (auto chain) toggle, or None if unset."""
+        payload = self._load_payload()
+        if payload is None:
+            return None
+
+        pose_payload = payload.get("pose") if isinstance(payload, dict) else None
+        if not isinstance(pose_payload, dict):
+            return None
+
+        return {"enabled": bool(pose_payload.get("enabled", True))}
+
+    def save_pose_settings(self, *, enabled: bool) -> None:
+        """Persist whether the person-driven auto chain may run."""
+        self._save_section("pose", {"enabled": bool(enabled)})
+
     def load_clock_settings(self) -> dict[str, object] | None:
         """Return the persisted clock face style and second-hand toggle, or None."""
         payload = self._load_payload()

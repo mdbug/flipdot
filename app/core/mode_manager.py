@@ -26,6 +26,8 @@ class ModeManager:
     MODE_BOARD = "board"
     MODE_FONT_PREVIEW = "font_preview"
     MODE_SCRIPT = "script"
+    MODE_LIFE = "life"
+    MODE_SANDFALL = "sandfall"
     MODE_DEFAULT = MODE_CLOCK
     MAX_FPS = {
         MODE_SLEEP: 1,
@@ -44,6 +46,8 @@ class ModeManager:
         MODE_BOARD: 30,
         MODE_FONT_PREVIEW: 30,
         MODE_SCRIPT: 30,
+        MODE_LIFE: 15,
+        MODE_SANDFALL: 30,
     }
 
     def __init__(self, mode: str = MODE_DEFAULT) -> None:
@@ -137,10 +141,14 @@ class ModeManager:
         else:
             return 30
 
-    def toggle_pose_enabled(self) -> None:
-        """Flip whether pose mode may be entered."""
-        self.pose_enabled = not self.pose_enabled
+    def set_pose_enabled(self, enabled: bool) -> None:
+        """Set whether the person-driven auto chain (sandfall/caricature) may run."""
+        self.pose_enabled = bool(enabled)
         logger.info("Pose mode enabled=%s", self.pose_enabled)
+
+    def toggle_pose_enabled(self) -> None:
+        """Flip whether the person-driven auto chain (sandfall/caricature) may run."""
+        self.set_pose_enabled(not self.pose_enabled)
 
     @classmethod
     def normalize_control_source(cls, source: str | None) -> str | None:

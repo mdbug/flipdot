@@ -225,6 +225,10 @@ class SleepSettingsPayload(BaseModel):
     end_hour: int = Field(ge=0, le=23)
 
 
+class PoseSettingsPayload(BaseModel):
+    enabled: bool
+
+
 class ClockSettingsPayload(BaseModel):
     style: Literal["digital", "analog"] = "digital"
     seconds: bool = False
@@ -759,6 +763,18 @@ class WebServer:
             )
             return JSONResponse({"status": "ok", **settings})
 
+        @self._app.get("/api/settings/pose")
+        def get_pose_settings() -> JSONResponse:
+            mode_manager = self._require_mode_manager()
+            return JSONResponse({"enabled": bool(mode_manager.pose_enabled)})
+
+        @self._app.post("/api/settings/pose")
+        def post_pose_settings(payload: PoseSettingsPayload) -> JSONResponse:
+            mode_manager = self._require_mode_manager()
+            mode_manager.set_pose_enabled(payload.enabled)
+            self._settings_store.save_pose_settings(enabled=bool(mode_manager.pose_enabled))
+            return JSONResponse({"status": "ok", "enabled": bool(mode_manager.pose_enabled)})
+
         @self._app.get("/api/settings/clock")
         def get_clock_settings() -> JSONResponse:
             clock = self._require_clock()
@@ -1112,6 +1128,9 @@ class WebServer:
 
     def attach_mode_manager(self, mode_manager) -> None:
         self._mode_manager = mode_manager
+        persisted = self._settings_store.load_pose_settings()
+        if persisted is not None:
+            mode_manager.set_pose_enabled(bool(persisted["enabled"]))
 
     def attach_transition_policy(self, transition_policy) -> None:
         self._transition_policy = transition_policy
@@ -1765,6 +1784,11 @@ class WebServer:
         if self._board is None:
             raise HTTPException(status_code=409, detail="board mode is not attached")
         return self._board
+
+    def _require_mode_manager(self) -> Any:
+        if self._mode_manager is None:
+            raise HTTPException(status_code=409, detail="mode manager is not attached")
+        return self._mode_manager
 
     def _require_transition_policy(self) -> Any:
         if self._transition_policy is None:

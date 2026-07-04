@@ -16,7 +16,6 @@ def _load_registry_module(monkeypatch):
     )
     transition_stub = types.SimpleNamespace(
         blend=lambda a, b, alpha: b,
-        resolve=lambda dots, alpha: dots,
     )
 
     monkeypatch.setitem(sys.modules, "app.services.human_pose", human_pose_stub)
@@ -49,45 +48,57 @@ class _FakeMode:
         return self._frame.copy()
 
 
+def _build_registry(registry_module, *, mode_blend_seconds=1.0, **mode_overrides):
+    """Build a registry with blank fakes for every mode not overridden."""
+    blank = _FakeMode(np.zeros((28, 28), dtype=np.uint8))
+    kwargs = {
+        name: blank
+        for name in (
+            "clock",
+            "menu",
+            "paint",
+            "caricature",
+            "percussion",
+            "autodrum",
+            "beatmirror",
+            "tetris_game",
+            "pong_game",
+            "tank_game",
+            "worldcup",
+            "board",
+            "font_preview",
+            "script_mode",
+            "life",
+            "sandfall",
+        )
+    }
+    kwargs.update(mode_overrides)
+    return registry_module.build_mode_registry(
+        img_sleep=np.zeros((28, 28), dtype=np.uint8),
+        mode_blend_seconds=mode_blend_seconds,
+        **kwargs,
+    )
+
+
 def test_build_mode_registry_maps_core_renderers(monkeypatch):
     registry_module = _load_registry_module(monkeypatch)
     mm = importlib.import_module("app.core.mode_manager")
 
-    clock = _FakeMode(np.ones((28, 28), dtype=np.uint8))
-    menu = _FakeMode(np.full((28, 28), 2, dtype=np.uint8))
-    paint = _FakeMode(np.full((28, 28), 3, dtype=np.uint8))
-    caricature = _FakeMode(np.full((28, 28), 4, dtype=np.uint8))
-    percussion = _FakeMode(np.full((28, 28), 5, dtype=np.uint8))
-    autodrum = _FakeMode(np.full((28, 28), 6, dtype=np.uint8))
-    beatmirror = _FakeMode(np.full((28, 28), 7, dtype=np.uint8))
-    tetris = _FakeMode(np.full((28, 28), 8, dtype=np.uint8))
-    pong = _FakeMode(np.full((28, 28), 9, dtype=np.uint8))
-    worldcup = _FakeMode(np.full((28, 28), 10, dtype=np.uint8))
-    board = _FakeMode(np.full((28, 28), 11, dtype=np.uint8))
-    font_preview = _FakeMode(np.full((28, 28), 12, dtype=np.uint8))
-    script_mode = _FakeMode(np.full((28, 28), 13, dtype=np.uint8))
     sleep = np.zeros((28, 28), dtype=np.uint8)
-
-    registry = registry_module.build_mode_registry(
-        clock=clock,
-        menu=menu,
-        paint=paint,
-        caricature=caricature,
-        percussion=percussion,
-        autodrum=autodrum,
-        beatmirror=beatmirror,
-        tetris_game=tetris,
-        pong_game=pong,
-        tank_game=_FakeMode(np.full((28, 28), 14, dtype=np.uint8)),
-        worldcup=worldcup,
-        board=board,
-        font_preview=font_preview,
-        script_mode=script_mode,
-        img_sleep=sleep,
-        clock_resolve_time=0.5,
-        clock_disolve_time=0.5,
+    registry = _build_registry(
+        registry_module,
+        mode_blend_seconds=0.5,
+        menu=_FakeMode(np.full((28, 28), 2, dtype=np.uint8)),
+        paint=_FakeMode(np.full((28, 28), 3, dtype=np.uint8)),
+        worldcup=_FakeMode(np.full((28, 28), 10, dtype=np.uint8)),
+        board=_FakeMode(np.full((28, 28), 11, dtype=np.uint8)),
+        font_preview=_FakeMode(np.full((28, 28), 12, dtype=np.uint8)),
+        script_mode=_FakeMode(np.full((28, 28), 13, dtype=np.uint8)),
+        life=_FakeMode(np.full((28, 28), 15, dtype=np.uint8)),
+        sandfall=_FakeMode(np.full((28, 28), 16, dtype=np.uint8)),
     )
 
+    # mode_time past the blend window, so every render shows the raw frame.
     c = _ctx(mode_time=1.0)
     assert np.array_equal(registry.render(mm.ModeManager.MODE_SLEEP, c), sleep)
     assert registry.render(mm.ModeManager.MODE_MENU, c)[0, 0] == 2
@@ -96,33 +107,15 @@ def test_build_mode_registry_maps_core_renderers(monkeypatch):
     assert registry.render(mm.ModeManager.MODE_BOARD, c)[0, 0] == 11
     assert registry.render(mm.ModeManager.MODE_FONT_PREVIEW, c)[0, 0] == 12
     assert registry.render(mm.ModeManager.MODE_SCRIPT, c)[0, 0] == 13
+    assert registry.render(mm.ModeManager.MODE_LIFE, c)[0, 0] == 15
+    assert registry.render(mm.ModeManager.MODE_SANDFALL, c)[0, 0] == 16
 
 
 def test_pose_and_clock_transition_paths(monkeypatch):
     registry_module = _load_registry_module(monkeypatch)
     mm = importlib.import_module("app.core.mode_manager")
 
-    clock = _FakeMode(np.zeros((28, 28), dtype=np.uint8))
-    blank = _FakeMode(np.zeros((28, 28), dtype=np.uint8))
-    registry = registry_module.build_mode_registry(
-        clock=clock,
-        menu=blank,
-        paint=blank,
-        caricature=blank,
-        percussion=blank,
-        autodrum=blank,
-        beatmirror=blank,
-        tetris_game=blank,
-        pong_game=blank,
-        tank_game=blank,
-        worldcup=blank,
-        board=blank,
-        font_preview=blank,
-        script_mode=blank,
-        img_sleep=np.zeros((28, 28), dtype=np.uint8),
-        clock_resolve_time=1.0,
-        clock_disolve_time=1.0,
-    )
+    registry = _build_registry(registry_module)
 
     pose_out = registry.render(mm.ModeManager.MODE_POSE, _ctx(mode_time=0.1))
     clock_out = registry.render(mm.ModeManager.MODE_CLOCK, _ctx(mode_time=0.1))
@@ -131,39 +124,91 @@ def test_pose_and_clock_transition_paths(monkeypatch):
     assert clock_out.shape == (28, 28)
 
 
-def test_script_mode_dissolves_from_clock(monkeypatch):
+def test_cross_blend_engaged_on_mode_change(monkeypatch):
     registry_module = _load_registry_module(monkeypatch)
     mm = importlib.import_module("app.core.mode_manager")
 
-    # Make the blend identifiable: return the clock frame (the first argument).
+    # Make the blend identifiable: return the previous frame (the first argument).
     registry_module.transition.blend = lambda a, b, alpha: a
 
-    clock = _FakeMode(np.full((28, 28), 1, dtype=np.uint8))
-    script_mode = _FakeMode(np.full((28, 28), 13, dtype=np.uint8))
-    blank = _FakeMode(np.zeros((28, 28), dtype=np.uint8))
-    registry = registry_module.build_mode_registry(
-        clock=clock,
-        menu=blank,
-        paint=blank,
-        caricature=blank,
-        percussion=blank,
-        autodrum=blank,
-        beatmirror=blank,
-        tetris_game=blank,
-        pong_game=blank,
-        tank_game=blank,
-        worldcup=blank,
-        board=blank,
-        font_preview=blank,
-        script_mode=script_mode,
-        img_sleep=np.zeros((28, 28), dtype=np.uint8),
-        clock_resolve_time=1.0,
-        clock_disolve_time=1.0,
+    registry = _build_registry(
+        registry_module,
+        clock=_FakeMode(np.full((28, 28), 1, dtype=np.uint8)),
+        script_mode=_FakeMode(np.full((28, 28), 13, dtype=np.uint8)),
     )
 
-    # Inside the dissolve window the script blends with the clock frame.
+    # Settle on the clock (first-ever render, shown raw).
+    assert registry.render(mm.ModeManager.MODE_CLOCK, _ctx(mode_time=2.0))[0, 0] == 1
+    # Inside the blend window the script blends with the previous clock frame.
     during = registry.render(mm.ModeManager.MODE_SCRIPT, _ctx(mode_time=0.1))
     assert during[0, 0] == 1
     # After it, the raw script frame is shown.
     after = registry.render(mm.ModeManager.MODE_SCRIPT, _ctx(mode_time=2.0))
     assert after[0, 0] == 13
+
+
+def test_first_render_has_no_blend(monkeypatch):
+    registry_module = _load_registry_module(monkeypatch)
+    mm = importlib.import_module("app.core.mode_manager")
+
+    calls = []
+    registry_module.transition.blend = lambda a, b, alpha: calls.append(alpha) or b
+
+    registry = _build_registry(
+        registry_module, clock=_FakeMode(np.full((28, 28), 1, dtype=np.uint8))
+    )
+
+    out = registry.render(mm.ModeManager.MODE_CLOCK, _ctx(mode_time=0.0))
+    assert out[0, 0] == 1
+    assert calls == []
+
+
+def test_no_blend_when_mode_unchanged(monkeypatch):
+    registry_module = _load_registry_module(monkeypatch)
+    mm = importlib.import_module("app.core.mode_manager")
+
+    calls = []
+    registry_module.transition.blend = lambda a, b, alpha: calls.append(alpha) or b
+
+    registry = _build_registry(registry_module)
+
+    registry.render(mm.ModeManager.MODE_CLOCK, _ctx(mode_time=0.1))
+    registry.render(mm.ModeManager.MODE_CLOCK, _ctx(mode_time=0.2))
+    assert calls == []
+
+
+def test_blend_alpha_matches_mode_time_fraction(monkeypatch):
+    registry_module = _load_registry_module(monkeypatch)
+    mm = importlib.import_module("app.core.mode_manager")
+
+    alphas = []
+    registry_module.transition.blend = lambda a, b, alpha: alphas.append(alpha) or b
+
+    registry = _build_registry(registry_module, mode_blend_seconds=2.0)
+
+    registry.render(mm.ModeManager.MODE_CLOCK, _ctx(mode_time=5.0))
+    registry.render(mm.ModeManager.MODE_SCRIPT, _ctx(mode_time=0.5))
+    assert alphas == [0.25]
+
+
+def test_mode_change_mid_blend_blends_from_displayed_frame(monkeypatch):
+    registry_module = _load_registry_module(monkeypatch)
+    mm = importlib.import_module("app.core.mode_manager")
+
+    # Blend keeps the previous frame, so the displayed frame stays whatever
+    # was on screen before the change.
+    registry_module.transition.blend = lambda a, b, alpha: a
+
+    registry = _build_registry(
+        registry_module,
+        clock=_FakeMode(np.full((28, 28), 1, dtype=np.uint8)),
+        script_mode=_FakeMode(np.full((28, 28), 13, dtype=np.uint8)),
+        menu=_FakeMode(np.full((28, 28), 2, dtype=np.uint8)),
+    )
+
+    registry.render(mm.ModeManager.MODE_CLOCK, _ctx(mode_time=5.0))
+    # Clock -> script: displays the clock frame mid-blend.
+    assert registry.render(mm.ModeManager.MODE_SCRIPT, _ctx(mode_time=0.1))[0, 0] == 1
+    # Script -> menu mid-blend: the new blend source is the *displayed*
+    # (still clock-valued) frame, not the raw script frame.
+    assert registry.render(mm.ModeManager.MODE_MENU, _ctx(mode_time=0.1))[0, 0] == 1

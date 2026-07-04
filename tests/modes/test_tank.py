@@ -421,7 +421,12 @@ def test_shell_expires_after_two_bounces(tank):
     # Throw a full-budget shell at the left border, re-arming it after each
     # reflection: it survives two bounces and expires on the third.
     tank.shells = [
-        {"pos": [1.0, 24.0], "vel": [-tank.SHELL_SPEED, 0.0], "bounces": tank.SHELL_BOUNCES, "owner": 0}
+        {
+            "pos": [1.0, 24.0],
+            "vel": [-tank.SHELL_SPEED, 0.0],
+            "bounces": tank.SHELL_BOUNCES,
+            "owner": 0,
+        }
     ]
     for remaining in (1, 0):
         tank._update_match(now, 0.05)
@@ -505,7 +510,9 @@ def test_spark_and_dent_render(tank):
     # A young spark is a stationary plus-shaped cluster -- nothing like the
     # lone travelling pixel of a shell -- that later collapses to a dot.
     frame = np.zeros((28, 28), dtype=np.uint8)
-    tank.fx = [{"kind": "spark", "x": 14.0, "y": 14.0, "start": now, "until": now + tank.SPARK_LIFE}]
+    tank.fx = [
+        {"kind": "spark", "x": 14.0, "y": 14.0, "start": now, "until": now + tank.SPARK_LIFE}
+    ]
     tank._draw_fx(frame, now + 0.01)
     assert frame[14, 14] == 1
     assert frame[13, 14] == 1 and frame[15, 14] == 1  # vertical arms

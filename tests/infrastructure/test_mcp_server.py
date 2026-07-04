@@ -10,9 +10,13 @@ from app.infrastructure.mcp_server import build_flipdot_mcp
 class DummyModeManager:
     def __init__(self):
         self.mode = "clock"
+        self.pose_enabled = True
 
     def set_mode(self, mode, entered_via=None):
         self.mode = mode
+
+    def set_pose_enabled(self, enabled):
+        self.pose_enabled = bool(enabled)
 
     def get_mode_time(self):
         return 1.5

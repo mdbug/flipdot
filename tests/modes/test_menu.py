@@ -171,6 +171,41 @@ def test_fonts_button_is_on_new_page(monkeypatch):
     assert "FONTS" in labels
 
 
+def test_face_button_switches_to_caricature(monkeypatch):
+    menu_module = _load_menu_module(monkeypatch)
+    manager = DummyModeManager()
+    menu = menu_module.Menu(width=28, height=28, mode_manager=manager)
+
+    face = next(item for page in menu.pages for item in page if item.label == "FACE")
+    face.click("web")
+
+    assert manager.modes[-1] == menu_module.ModeManager.MODE_CARICATURE
+
+
+def test_life_and_sand_buttons_switch_modes(monkeypatch):
+    menu_module = _load_menu_module(monkeypatch)
+    manager = DummyModeManager()
+    menu = menu_module.Menu(width=28, height=28, mode_manager=manager)
+
+    life = next(item for page in menu.pages for item in page if item.label == "LIFE")
+    life.click("web")
+    sand = next(item for page in menu.pages for item in page if item.label == "SAND")
+    sand.click("web")
+
+    assert menu_module.ModeManager.MODE_LIFE in manager.modes
+    assert menu_module.ModeManager.MODE_SANDFALL in manager.modes
+
+
+def test_menu_has_no_duplicate_or_self_entries(monkeypatch):
+    menu_module = _load_menu_module(monkeypatch)
+    manager = DummyModeManager()
+    menu = menu_module.Menu(width=28, height=28, mode_manager=manager)
+
+    labels = [item.label for page in menu.pages for item in page]
+    assert len(labels) == len(set(labels))
+    assert "MENU" not in labels
+
+
 def test_controller_navigation_suppresses_pointer_dwell(monkeypatch):
     menu_module = _load_menu_module(monkeypatch)
     now = {"value": 10.0}
@@ -207,3 +242,18 @@ def test_menu_ignores_controller_click_when_gesture_is_active_source(monkeypatch
     menu.get_frame(pose_results=None, input_hub=hub)
 
     assert manager.modes == []
+
+
+def test_checkbox_provider_syncs_with_external_state(monkeypatch):
+    menu_module = _load_menu_module(monkeypatch)
+    state = {"on": True}
+    checkbox = menu_module.Checkbox(
+        "POSE", 0, 28, checked=True, checked_provider=lambda: state["on"]
+    )
+    frame = np.zeros((28, 28), dtype=np.uint8)
+
+    # The setting flips elsewhere (e.g. via the web UI); drawing re-syncs.
+    state["on"] = False
+    checkbox.draw(frame)
+
+    assert checkbox.checked is False

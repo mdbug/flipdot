@@ -5,6 +5,7 @@ from app.services.draw import (
     draw_line,
     draw_point,
     fill_circle,
+    tapered_capsule,
     thick_line,
 )
 
@@ -100,3 +101,47 @@ def test_thick_line_diagonal_is_gap_free():
         cols = np.flatnonzero(row)
         if cols.size:
             assert cols[-1] - cols[0] + 1 == cols.size, "gap in thick diagonal row"
+
+
+def test_tapered_capsule_widths_taper():
+    frame = np.zeros((16, 28), dtype=np.uint8)
+    # Half-integer centerline row => symmetric even-count columns.
+    tapered_capsule(frame, (3, 7.5), (23, 7.5), r0=2.0, r1=1.0)
+    heights = [int(frame[:, col].sum()) for col in range(3, 24)]
+    assert heights[1] == 4  # near the wide end
+    assert heights[-2] == 2  # near the narrow end
+    assert all(a >= b for a, b in zip(heights, heights[1:], strict=False)), "width increased"
+
+
+def test_tapered_capsule_round_caps():
+    frame = np.zeros((12, 28), dtype=np.uint8)
+    tapered_capsule(frame, (4, 6), (23, 6), r0=2.0, r1=1.0)
+    # Just past each endpoint (within its radius) is lit; beyond it is not.
+    assert frame[6, 3] == 1
+    assert frame[6, 1] == 0
+    assert frame[6, 24] == 1
+    assert frame[6, 26] == 0
+
+
+def test_tapered_capsule_degenerate_point_is_disc():
+    frame = np.zeros((10, 10), dtype=np.uint8)
+    tapered_capsule(frame, (5, 5), (5, 5), r0=2.0, r1=1.0)
+    assert frame[5, 5] == 1
+    assert frame[5, 7] == 1  # disc of the larger radius
+    assert frame[5, 8] == 0
+
+
+def test_tapered_capsule_radius_floor_keeps_ink():
+    frame = np.zeros((10, 10), dtype=np.uint8)
+    tapered_capsule(frame, (2, 5), (7, 5), r0=0.1, r1=0.1)
+    assert (frame[5, 2:8] == 1).all()
+
+
+def test_tapered_capsule_clips_off_frame():
+    frame = np.zeros((10, 10), dtype=np.uint8)
+    tapered_capsule(frame, (-5, 5), (20, 5), r0=2.0, r1=2.0)
+    assert (frame[5, :] == 1).all()
+    # A capsule entirely outside the frame draws nothing and does not raise.
+    before = int(frame.sum())
+    tapered_capsule(frame, (50, 50), (60, 60), r0=2.0, r1=2.0)
+    assert int(frame.sum()) == before

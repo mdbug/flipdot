@@ -45,8 +45,8 @@
               id="settingsToggle"
               type="button"
               class="icon-button"
-              title="Sleep settings"
-              aria-label="Sleep settings"
+              title="Display settings"
+              aria-label="Display settings"
             >
               <span aria-hidden="true">&#9881;</span>
             </button>
@@ -74,6 +74,18 @@
             <input id="sleepEndHour" type="number" min="0" max="23" step="1" value="7" />
           </div>
           <p id="sleepSettingsStatus" class="system-note">Sleep settings not loaded yet.</p>
+          <div class="section-head compact">
+            <p class="eyebrow">Person detection</p>
+            <label
+              class="switch"
+              for="poseChainEnabled"
+              title="Auto sandfall/caricature when someone stands in front"
+            >
+              <input id="poseChainEnabled" type="checkbox" checked />
+              <span></span>
+            </label>
+          </div>
+          <p id="poseSettingsStatus" class="system-note">Detection setting not loaded yet.</p>
         </section>
 
         <section

@@ -16,6 +16,8 @@ const sleepEnabled = document.getElementById("sleepEnabled");
 const sleepStartHour = document.getElementById("sleepStartHour");
 const sleepEndHour = document.getElementById("sleepEndHour");
 const sleepSettingsStatus = document.getElementById("sleepSettingsStatus");
+const poseChainEnabled = document.getElementById("poseChainEnabled");
+const poseSettingsStatus = document.getElementById("poseSettingsStatus");
 const fontPreviewPhrase = document.getElementById("fontPreviewPhrase");
 const fontPreviewSpacing = document.getElementById("fontPreviewSpacing");
 const fontPreviewStatus = document.getElementById("fontPreviewStatus");
@@ -288,15 +290,16 @@ function renderControllerStatus(payload) {
   }
 }
 
-/** @returns {HTMLElement} The settings panel for the current mode. */
-function activeSettingsPanel() {
+/** @returns {HTMLElement[]} The settings panels for the current mode. */
+function activeSettingsPanels() {
   if (currentMode === "font_preview") {
-    return fontPreviewSettings;
+    return [fontPreviewSettings];
   }
   if (currentMode === "clock") {
-    return clockSettings;
+    // Clock mode gets its own settings plus the general sleep/person-detection panel.
+    return [clockSettings, sleepSettings];
   }
-  return sleepSettings;
+  return [sleepSettings];
 }
 
 /** Hide every mode settings panel. */
@@ -1035,6 +1038,45 @@ async function saveSleepSettings() {
     setSleepStatusWithTimestamp("Sleep settings saved", "ok");
   } catch (_err) {
     setSleepStatusWithTimestamp("Sleep settings saved", "ok");
+  }
+}
+
+/** Set the person-detection status line. @param {string} message @param {string} [kind] - "error", "ok", or "". */
+function setPoseSettingsStatus(message, kind = "") {
+  poseSettingsStatus.textContent = message;
+  poseSettingsStatus.classList.remove("error", "ok");
+  if (kind === "error" || kind === "ok") {
+    poseSettingsStatus.classList.add(kind);
+  }
+}
+
+/** Load the person-detection (auto sandfall/caricature chain) toggle from the backend. */
+async function loadPoseSettings() {
+  try {
+    const payload = await getJson("/api/settings/pose");
+    poseChainEnabled.checked = Boolean(payload.enabled);
+    setPoseSettingsStatus("Person detection loaded", "ok");
+  } catch (_err) {
+    setPoseSettingsStatus("Person detection unavailable.", "error");
+  }
+}
+
+/** Persist the person-detection toggle and reflect the saved result. */
+async function savePoseSettings() {
+  const response = await postJson("/api/settings/pose", {
+    enabled: poseChainEnabled.checked,
+  });
+  if (!response || !response.ok) {
+    setPoseSettingsStatus("Failed to save person detection.", "error");
+    return;
+  }
+
+  try {
+    const saved = await response.json();
+    poseChainEnabled.checked = Boolean(saved.enabled);
+    setPoseSettingsStatus("Person detection saved", "ok");
+  } catch (_err) {
+    setPoseSettingsStatus("Person detection saved", "ok");
   }
 }
 
@@ -2017,6 +2059,10 @@ sleepEndHour.addEventListener("change", () => {
   saveSleepSettings();
 });
 
+poseChainEnabled.addEventListener("change", () => {
+  savePoseSettings();
+});
+
 if (clockDisplayStyle) {
   clockDisplayStyle.addEventListener("change", () => {
     saveClockSettings();
@@ -2030,17 +2076,15 @@ if (clockSeconds) {
 }
 
 settingsToggle.addEventListener("click", () => {
-  if (currentMode === "font_preview" && fontPreviewSettings) {
-    fontPreviewSettings.classList.remove("hidden");
+  const panels = activeSettingsPanels().filter(Boolean);
+  if (!panels.length) {
     return;
   }
-  const panel = activeSettingsPanel();
-  if (!panel) {
-    return;
-  }
-  const shouldOpen = panel.classList.contains("hidden");
+  const shouldOpen = panels.some((panel) => panel.classList.contains("hidden"));
   hideAllSettingsPanels();
-  panel.classList.toggle("hidden", !shouldOpen);
+  for (const panel of panels) {
+    panel.classList.toggle("hidden", !shouldOpen);
+  }
 });
 
 if (fontPreviewPhrase) {
@@ -2655,6 +2699,7 @@ setBoardTool("select");
 syncCanvasResolution();
 window.addEventListener("resize", syncCanvasResolution, { passive: true });
 loadSleepSettings();
+loadPoseSettings();
 loadClockSettings();
 loadFontPreviewSettings();
 startWebSocket();

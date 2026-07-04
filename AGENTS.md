@@ -9,7 +9,7 @@ Interactive art installation driving a **28×7 × 4-module flip-dot display** (2
 - `app/core/` — the loop's decision logic, hardware-free and unit-tested: `ModeManager` (active mode + control source), `TransitionPolicy` (decides mode from pose/time), `InputHub` (`input_source.py`, merges input from all sources into a queue of pointer/click/action events), `action_dispatch` (applies queued actions to modes).
 - `app/modes/` — one class per display mode (see list below) plus the renderer plumbing: `contracts.py` (`Frame`, `RenderContext`, `ModeRegistry`), `factory.py` (`create_mode_instances`), `registry.py` (`build_mode_registry` maps a mode id to a renderer callable).
 - `app/infrastructure/` — I/O boundaries: `Camera`, `Panel` (flip-dot hardware), `WebServer` (FastAPI), `mcp_server.py` (AI tools), `chat.py` (Claude backend).
-- `app/services/` — supporting logic: `human_pose`, `text`, `draw` (1-bit line/circle/point primitives), `image`, `transition`, `weather`, `worldcup`, `fps`, `controller`/`controller_mapping` (BLE gamepads), `sandbox`/`script_store` (scripted animations), `settings_store`/`chat_session_store` (persistence), `fonts/`.
+- `app/services/` — supporting logic: `human_pose`, `figure` (constructed pose-mode character from landmarks), `text`, `draw` (1-bit line/circle/point primitives), `image`, `transition`, `weather`, `worldcup`, `fps`, `controller`/`controller_mapping` (BLE gamepads), `sandbox`/`script_store` (scripted animations), `settings_store`/`chat_session_store` (persistence), `fonts/`.
 - `web_ui/` — the browser console (static HTML/JS/CSS served by `WebServer`).
 - `state/` — runtime persistence (settings, saved boards, scripts, chat sessions); excluded from deploy rsync.
 - `flipPyDot/` — vendored fork of the flip-dot driver library (installed as the `flippydot` package); `Panel` (`app/infrastructure/panel.py`) wraps it.
@@ -21,15 +21,15 @@ There is no framework — `flipdot.py:main()` is a single hand-written loop. Eac
 2. Poll the Bluetooth controllers (`ControllerHub`) and feed presses through `ControllerInputBridge` into the `InputHub`.
 3. Run MediaPipe pose (`human_pose.get_human_pose`) — **unless** it can be skipped: during sleep hours, while a controller drives a UI-only mode (`CONTROLLER_DRIVEN_UI_MODES`), or while a script runs. Pose is the loop's biggest cost, so skipping it keeps controller/script frames fast. Feed results into the `InputHub`.
 4. `dispatch_actions(...)` applies queued input events (filtered by `mode_manager.get_allowed_input_sources()`) to the relevant mode.
-5. `TransitionPolicy.apply(...)` decides the active mode from pose state and the clock (eyes visible + close enough → POSE; no pose for `POSE_TIMEOUT` → CLOCK; inside the sleep window → SLEEP) and returns a `TransitionState` (distance, angle, face-mesh results).
-6. The `ModeRegistry` renders the active mode from a `RenderContext` → a `Frame`; `Panel.update(dots)` serializes and writes to hardware.
+5. `TransitionPolicy.apply(...)` decides the active mode from pose state and the clock and returns a `TransitionState` (distance, angle, face-mesh results). It drives a gesture chain: eyes visible + close enough → SANDFALL (the silhouette gets lit eyes/mouth from face mesh when close); very close **while facing the camera** and held for `CARICATURE_ENTER_HOLD_SECONDS` (< `CARICATURE_ENTER_DISTANCE`, hysteresis exit above `CARICATURE_EXIT_DISTANCE` held for `CARICATURE_EXIT_HOLD_SECONDS`) → CARICATURE — whose face first appears at the viewer's real on-panel head position and grows to full size over `ENTRY_ZOOM_SECONDS` (see `caricature.py`), then shrinks back onto the head while the exit hold runs down (`caricature_exit_progress` on `RenderContext`) — and back to sandfall on backing away — the facing gate and holds exist because the single-frame distance estimate swings wildly when the viewer turns; no person for `POSE_TIMEOUT` → CLOCK; inside the sleep window → SLEEP. Menu/MCP-launched sandfall and caricature are exempt from the chain's presence/distance rules. The menu's POSE checkbox (`ModeManager.pose_enabled`) turns the whole auto chain on/off — entry is blocked and any chain-entered mode returns to clock. POSE mode still exists (MCP/menu-fallback) but is no longer auto-entered.
+6. The `ModeRegistry` (a `CrossFadingModeRegistry`) renders the active mode from a `RenderContext` → a `Frame`, random-pixel blending from the previously displayed frame for `MODE_BLEND_SECONDS` (1 s) after every mode change; `Panel.update(dots)` serializes and writes to hardware.
 7. If the web UI is enabled, `WebServer.publish_frame(...)` mirrors the frame to browsers; the loop then sleeps/spin-waits to honor the per-mode FPS cap.
 
 **The frame is the universal data type:** a `np.zeros((HEIGHT, WIDTH), dtype=np.uint8)` array of 0/1 dot values. Every renderer takes a `RenderContext` and returns one. Use the `Frame = np.ndarray` alias from `app/modes/contracts.py`. `Panel.WIDTH`/`Panel.HEIGHT` are the source of truth for dimensions — never hardcode them.
 
 **Control sources.** `ModeManager` tracks both the active mode and the active *control source* (`CONTROL_GESTURE` vs `CONTROL_CONTROLLER`). Connecting a controller switches the source to controller; with none connected it falls back to gesture. `get_allowed_input_sources(include_web=True)` is what gates which queued `InputHub` events actually drive the display (`web` is always allowed). Each mode has a per-mode FPS cap in `ModeManager.MAX_FPS`; `get_fps_limit()` returns 30 for the first 5s of a mode for responsive transitions.
 
-**Modes** (`ModeManager.MODE_*`): `sleep`, `clock`, `pose`, `menu`, `paint`, `caricature`, `percussion`, `autodrum`, `beatmirror`, `tetris`, `pong`, `tank`, `worldcup`, `board`, `font_preview`, `script`. To add a mode: define a `MODE_*` constant + `MAX_FPS` entry in `ModeManager`, construct it in `factory.create_mode_instances`, and register a renderer in `registry.build_mode_registry`.
+**Modes** (`ModeManager.MODE_*`): `sleep`, `clock`, `pose`, `menu`, `paint`, `caricature`, `percussion`, `autodrum`, `beatmirror`, `tetris`, `pong`, `tank`, `worldcup`, `board`, `font_preview`, `script`, `life`, `sandfall`. To add a mode: define a `MODE_*` constant + `MAX_FPS` entry in `ModeManager`, construct it in `factory.create_mode_instances`, and register a renderer in `registry.build_mode_registry`.
 
 ## Web UI, AI control & scripting
 
@@ -91,14 +91,14 @@ mypy is gradual (`disallow_untyped_defs=false`) and checks the `app` package. `p
   - Core: `CAMERA_INDEX`, `PREVIEW`, `DEBUG`, `LOG_LEVEL`, `SLEEP_HOUR_START`/`SLEEP_HOUR_END`, `FOCAL_SCALE`.
   - Web/AI: `ENABLE_WEB_UI`, `WEB_UI_HOST`, `WEB_UI_PORT`, `WEB_UI_ALLOWED_ORIGINS`, `ENABLE_MCP`, `MCP_AUTH_TOKEN`, `MCP_ALLOWED_HOSTS`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`.
   - Controllers: `PRIMARY_CONTROLLER_ADDRESS`/`PRIMARY_CONTROLLER_NAME`, `SECONDARY_CONTROLLER_ADDRESS`. BLE link tuning applied after each connect: `CONTROLLER_SUPERVISION_TIMEOUT_MS` (default 2000; 0 disables the LE Connection Update), `CONTROLLER_CONN_MIN_INTERVAL_MS`/`CONTROLLER_CONN_MAX_INTERVAL_MS` (default 15/30) — a longer supervision timeout lets weak controllers ride through brief signal fades instead of dropping.
-  - Integrations: `OPENWEATHER_API_KEY` (weather), `API_FOOTBALL_API_KEY` (worldcup), `PIXELLAB_API_KEY`/`OPENAI_API_KEY` (image generation).
-  - Sandbox/models: `SANDBOX_MEM_MB`, `SANDBOX_CPU_SECONDS`, `SANDBOX_NPROC`, `SANDBOX_FRAME_TIMEOUT`, `SANDBOX_STARTUP_TIMEOUT`, `SANDBOX_MAX_SOURCE_BYTES`, `MEDIAPIPE_MODELS_DIR`, `POSE_MODEL`.
+  - Integrations: `OPENWEATHER_API_KEY` (weather), `API_FOOTBALL_API_KEY` (worldcup).
+  - Sandbox/models: `SANDBOX_MEM_MB`, `SANDBOX_CPU_SECONDS`, `SANDBOX_NPROC`, `SANDBOX_FRAME_TIMEOUT`, `SANDBOX_STARTUP_TIMEOUT`, `SANDBOX_MAX_SOURCE_BYTES`, `MEDIAPIPE_MODELS_DIR`, `POSE_MODEL`, `HAIR_SEGMENT_MAX_FPS`.
   - `DEBUG=true` overlays distance/angle text on the bottom rows; `LOG_LEVEL` controls logging verbosity (default `INFO`, set `DEBUG` for per-second performance logs).
 
 ## Installed software on the Jetson
 
 - **Python 3.10** (`/usr/bin/python3`) — packages installed system-wide via `pip3`, **not pipenv**.
-- **mediapipe 0.10.18** — uses the Tasks API (`mediapipe.tasks`) with CPU/XNNPACK delegate. Model files live in `~/flipdot/models/` on the Jetson (`MEDIAPIPE_MODELS_DIR` overrides; excluded from rsync and `.gitignore`). If model files are absent (e.g. on a dev machine) the code automatically falls back to the legacy `mp.solutions.pose` API, so local development works without them. GPU delegate is not available in the pip build; TensorRT 10.3.0 is installed but not yet wired up.
+- **mediapipe 0.10.18** — uses the Tasks API (`mediapipe.tasks`) with CPU/XNNPACK delegate. Model files live in `~/flipdot/models/` on the Jetson (`MEDIAPIPE_MODELS_DIR` overrides; excluded from rsync and `.gitignore`). If model files are absent (e.g. on a dev machine) the code automatically falls back to the legacy `mp.solutions.pose` API, so local development works without them. The caricature mode's hair rendering additionally uses the multiclass selfie segmenter (`selfie_multiclass_256x256.tflite`, initialized lazily by `app/services/hair_segmentation.py`; throttled via `HAIR_SEGMENT_MAX_FPS`, default 7); if that model is missing, hair is skipped with a single warning. GPU delegate is not available in the pip build; TensorRT 10.3.0 is installed but not yet wired up.
 - **TensorRT 10.3.0** — pre-installed with JetPack; future path for GPU-accelerated pose inference.
 - **bubblewrap (`bwrap`)** — required for the script sandbox; if absent, scripts refuse to run (fail closed).
 - **opencv-python, pyserial, requests, pillow, python-dotenv, fastapi, uvicorn, python-multipart, evdev, mcp, anthropic** — installed via pip3.
@@ -131,6 +131,7 @@ sudo logrotate -f /etc/logrotate.d/flipdot # force log rotation check
     mkdir -p ~/flipdot/models && cd ~/flipdot/models
     wget -q https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task
     wget -q https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
+    wget -q https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite
     ```
 
 ## Gotchas

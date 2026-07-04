@@ -29,8 +29,7 @@ from app.services.fps import FPSTracker
 
 PRINT_INTERVAL = 1.0
 POSE_TIMEOUT = 2.0
-CLOCK_RESOLVE_TIME = 1.0
-CLOCK_DISOLVE_TIME = 1.0
+MODE_BLEND_SECONDS = 1.0
 SPIN_WAIT_MIN_FPS = 20
 SPIN_GUARD_SEC = 0.012
 PAINT_CLEAR_HOLD_SEC = 1.0
@@ -189,6 +188,8 @@ def main() -> None:
     board = mode_instances["board"]
     font_preview = mode_instances["font_preview"]
     script_mode = mode_instances["script"]
+    life = mode_instances["life"]
+    sandfall = mode_instances["sandfall"]
     img_sleep = image.load("sleep.png")
     mode_registry = build_mode_registry(
         clock=clock,
@@ -205,9 +206,10 @@ def main() -> None:
         board=board,
         font_preview=font_preview,
         script_mode=script_mode,
+        life=life,
+        sandfall=sandfall,
         img_sleep=img_sleep,
-        clock_resolve_time=CLOCK_RESOLVE_TIME,
-        clock_disolve_time=CLOCK_DISOLVE_TIME,
+        mode_blend_seconds=MODE_BLEND_SECONDS,
     )
     transition_policy = TransitionPolicy(
         pose_timeout=POSE_TIMEOUT,
@@ -364,6 +366,7 @@ def main() -> None:
                 panel_width=panel.WIDTH,
                 panel_height=panel.HEIGHT,
                 input_hub=input_hub,
+                caricature_exit_progress=transition_state.caricature_exit_progress,
             )
             dots = mode_registry.render(mode_manager.mode, render_context)
 

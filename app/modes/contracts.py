@@ -20,6 +20,9 @@ class RenderContext:
     panel_width: int
     panel_height: int
     input_hub: Any = None
+    # 0..1 progress of the caricature exit hold (viewer backing away); None
+    # outside an auto-caricature exit. Drives the shrink-back animation.
+    caricature_exit_progress: float | None = None
 
 
 class ModeRegistry:

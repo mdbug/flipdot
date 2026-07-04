@@ -67,9 +67,13 @@ class DummyScriptMode:
 class DummyModeManager:
     def __init__(self):
         self.mode = None
+        self.pose_enabled = True
 
     def set_mode(self, mode):
         self.mode = mode
+
+    def set_pose_enabled(self, enabled):
+        self.pose_enabled = bool(enabled)
 
 
 def _make_server(port):

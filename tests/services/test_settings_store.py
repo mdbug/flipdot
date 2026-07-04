@@ -45,6 +45,26 @@ def test_clock_settings_preserves_other_sections(tmp_path):
     assert store.load_clock_settings() == {"style": "analog", "seconds": False}
 
 
+def test_pose_settings_round_trip(tmp_path):
+    store = RuntimeSettingsStore(tmp_path / "settings.json")
+
+    assert store.load_pose_settings() is None
+
+    store.save_pose_settings(enabled=False)
+    assert store.load_pose_settings() == {"enabled": False}
+
+    store.save_pose_settings(enabled=True)
+    assert store.load_pose_settings() == {"enabled": True}
+
+
+def test_pose_settings_loaded_invalid_returns_none(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text('{"pose": "nope"}', encoding="utf-8")
+
+    store = RuntimeSettingsStore(settings_path)
+    assert store.load_pose_settings() is None
+
+
 def test_script_settings_round_trip(tmp_path):
     store = RuntimeSettingsStore(tmp_path / "settings.json")
 

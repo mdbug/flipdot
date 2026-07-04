@@ -79,6 +79,52 @@ def fill_circle(frame: np.ndarray, center: Point, radius: float, *, color: int =
     frame[mask] = 0 if int(color) == 0 else 1
 
 
+def tapered_capsule(
+    frame: np.ndarray, p0: Point, p1: Point, *, r0: float, r1: float, color: int = 1
+) -> None:
+    """Fill a round-capped capsule whose radius tapers linearly from ``r0`` at ``p0`` to ``r1`` at ``p1``.
+
+    A pixel is lit when it lies within the local radius of the closest point on
+    the segment; clamping the projection to the segment makes the end caps
+    round with the endpoint radii. Radii are floored at 0.5 so a taper never
+    thins below a single pixel of ink.
+    """
+    r0 = max(0.5, float(r0))
+    r1 = max(0.5, float(r1))
+
+    x0, y0 = p0
+    x1, y1 = p1
+    length = math.hypot(x1 - x0, y1 - y0)
+    if length == 0.0:
+        fill_circle(frame, p0, max(r0, r1), color=color)
+        return
+
+    value = 0 if int(color) == 0 else 1
+    r_max = max(r0, r1)
+    height, width_px = frame.shape
+
+    ux = (x1 - x0) / length
+    uy = (y1 - y0) / length
+
+    xlo = max(int(math.floor(min(x0, x1) - r_max)), 0)
+    xhi = min(int(math.ceil(max(x0, x1) + r_max)), width_px - 1)
+    ylo = max(int(math.floor(min(y0, y1) - r_max)), 0)
+    yhi = min(int(math.ceil(max(y0, y1) + r_max)), height - 1)
+    if xlo > xhi or ylo > yhi:
+        return
+
+    ys = np.arange(ylo, yhi + 1).reshape(-1, 1)
+    xs = np.arange(xlo, xhi + 1).reshape(1, -1)
+    dx = xs - x0
+    dy = ys - y0
+    t = np.clip((dx * ux + dy * uy) / length, 0.0, 1.0)
+    nearest_x = x0 + t * (x1 - x0)
+    nearest_y = y0 + t * (y1 - y0)
+    radius = r0 + t * (r1 - r0)
+    mask = (xs - nearest_x) ** 2 + (ys - nearest_y) ** 2 <= radius**2
+    frame[ylo : yhi + 1, xlo : xhi + 1][mask] = value
+
+
 def thick_line(
     frame: np.ndarray, p0: Point, p1: Point, *, width: float = 1.0, color: int = 1
 ) -> None:

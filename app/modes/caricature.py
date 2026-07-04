@@ -1,417 +1,847 @@
-import base64
-import io
+"""Live line-art caricature mirror driven by MediaPipe face-mesh landmarks.
+
+Renders the viewer's face as 1-bit vector strokes at native panel resolution:
+landmarks are normalized into a face-local frame, expression/structure metrics
+are measured, amplified relative to fixed neutral values, and drawn with the
+clipping-safe primitives from :mod:`app.services.draw`. Everything is local and
+deterministic — no network calls and no raster scaling or thresholding.
+
+Side names ("left"/"right") follow the face-mesh index convention used in
+:mod:`app.services.human_pose` (the 33/133 eye family is "left"). The extracted
+x coordinates are mirrored, so a "left" feature renders on the panel's right
+half — the display behaves like a mirror, matching pose mode.
+"""
+
+from __future__ import annotations
+
 import logging
-import os
-import threading
+import math
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
-import cv2
 import numpy as np
-import PIL.Image
-import requests
 
-import app.services.text as text_module
 from app.core.mode_manager import ModeManager
-from app.modes.contracts import Frame
+from app.modes.contracts import Frame, RenderContext
+from app.services.draw import draw_circle, draw_line, draw_point, thick_line
+
+HairMaskProvider = Callable[[np.ndarray], "np.ndarray | None"]
 
 logger = logging.getLogger(__name__)
 
+# --- Face-mesh landmark indices (MediaPipe 478-point topology) ---
+# 16-point subsample of FACEMESH_FACE_OVAL, ordered clockwise from the forehead.
+FACE_OVAL_INDICES = [10, 297, 284, 389, 454, 361, 397, 379, 152, 150, 172, 132, 234, 162, 54, 67]
+LEFT_BROW_INDICES = [46, 52, 55]
+RIGHT_BROW_INDICES = [276, 282, 285]
+LEFT_BROW_MID = 52
+RIGHT_BROW_MID = 282
+LEFT_EYE_OUTER, LEFT_EYE_INNER = 33, 133
+RIGHT_EYE_INNER, RIGHT_EYE_OUTER = 362, 263
+LEFT_EYE_TOP, LEFT_EYE_BOTTOM = 159, 145
+RIGHT_EYE_TOP, RIGHT_EYE_BOTTOM = 386, 374
+LEFT_IRIS_CENTER = 468
+RIGHT_IRIS_CENTER = 473
+NOSE_BRIDGE, NOSE_TIP = 168, 4
+NOSE_BASE_LEFT, NOSE_BASE_RIGHT = 98, 327
+MOUTH_CORNER_LEFT, MOUTH_CORNER_RIGHT = 61, 291
+UPPER_LIP_TOP, LOWER_LIP_BOTTOM = 0, 17
+UPPER_LIP_INNER, LOWER_LIP_INNER = 13, 14
+MOUTH_UPPER_INDICES = [61, 40, 0, 270, 291]
+MOUTH_LOWER_INDICES = [61, 91, 17, 321, 291]
+FACE_TOP, CHIN = 10, 152
+FACE_LEFT, FACE_RIGHT = 234, 454
+JAW_LEFT, JAW_RIGHT = 172, 397
+
+_MOUTH_ALL = sorted({*MOUTH_UPPER_INDICES, *MOUTH_LOWER_INDICES})
+_MOUTH_UPPER_SET = frozenset(MOUTH_UPPER_INDICES)
+# Smile lifts the corners most; opening separates the lip midpoints most.
+_MOUTH_SMILE_WEIGHT = {61: 1.0, 291: 1.0, 40: 0.5, 270: 0.5, 91: 0.5, 321: 0.5, 0: 0.0, 17: 0.0}
+_MOUTH_OPEN_WEIGHT = {0: 1.0, 17: 1.0, 40: 0.7, 270: 0.7, 91: 0.7, 321: 0.7, 61: 0.0, 291: 0.0}
+
+USED_INDICES: list[int] = sorted(
+    {
+        *FACE_OVAL_INDICES,
+        *LEFT_BROW_INDICES,
+        *RIGHT_BROW_INDICES,
+        LEFT_EYE_OUTER,
+        LEFT_EYE_INNER,
+        RIGHT_EYE_INNER,
+        RIGHT_EYE_OUTER,
+        LEFT_EYE_TOP,
+        LEFT_EYE_BOTTOM,
+        RIGHT_EYE_TOP,
+        RIGHT_EYE_BOTTOM,
+        LEFT_IRIS_CENTER,
+        RIGHT_IRIS_CENTER,
+        NOSE_BRIDGE,
+        NOSE_TIP,
+        NOSE_BASE_LEFT,
+        NOSE_BASE_RIGHT,
+        UPPER_LIP_INNER,
+        LOWER_LIP_INNER,
+        *_MOUTH_ALL,
+    }
+)
+_INDEX_TO_ROW = {index: row for row, index in enumerate(USED_INDICES)}
+_MAX_MESH_INDEX = max(index for index in USED_INDICES if index < LEFT_IRIS_CENTER)
+
+# --- Geometry: how the face-local frame maps onto the panel ---
+# Sized so ~6 rows above the face oval stay free for the hair mass.
+PANEL_IOD_FRAC = 0.24  # inter-ocular distance as a fraction of panel width
+FACE_ANCHOR_Y_FRAC = 0.44  # eye line sits at this fraction of panel height
+FACE_MIN_IOD_NORM = 0.03  # below this normalized IOD the face is too far to trust
+LOWER_FACE_Y_GAIN = 1.0  # on-device knob for camera-above foreshortening
+# Entrance animation: the caricature first appears where (and as small as)
+# the viewer's real face sits on the panel — matching the face sandfall drew
+# on the silhouette — then grows into the canonical projection.
+ENTRY_ZOOM_SECONDS = 1.5
+
+# --- Exaggeration ---
+ROLL_GAIN = 1.6
+ROLL_MAX_RAD = 0.61
+
+# --- Smoothing & rendering ---
+LANDMARK_EMA_ALPHA = 0.35
+FACE_HOLD_SEC = 1.0  # keep drawing the last face this long after detection drops
+EYE_OPEN_MIN_IOD = 0.055  # hysteresis: closed eye opens above this exaggerated lid gap
+EYE_CLOSE_MIN_IOD = 0.035  # hysteresis: open eye closes below this exaggerated lid gap
+EYE_GAP_DISPLAY_GAIN = 2.5  # lid-gap px multiplier so openness reads at 28 px
+EYE_MIN_HALF_GAP_PX = 1.0
+MOUTH_OPEN_MIN_PX = 1.6  # exaggerated inner-lip gap needed to draw an open mouth
+MOUTH_OPEN_UPPER_SHARE = 0.3  # opening shifts the lower lip more than the upper
+# One row keeps brow and lid distinct while still letting lowered (angry) brows
+# drop below their neutral row; two rows would push them back above neutral.
+MIN_BROW_EYE_GAP_ROWS = 1
+MIN_NOSE_LIP_GAP_ROWS = 1
+
+# --- Hair (sampled from the selfie-multiclass hair segmentation mask) ---
+HAIR_COL_XS = np.linspace(-1.8, 1.8, 23)  # sample columns in face-local IOD units
+HAIR_RAY_TOP_IOD = -3.2  # rays scan from this far above the eye line...
+HAIR_RAY_BOTTOM_IOD = 2.2  # ...down past the chin (side curtains, long hair)
+HAIR_RAY_STEP_IOD = 0.08
+_HAIR_RAY_YS = np.arange(HAIR_RAY_TOP_IOD, HAIR_RAY_BOTTOM_IOD, HAIR_RAY_STEP_IOD)
+HAIR_MIN_COVERAGE = 0.02  # fraction of ray samples that must hit hair to accept a profile
+HAIR_EMA_ALPHA = 0.3  # slower than landmarks: masks arrive at the segmenter's ~7 Hz
+HAIR_ABSENT_HEIGHT_IOD = 0.02  # decayed columns below this collapse to "no hair"
+HAIR_MIN_HEIGHT_IOD = 0.15  # skip skinnier columns (speckle gate)
+HAIR_STROKE_WIDTH_PX = 1.8  # > column spacing in px, so the fill comb is gap-free
+HAIR_BROW_GUARD_MAX_X_IOD = 0.9
+HAIR_BROW_GUARD_MIN_HEIGHT_IOD = 0.75  # fill floor over the brows: >= 1 row above a raised brow
+FOREHEAD_ARC_INDICES = [162, 54, 67, 10, 297, 284, 389]
+
+# --- Ears (brackets attached to the oval's widest points, mesh 234/454) ---
+EAR_HALF_HEIGHT_IOD = 0.3
+EAR_WIDTH_IOD = 0.32
+EAR_COVERED_MIN_HANG_Y_IOD = 0.1  # side hair hanging below this local y hides the ear
+
+# --- Idle placeholder face ---
+IDLE_FACE_MARGIN_PX = 2.0
+IDLE_EYE_OFFSET_X_FRAC = 0.35
+IDLE_EYE_OFFSET_Y_FRAC = 0.30
+IDLE_MOUTH_OFFSET_Y_FRAC = 0.45
+IDLE_MOUTH_HALF_WIDTH_FRAC = 0.35
+IDLE_BLINK_PERIOD_SEC = 2.4
+IDLE_BLINK_CLOSED_SEC = 0.25
+
+_EPS = 1e-6
+
+
+def _clamp(value: float, lo: float, hi: float) -> float:
+    """Clamp ``value`` into ``[lo, hi]``."""
+    return min(hi, max(lo, value))
+
+
+@dataclass(frozen=True)
+class ExaggerationSpec:
+    """Neutral value, amplification gain, and clamp range for one face metric."""
+
+    neutral: float
+    gain: float
+    lo: float
+    hi: float
+
+    def apply(self, measured: float) -> float:
+        """Amplify the deviation of ``measured`` from neutral, clamped to the range."""
+        return _clamp(self.neutral + self.gain * (measured - self.neutral), self.lo, self.hi)
+
+
+# Metric units are inter-ocular distances; values are on-device tuning starting points.
+EXAGGERATION: dict[str, ExaggerationSpec] = {
+    "mouth_width": ExaggerationSpec(neutral=0.80, gain=1.8, lo=0.55, hi=1.35),
+    "mouth_open": ExaggerationSpec(neutral=0.03, gain=2.2, lo=0.0, hi=0.65),
+    "smile": ExaggerationSpec(neutral=0.0, gain=2.5, lo=-0.28, hi=0.28),
+    "brow": ExaggerationSpec(neutral=0.36, gain=2.2, lo=0.18, hi=0.62),
+    "eye_open": ExaggerationSpec(neutral=0.105, gain=2.0, lo=0.0, hi=0.28),
+    "jaw_width": ExaggerationSpec(neutral=1.30, gain=1.4, lo=0.95, hi=1.70),
+    "face_aspect": ExaggerationSpec(neutral=1.32, gain=1.3, lo=1.05, hi=1.65),
+    # Mean hair height above the forehead arc, in IOD units.
+    "hair_volume": ExaggerationSpec(neutral=0.22, gain=1.7, lo=0.0, hi=0.9),
+}
+
+
+@dataclass(frozen=True)
+class FaceMetrics:
+    """Dimensionless face measurements in face-local, IOD-normalized coordinates."""
+
+    mouth_width: float
+    mouth_open: float
+    smile: float
+    brow_left: float
+    brow_right: float
+    eye_open_left: float
+    eye_open_right: float
+    jaw_width: float
+    face_aspect: float
+    roll: float
+
+
+def _extract_points(landmark_list: Any) -> np.ndarray | None:
+    """Gather the used landmarks into an ``(N, 2)`` array of mirrored normalized coords.
+
+    Returns None when the mesh is too short to contain the required landmarks.
+    Missing iris landmarks (a 468-point mesh without iris refinement) fall back
+    to the corresponding eye-corner midpoint.
+    """
+    count = len(landmark_list)
+    if count <= _MAX_MESH_INDEX:
+        return None
+    points = np.empty((len(USED_INDICES), 2), dtype=np.float64)
+    for row, index in enumerate(USED_INDICES):
+        if index < count:
+            landmark = landmark_list[index]
+            points[row, 0] = 1.0 - landmark.x
+            points[row, 1] = landmark.y
+        else:
+            points[row] = np.nan
+    for iris, (corner_a, corner_b) in (
+        (LEFT_IRIS_CENTER, (LEFT_EYE_OUTER, LEFT_EYE_INNER)),
+        (RIGHT_IRIS_CENTER, (RIGHT_EYE_INNER, RIGHT_EYE_OUTER)),
+    ):
+        row = _INDEX_TO_ROW[iris]
+        if np.isnan(points[row, 0]):
+            points[row] = (points[_INDEX_TO_ROW[corner_a]] + points[_INDEX_TO_ROW[corner_b]]) / 2.0
+    return points
+
+
+def _face_basis(points: np.ndarray) -> tuple[np.ndarray, float, float]:
+    """Return ``(eye_mid, iod, roll)`` computed from the eye-corner landmarks."""
+    eye_left = (points[_INDEX_TO_ROW[LEFT_EYE_OUTER]] + points[_INDEX_TO_ROW[LEFT_EYE_INNER]]) / 2.0
+    eye_right = (
+        points[_INDEX_TO_ROW[RIGHT_EYE_INNER]] + points[_INDEX_TO_ROW[RIGHT_EYE_OUTER]]
+    ) / 2.0
+    eye_mid = (eye_left + eye_right) / 2.0
+    # The mesh-"left" eye sits on the panel's right after mirroring, so this
+    # delta points in +x for an upright face and roll is ~0.
+    delta = eye_left - eye_right
+    iod = float(math.hypot(delta[0], delta[1]))
+    roll = math.atan2(delta[1], delta[0])
+    return eye_mid, iod, roll
+
+
+def _to_face_local(points: np.ndarray, eye_mid: np.ndarray, iod: float, roll: float) -> np.ndarray:
+    """Map points into the face-local frame: eye-mid origin, roll removed, IOD units."""
+    cos_r, sin_r = math.cos(-roll), math.sin(-roll)
+    rotation = np.array([[cos_r, -sin_r], [sin_r, cos_r]])
+    return ((points - eye_mid) / iod) @ rotation.T
+
+
+def _measure_metrics(local: np.ndarray, roll: float) -> FaceMetrics:
+    """Measure the expression/structure metrics from face-local points."""
+
+    def x(index: int) -> float:
+        return float(local[_INDEX_TO_ROW[index], 0])
+
+    def y(index: int) -> float:
+        return float(local[_INDEX_TO_ROW[index], 1])
+
+    face_width = abs(x(FACE_RIGHT) - x(FACE_LEFT))
+    return FaceMetrics(
+        mouth_width=abs(x(MOUTH_CORNER_RIGHT) - x(MOUTH_CORNER_LEFT)),
+        mouth_open=abs(y(LOWER_LIP_INNER) - y(UPPER_LIP_INNER)),
+        smile=(y(UPPER_LIP_TOP) + y(LOWER_LIP_BOTTOM)) / 2.0
+        - (y(MOUTH_CORNER_LEFT) + y(MOUTH_CORNER_RIGHT)) / 2.0,
+        brow_left=(y(LEFT_EYE_OUTER) + y(LEFT_EYE_INNER)) / 2.0 - y(LEFT_BROW_MID),
+        brow_right=(y(RIGHT_EYE_INNER) + y(RIGHT_EYE_OUTER)) / 2.0 - y(RIGHT_BROW_MID),
+        eye_open_left=abs(y(LEFT_EYE_BOTTOM) - y(LEFT_EYE_TOP)),
+        eye_open_right=abs(y(RIGHT_EYE_BOTTOM) - y(RIGHT_EYE_TOP)),
+        jaw_width=abs(x(JAW_RIGHT) - x(JAW_LEFT)),
+        face_aspect=abs(y(CHIN) - y(FACE_TOP)) / max(face_width, _EPS),
+        roll=roll,
+    )
+
+
+def _exaggerate(measured: FaceMetrics) -> FaceMetrics:
+    """Amplify each metric's deviation from its neutral value."""
+    spec = EXAGGERATION
+    return FaceMetrics(
+        mouth_width=spec["mouth_width"].apply(measured.mouth_width),
+        mouth_open=spec["mouth_open"].apply(measured.mouth_open),
+        smile=spec["smile"].apply(measured.smile),
+        brow_left=spec["brow"].apply(measured.brow_left),
+        brow_right=spec["brow"].apply(measured.brow_right),
+        eye_open_left=spec["eye_open"].apply(measured.eye_open_left),
+        eye_open_right=spec["eye_open"].apply(measured.eye_open_right),
+        jaw_width=spec["jaw_width"].apply(measured.jaw_width),
+        face_aspect=spec["face_aspect"].apply(measured.face_aspect),
+        roll=_clamp(ROLL_GAIN * measured.roll, -ROLL_MAX_RAD, ROLL_MAX_RAD),
+    )
+
+
+def _apply_exaggeration(local: np.ndarray, measured: FaceMetrics, exag: FaceMetrics) -> np.ndarray:
+    """Warp face-local points so they exhibit the exaggerated metrics.
+
+    Width-like metrics scale multiplicatively about a feature center; gap-like
+    metrics shift points additively, so near-zero measurements (e.g. a closed
+    mouth) stay numerically stable. Eye openness is intentionally not applied
+    here — eyes are drawn parametrically from the exaggerated metric.
+    """
+    out = local.copy()
+
+    # Lower-face vertical stretch (long/short chin) below the eye line.
+    aspect_scale = (exag.face_aspect / max(measured.face_aspect, _EPS)) * LOWER_FACE_Y_GAIN
+    lower = out[:, 1] > 0.0
+    out[lower, 1] *= aspect_scale
+
+    # Jaw width, tapering from full effect at the chin to none at the eye line.
+    chin_y = float(out[_INDEX_TO_ROW[CHIN], 1])
+    if chin_y > _EPS:
+        jaw_scale = exag.jaw_width / max(measured.jaw_width, _EPS)
+        taper = np.clip(out[:, 1] / chin_y, 0.0, 1.0)
+        out[:, 0] *= 1.0 + (jaw_scale - 1.0) * taper
+
+    for indices, delta in (
+        (LEFT_BROW_INDICES, exag.brow_left - measured.brow_left),
+        (RIGHT_BROW_INDICES, exag.brow_right - measured.brow_right),
+    ):
+        for index in indices:
+            out[_INDEX_TO_ROW[index], 1] -= delta
+
+    # Mouth: width about its center, smile on the corners, opening on the lips.
+    anchor_rows = [
+        _INDEX_TO_ROW[index]
+        for index in (MOUTH_CORNER_LEFT, MOUTH_CORNER_RIGHT, UPPER_LIP_TOP, LOWER_LIP_BOTTOM)
+    ]
+    center_x = float(np.mean(out[anchor_rows, 0]))
+    width_scale = exag.mouth_width / max(measured.mouth_width, _EPS)
+    smile_delta = exag.smile - measured.smile
+    open_delta = exag.mouth_open - measured.mouth_open
+    for index in _MOUTH_ALL:
+        row = _INDEX_TO_ROW[index]
+        out[row, 0] = center_x + width_scale * (out[row, 0] - center_x)
+        out[row, 1] -= smile_delta * _MOUTH_SMILE_WEIGHT[index]
+        open_shift = open_delta * _MOUTH_OPEN_WEIGHT[index]
+        if index in _MOUTH_UPPER_SET:
+            out[row, 1] -= open_shift * MOUTH_OPEN_UPPER_SHARE
+        else:
+            out[row, 1] += open_shift * (1.0 - MOUTH_OPEN_UPPER_SHARE)
+    return out
+
+
+def _project_to_panel(
+    local: np.ndarray,
+    roll: float,
+    width: int,
+    height: int,
+    anchor: np.ndarray | None = None,
+    iod_px: float | None = None,
+) -> np.ndarray:
+    """Project face-local points onto panel pixels, re-applying the (exaggerated) roll.
+
+    ``anchor``/``iod_px`` override the canonical center/scale (used by the
+    entry zoom); by default the face is centered with the standard size.
+    """
+    cos_r, sin_r = math.cos(roll), math.sin(roll)
+    rotation = np.array([[cos_r, -sin_r], [sin_r, cos_r]])
+    if anchor is None:
+        anchor = np.array([(width - 1) / 2.0, height * FACE_ANCHOR_Y_FRAC])
+    if iod_px is None:
+        iod_px = width * PANEL_IOD_FRAC
+    return anchor + iod_px * (local @ rotation.T)
+
+
+def _hair_profile_from_mask(
+    mask: np.ndarray, eye_mid: np.ndarray, iod: float, roll: float
+) -> np.ndarray:
+    """Sample the hair mask into per-column top/bottom profiles in face-local units.
+
+    Casts a vertical ray per ``HAIR_COL_XS`` column through the mask (raw,
+    unmirrored camera raster) and returns a ``(2, n_cols)`` array: row 0 is the
+    topmost and row 1 the bottommost hair hit, both as heights above the eye
+    line (positive up, IOD units), NaN where the column has no hair. Returns
+    all-NaN when total coverage is below ``HAIR_MIN_COVERAGE``.
+    """
+    n_cols = HAIR_COL_XS.size
+    n_rays = _HAIR_RAY_YS.size
+    grid = np.empty((n_cols * n_rays, 2))
+    grid[:, 0] = np.repeat(HAIR_COL_XS, n_rays)
+    grid[:, 1] = np.tile(_HAIR_RAY_YS, n_cols)
+    cos_r, sin_r = math.cos(roll), math.sin(roll)
+    rotation = np.array([[cos_r, -sin_r], [sin_r, cos_r]])
+    normalized = eye_mid + iod * (grid @ rotation.T)  # mirrored normalized coords
+    height, width = mask.shape
+    cols = np.round((1.0 - normalized[:, 0]) * (width - 1)).astype(int)  # unmirror
+    rows = np.round(normalized[:, 1] * (height - 1)).astype(int)
+    in_bounds = (cols >= 0) & (cols < width) & (rows >= 0) & (rows < height)
+    hits = np.zeros(n_cols * n_rays, dtype=bool)
+    hits[in_bounds] = mask[rows[in_bounds], cols[in_bounds]]
+    hits = hits.reshape(n_cols, n_rays)
+    profile = np.full((2, n_cols), np.nan)
+    if hits.mean() < HAIR_MIN_COVERAGE:
+        return profile
+    has_hit = hits.any(axis=1)
+    topmost = hits.argmax(axis=1)
+    bottommost = n_rays - 1 - hits[:, ::-1].argmax(axis=1)
+    profile[0, has_hit] = -_HAIR_RAY_YS[topmost[has_hit]]
+    profile[1, has_hit] = -_HAIR_RAY_YS[bottommost[has_hit]]
+    return profile
+
+
+def _forehead_arc_heights(local: np.ndarray) -> np.ndarray:
+    """Interpolate the upper face-oval arc height (positive up) at each hair column."""
+    xs = np.array([local[_INDEX_TO_ROW[index], 0] for index in FOREHEAD_ARC_INDICES])
+    heights = np.array([-local[_INDEX_TO_ROW[index], 1] for index in FOREHEAD_ARC_INDICES])
+    order = np.argsort(xs)
+    return np.interp(HAIR_COL_XS, xs[order], heights[order])
+
+
+def _smooth_hair_profile(previous: np.ndarray | None, measured: np.ndarray) -> np.ndarray:
+    """Blend the measured ``(2, n_cols)`` hair profile into the previous one.
+
+    Element-wise EMA where both are present; newly appearing columns are
+    adopted directly, vanished ones decay toward zero. A column whose *top*
+    has decayed to (near) nothing is collapsed to fully absent — bottoms may
+    legitimately sit near zero (the eye line), so they never trigger collapse.
+    """
+    if previous is None:
+        return measured.copy()
+    out = previous.copy()
+    prev_absent = np.isnan(previous)
+    meas_absent = np.isnan(measured)
+    both = ~prev_absent & ~meas_absent
+    out[both] = (1.0 - HAIR_EMA_ALPHA) * previous[both] + HAIR_EMA_ALPHA * measured[both]
+    adopt = prev_absent & ~meas_absent
+    out[adopt] = measured[adopt]
+    decay = ~prev_absent & meas_absent
+    out[decay] = (1.0 - HAIR_EMA_ALPHA) * previous[decay]
+    out[:, np.abs(out[0]) < HAIR_ABSENT_HEIGHT_IOD] = np.nan
+    return out
+
+
+def _exaggerate_hair(heights_above_arc: np.ndarray) -> np.ndarray:
+    """Scale per-column hair heights so the mean volume matches its exaggerated value."""
+    if bool(np.all(np.isnan(heights_above_arc))):
+        return heights_above_arc
+    volume = float(np.nanmean(np.clip(heights_above_arc, 0.0, None)))
+    if volume <= _EPS:
+        return heights_above_arc
+    target = EXAGGERATION["hair_volume"].apply(volume)
+    return heights_above_arc * (target / volume)
+
+
+HairStroke = tuple[int, tuple[float, float], tuple[float, float]]
+
+
+def _hair_strokes(profile: np.ndarray, local: np.ndarray) -> list[HairStroke]:
+    """Turn the ``(2, n_cols)`` hair profile into face-local fill strokes.
+
+    Returns ``(column_index, top_point, bottom_point)`` per drawable column.
+    Columns over the face fill from the forehead arc up (the brow guard keeps
+    them clear of a fully raised brow); columns beside the face hang down to
+    their measured bottom hit, rendering side curtains and long hair.
+    """
+    arc = _forehead_arc_heights(local)
+    exaggerated = _exaggerate_hair(profile[0] - arc)
+    strokes: list[HairStroke] = []
+    for index, (x, arc_height, extra, hang) in enumerate(
+        zip(HAIR_COL_XS, arc, exaggerated, profile[1], strict=True)
+    ):
+        if np.isnan(extra):
+            continue
+        if abs(x) <= HAIR_BROW_GUARD_MAX_X_IOD:
+            bottom = max(arc_height, HAIR_BROW_GUARD_MIN_HEIGHT_IOD)
+        elif not np.isnan(hang):
+            bottom = float(hang)
+        else:
+            bottom = arc_height
+        top = arc_height + extra
+        if top - bottom < HAIR_MIN_HEIGHT_IOD:
+            continue
+        strokes.append((index, (float(x), -top), (float(x), -bottom)))
+    return strokes
+
+
+def _ear_polylines(warped: np.ndarray) -> list[np.ndarray]:
+    """Build face-local ear brackets attached to the oval's widest points.
+
+    Each ear is a 3-point ``(top, tip, bottom)`` polyline bulging outward from
+    the warped oval anchor, so ears follow jaw-width exaggeration and roll.
+    """
+    ears = []
+    for index in (FACE_LEFT, FACE_RIGHT):
+        anchor = warped[_INDEX_TO_ROW[index]]
+        direction = 1.0 if anchor[0] >= 0 else -1.0
+        ears.append(
+            np.array(
+                [
+                    [anchor[0], anchor[1] - EAR_HALF_HEIGHT_IOD],
+                    [anchor[0] + direction * EAR_WIDTH_IOD, anchor[1]],
+                    [anchor[0], anchor[1] + EAR_HALF_HEIGHT_IOD],
+                ]
+            )
+        )
+    return ears
+
+
+def _ear_hidden_by_hair(strokes: list[HairStroke], side_sign: float) -> bool:
+    """Whether side-hair strokes on the given side hang low enough to cover the ear."""
+    for _, _, (x, bottom_y) in strokes:
+        if (
+            abs(x) > HAIR_BROW_GUARD_MAX_X_IOD
+            and x * side_sign > 0
+            and bottom_y > EAR_COVERED_MIN_HANG_Y_IOD
+        ):
+            return True
+    return False
+
+
+def _latest_points(face_mesh_results: Any) -> np.ndarray | None:
+    """Extract mirrored landmark points from face-mesh results, or None when unusable."""
+    if face_mesh_results is None:
+        return None
+    faces = getattr(face_mesh_results, "multi_face_landmarks", None)
+    if not faces:
+        return None
+    points = _extract_points(faces[0].landmark)
+    if points is None:
+        return None
+    _, iod, _ = _face_basis(points)
+    if iod < FACE_MIN_IOD_NORM:
+        return None
+    return points
+
+
+def _pt(panel: np.ndarray, index: int) -> tuple[float, float]:
+    """Return the panel-space ``(x, y)`` of a landmark by its mesh index."""
+    row = _INDEX_TO_ROW[index]
+    return float(panel[row, 0]), float(panel[row, 1])
+
+
+def _draw_polyline(
+    frame: Frame, points: list[tuple[float, float]], *, closed: bool = False
+) -> None:
+    """Draw connected line segments through ``points``, optionally closing the loop."""
+    for start, end in zip(points, points[1:], strict=False):
+        draw_line(frame, start, end)
+    if closed and len(points) > 2:
+        draw_line(frame, points[-1], points[0])
+
 
 class Caricature:
-    """Captures a camera frame, generates a 1-bit caricature via an API, and displays it."""
+    """Renders the viewer as a live, exaggerated line-art face."""
 
-    STATE_COUNTDOWN = "countdown"
-    STATE_CAPTURING = "capturing"
-    STATE_LOADING = "loading"
-    STATE_DISPLAYING = "displaying"
-    STATE_ERROR = "error"
-
-    COUNTDOWN_DURATION = 3  # seconds of countdown before capture
-    DISPLAY_DURATION = 30  # seconds before auto-returning to clock
-
-    def __init__(self, width: int, height: int, mode_manager: ModeManager) -> None:
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        mode_manager: ModeManager,
+        hair_mask_provider: HairMaskProvider | None = None,
+    ) -> None:
         self.width = width
         self.height = height
         self.mode_manager = mode_manager
-        self._lock = threading.Lock()
-        self._generation = 0
+        self.hair_mask_provider = hair_mask_provider
+        self._panel_iod_px = width * PANEL_IOD_FRAC
         self._last_mode_start_time: float | None = None
-        self.state: str | None = None
-        self.caricature_dots: np.ndarray | None = None
-        self.countdown_start: float | None = None
-        self.display_start_time: float | None = None
-        self.error_msg: str | None = None
+        self._smoothed: np.ndarray | None = None
+        self._hair_profile: np.ndarray | None = None
+        self._last_face_time: float | None = None
+        self._eye_open: dict[str, bool] = {"left": True, "right": True}
+        self._showing_face = False
+        # Where the entry zoom starts: (anchor px, iod px) of the viewer's
+        # real face, captured on the first faced frame after mode entry.
+        self._entry_start: tuple[np.ndarray, float] | None = None
+        # Projection used for the current frame (canonical outside the zoom).
+        self._proj_anchor: np.ndarray = np.array([(width - 1) / 2.0, height * FACE_ANCHOR_Y_FRAC])
+        self._proj_iod_px: float = self._panel_iod_px
 
     def _reset(self) -> None:
-        """Bump the generation counter and restart the countdown state machine."""
-        with self._lock:
-            self._generation += 1
-            self.state = self.STATE_COUNTDOWN
-            self.caricature_dots = None
-            self.countdown_start = time.time()
-            self.display_start_time = None
-            self.error_msg = None
+        """Clear smoothing and per-eye state on mode entry."""
+        self._smoothed = None
+        self._hair_profile = None
+        self._last_face_time = None
+        self._eye_open = {"left": True, "right": True}
+        self._showing_face = False
+        self._entry_start = None
 
-    def _call_pixellab_api(self, image_b64: str, generation: int) -> None:
-        """Background worker: submit the photo, poll for the caricature, and store the result."""
-        try:
-            api_token = os.getenv("PIXELLAB_API_TOKEN") or os.getenv("PIXELLAB_API_KEY")
-            if not api_token:
-                raise ValueError("Missing PIXELLAB_API_TOKEN")
-
-            headers = {"Authorization": f"Bearer {api_token}"}
-
-            # Encode reference image (camera frame)
-            img_bytes = base64.b64decode(image_b64)
-            src_pil = PIL.Image.open(io.BytesIO(img_bytes)).convert("RGB")
-            src_w, src_h = src_pil.size
-            ref_w, ref_h = self._fit_within_limit(src_w, src_h, 1024)
-            if (ref_w, ref_h) != (src_w, src_h):
-                src_pil = src_pil.resize((ref_w, ref_h), PIL.Image.LANCZOS)
-            ref_buf = io.BytesIO()
-            src_pil.save(ref_buf, format="JPEG", quality=85)
-            ref_b64 = base64.b64encode(ref_buf.getvalue()).decode("utf-8")
-
-            payload = {
-                "description": "Create a monochromatic (1bit only black and white, no grey!) caricature of that person! The background should be black.",
-                "image_size": {"width": self.width, "height": self.height},
-                "no_background": False,
-                "reference_images": [
-                    {
-                        "image": {"type": "base64", "base64": ref_b64, "format": "jpeg"},
-                        "size": {"width": ref_w, "height": ref_h},
-                    }
-                ],
-            }
-
-            resp = requests.post(
-                "https://api.pixellab.ai/v2/generate-image-v2",
-                headers=headers,
-                json=payload,
-                timeout=30,
-            )
-            if not resp.ok:
-                logger.error(
-                    "Caricature API generate-image-v2 error status=%s body=%s",
-                    resp.status_code,
-                    resp.text[:2000],
-                )
-            resp.raise_for_status()
-
-            job_id = resp.json()["background_job_id"]
-            logger.info("Caricature job queued id=%s", job_id)
-
-            # Poll until complete (max 2 minutes)
-            result_pil = None
-            deadline = time.time() + 120
-            while time.time() < deadline:
-                time.sleep(3)
-                poll = requests.get(
-                    f"https://api.pixellab.ai/v2/background-jobs/{job_id}",
-                    headers=headers,
-                    timeout=15,
-                )
-                poll.raise_for_status()
-                data = poll.json()
-                status = data.get("status")
-                if status == "completed":
-                    last = data.get("last_response") or {}
-                    logger.info("Caricature job completed id=%s", job_id)
-                    logger.debug("Caricature last_response keys=%s", list(last.keys()))
-                    images = last.get("images", [])
-                    if not images:
-                        raise ValueError(f"No images in completed job: {last}")
-                    logger.info("Caricature received %s image candidate(s)", len(images))
-                    pil_images = []
-                    for i, img_entry in enumerate(images):
-                        img_b64_raw = img_entry.get("base64", "")
-                        if img_b64_raw.startswith("data:"):
-                            img_b64_raw = img_b64_raw.split(",", 1)[1]
-                        pil = PIL.Image.open(io.BytesIO(base64.b64decode(img_b64_raw)))
-                        pil.save(f"caricature_result_raw_{i}.png")
-                        pil_images.append(pil)
-                    best = self._pick_best_image(pil_images, ref_b64)
-                    result_pil = pil_images[best]
-                    break
-                elif status == "failed":
-                    raise ValueError(f"Job failed: {data.get('last_response')}")
-                logger.debug("Caricature poll id=%s status=%s", job_id, status)
-
-            if result_pil is None:
-                raise TimeoutError("Caricature job timed out after 2 minutes")
-
-            logger.info("Caricature result ready size=%s mode=%s", result_pil.size, result_pil.mode)
-
-            dots = self._pil_image_to_dots(result_pil)
-
-            with self._lock:
-                if self._generation == generation:
-                    self.caricature_dots = dots
-                    self.state = self.STATE_DISPLAYING
-                    self.display_start_time = time.time()
-                    cv2.imwrite("caricature_result.png", self.caricature_dots * 255)
-                    logger.info("Saved caricature result to caricature_result.png")
-
-        except Exception:
-            logger.exception("Caricature API workflow failed")
-            with self._lock:
-                if self._generation == generation:
-                    self.state = self.STATE_ERROR
-                    self.error_msg = "Generation failed"
-
-    def _fit_within_limit(self, width: int, height: int, limit: int) -> tuple[int, int]:
-        """Scale (width, height) down so the longer side is at most ``limit`` px."""
-        max_side = max(width, height)
-        if max_side <= limit:
-            return width, height
-        scale = limit / float(max_side)
-        new_w = max(16, int(round(width * scale)))
-        new_h = max(16, int(round(height * scale)))
-        return new_w, new_h
-
-    def _pil_image_to_dots(self, pil_image: PIL.Image.Image) -> np.ndarray:
-        """Dither a PIL image down to a 1-bit dot array sized to the panel."""
-        # Flatten alpha onto white background before any conversion
-        if pil_image.mode in ("RGBA", "LA") or (
-            pil_image.mode == "P" and "transparency" in pil_image.info
-        ):
-            bg = PIL.Image.new("RGB", pil_image.size, (255, 255, 255))
-            bg.paste(
-                pil_image, mask=pil_image.split()[-1] if pil_image.mode in ("RGBA", "LA") else None
-            )
-            pil_image = bg
-        # Resize then dither to 1-bit (Floyd-Steinberg) — better than hard-threshold for coloured pixel art
-        resized = pil_image.convert("L").resize((self.width, self.height), PIL.Image.LANCZOS)
-        dithered = resized.convert("1")  # PIL default: Floyd-Steinberg dithering
-        # PIL '1' mode: 0=black, 255=white per pixel; map to 1=on (white), 0=off (black)
-        arr = np.array(dithered, dtype=np.uint8)
-        return (arr != 0).astype(np.uint8)
-
-    def _pick_best_image(self, pil_images: list[PIL.Image.Image], original_b64: str) -> int:
-        """Send candidate images + original photo to an AI; return the index of the best match."""
-        if len(pil_images) <= 1:
-            return 0
-
-        # Scale up for AI visibility (nearest-neighbour preserves pixel art edges)
-        scale = 4
-        thumbs_b64 = []
-        for img in pil_images:
-            bw = img.convert("L").point(lambda p: 255 if p >= 128 else 0)
-            scaled = bw.resize((bw.width * scale, bw.height * scale), PIL.Image.NEAREST)
-            buf = io.BytesIO()
-            scaled.save(buf, format="PNG")
-            thumbs_b64.append(base64.b64encode(buf.getvalue()).decode("utf-8"))
-
-        prompt = (
-            f"The first image is the original photograph of a person. "
-            f"The following {len(pil_images)} images are small pixel art caricature candidates "
-            f"(each {pil_images[0].width}\u00d7{pil_images[0].height}px, shown scaled up {scale}x) "
-            f"for a 28\u00d728 1-bit flip-dot display. "
-            f"Choose the candidate in which the person from the photo is most clearly recognisable. "
-            f"Reply with ONLY the 0-based index number of the best candidate (0 to {len(pil_images) - 1})."
-        )
-
-        anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-        openai_key = os.getenv("OPENAI_API_KEY")
-        try:
-            if anthropic_key:
-                return self._pick_with_anthropic(
-                    thumbs_b64, original_b64, prompt, anthropic_key, len(pil_images)
-                )
-            elif openai_key:
-                return self._pick_with_openai(
-                    thumbs_b64, original_b64, prompt, openai_key, len(pil_images)
-                )
-            else:
-                logger.info("No AI key available for image selection; using candidate index 0")
-                return 0
-        except Exception:
-            logger.exception("AI image selection failed; using candidate index 0")
-            return 0
-
-    def _pick_with_anthropic(
-        self,
-        thumbs_b64: list[str],
-        original_b64: str,
-        prompt: str,
-        api_key: str,
-        n: int,
-    ) -> int:
-        """Ask Claude to pick the most recognizable candidate; return its index."""
-        content: list[dict] = [
-            {"type": "text", "text": "Original photograph:"},
-            {
-                "type": "image",
-                "source": {"type": "base64", "media_type": "image/jpeg", "data": original_b64},
-            },
-        ]
-        for i, b64 in enumerate(thumbs_b64):
-            content.append({"type": "text", "text": f"Candidate {i}:"})
-            content.append(
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": "image/png", "data": b64},
-                }
-            )
-        content.append({"type": "text", "text": prompt})
-        resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 16,
-                "messages": [{"role": "user", "content": content}],
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        text = resp.json()["content"][0]["text"].strip()
-        idx = int(text.split()[0])
-        idx = max(0, min(idx, n - 1))
-        logger.info("Anthropic chose image index=%s", idx)
-        return idx
-
-    def _pick_with_openai(
-        self,
-        thumbs_b64: list[str],
-        original_b64: str,
-        prompt: str,
-        api_key: str,
-        n: int,
-    ) -> int:
-        """Ask an OpenAI vision model to pick the most recognizable candidate; return its index."""
-        content: list[dict] = [
-            {"type": "text", "text": "Original photograph:"},
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{original_b64}", "detail": "low"},
-            },
-        ]
-        for i, b64 in enumerate(thumbs_b64):
-            content.append({"type": "text", "text": f"Candidate {i}:"})
-            content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "low"},
-                }
-            )
-        content.append({"type": "text", "text": prompt})
-        resp = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "gpt-4o-mini",
-                "max_tokens": 16,
-                "messages": [{"role": "user", "content": content}],
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        text = resp.json()["choices"][0]["message"]["content"].strip()
-        idx = int(text.split()[0])
-        idx = max(0, min(idx, n - 1))
-        logger.info("OpenAI chose image index=%s", idx)
-        return idx
-
-    def _start_capture(self, camera_frame: np.ndarray | None) -> None:
-        """Encode the camera frame and kick off the caricature worker thread."""
-        if camera_frame is None:
-            with self._lock:
-                self.state = self.STATE_ERROR
-                self.error_msg = "No frame"
-            return
-
-        success, buf = cv2.imencode(".jpg", camera_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        if not success:
-            with self._lock:
-                self.state = self.STATE_ERROR
-                self.error_msg = "Encode failed"
-            return
-
-        cv2.imwrite("caricature_debug.jpg", camera_frame)
-        logger.info("Saved caricature input capture to caricature_debug.jpg")
-
-        image_b64 = base64.standard_b64encode(buf).decode("utf-8")
-
-        with self._lock:
-            generation = self._generation
-            self.state = self.STATE_LOADING
-
-        thread = threading.Thread(
-            target=self._call_pixellab_api,
-            args=(image_b64, generation),
-            daemon=True,
-        )
-        thread.start()
-
-    def get_frame(self, camera_frame: np.ndarray | None) -> Frame:
-        """Advance the capture/loading/display state machine and return the current frame."""
-        # Auto-reset when the mode is freshly entered
+    def get_frame(self, context: RenderContext) -> Frame:
+        """Render the caricature from the context's face-mesh results."""
         if self._last_mode_start_time != self.mode_manager.mode_start_time:
             self._last_mode_start_time = self.mode_manager.mode_start_time
             self._reset()
 
-        with self._lock:
-            state = self.state
-            countdown_start = self.countdown_start
+        now = time.time()
+        points = _latest_points(context.face_mesh_results)
+        if points is not None:
+            if self._smoothed is None:
+                self._smoothed = points
+            else:
+                self._smoothed = (
+                    1.0 - LANDMARK_EMA_ALPHA
+                ) * self._smoothed + LANDMARK_EMA_ALPHA * points
+            self._last_face_time = now
 
-        if state == self.STATE_COUNTDOWN:
-            elapsed = time.time() - (countdown_start or time.time())
-            seconds_left = self.COUNTDOWN_DURATION - int(elapsed)
-            if elapsed >= self.COUNTDOWN_DURATION:
-                with self._lock:
-                    self.state = self.STATE_CAPTURING
-            return self._make_countdown_frame(max(1, seconds_left))
-
-        if state == self.STATE_CAPTURING:
-            self._start_capture(camera_frame)
-            return self._make_loading_frame()
-
-        if state == self.STATE_LOADING:
-            return self._make_loading_frame()
-
-        if state == self.STATE_DISPLAYING:
-            display_start = self.display_start_time or time.time()
-            if time.time() - display_start > self.DISPLAY_DURATION or self.caricature_dots is None:
-                self.mode_manager.set_mode(ModeManager.MODE_CLOCK)
-                return np.zeros((self.height, self.width), dtype=np.uint8)
-            with self._lock:
-                return self.caricature_dots.copy()
-
-        if state == self.STATE_ERROR:
-            frame = np.zeros((self.height, self.width), dtype=np.uint8)
-            text_module.write(frame, "ERR", x=1, y=10, size=5, style="regular")
-            return frame
-
-        return np.zeros((self.height, self.width), dtype=np.uint8)
-
-    def _make_countdown_frame(self, seconds_left: int) -> Frame:
-        """Show the countdown digit centred and scaled up 3x."""
         frame = np.zeros((self.height, self.width), dtype=np.uint8)
-        # Render digit into a 3x5 buffer then scale 3x → 9x15
-        small = np.zeros((5, 3), dtype=np.uint8)
-        text_module.write(small, str(seconds_left), x=0, y=0, size=5, style="regular")
-        big = np.kron(small, np.ones((3, 3), dtype=np.uint8))
-        y_off = (self.height - big.shape[0]) // 2
-        x_off = (self.width - big.shape[1]) // 2
-        frame[y_off : y_off + big.shape[0], x_off : x_off + big.shape[1]] = big
+        smoothed = self._smoothed
+        has_face = (
+            smoothed is not None
+            and self._last_face_time is not None
+            and now - self._last_face_time <= FACE_HOLD_SEC
+        )
+        if smoothed is not None and has_face:
+            hair_mask = None
+            if self.hair_mask_provider is not None:
+                hair_mask = self.hair_mask_provider(context.frame)
+            self._render_face(
+                frame, smoothed, hair_mask, context.mode_time, context.caricature_exit_progress
+            )
+        else:
+            self._render_idle(frame, now)
+        if has_face != self._showing_face:
+            self._showing_face = has_face
+            logger.debug("Caricature %s", "tracking a face" if has_face else "idle (no face)")
         return frame
 
-    def _make_loading_frame(self) -> Frame:
-        """Ping-pong vertical bar sweeping left-right to indicate processing."""
-        frame = np.zeros((self.height, self.width), dtype=np.uint8)
-        # One full left-right-left cycle every 1.2 seconds
-        cycle = (time.time() % 1.2) / 1.2  # 0.0 → 1.0
-        pos = cycle * 2  # 0.0 → 2.0
-        if pos > 1:
-            pos = 2 - pos  # bounce back
-        col = int(pos * (self.width - 2))
-        frame[:, col : col + 2] = 1
-        return frame
+    def _projection_params(
+        self,
+        eye_mid: np.ndarray,
+        iod: float,
+        mode_time: float,
+        exit_progress: float | None,
+    ) -> tuple[np.ndarray, float]:
+        """Return the (anchor, iod px) for this frame's projection.
+
+        For the first ``ENTRY_ZOOM_SECONDS`` after mode entry the projection is
+        interpolated from the viewer's real on-panel face position and size
+        (where sandfall drew its eyes/mouth) toward the canonical projection,
+        so the caricature appears to grow out of the silhouette's head. While
+        ``exit_progress`` runs (the policy's backing-away hold) the projection
+        shrinks back onto the viewer's live face, so the handoff to sandfall
+        lands where sandfall will draw its face.
+        """
+        target_anchor = np.array([(self.width - 1) / 2.0, self.height * FACE_ANCHOR_Y_FRAC])
+        if exit_progress is not None:
+            real_anchor = np.array([eye_mid[0] * self.width, eye_mid[1] * self.height])
+            real_iod = iod * self.width
+            ease = exit_progress * exit_progress * (3.0 - 2.0 * exit_progress)  # smoothstep
+            return (
+                target_anchor + (real_anchor - target_anchor) * ease,
+                self._panel_iod_px + (real_iod - self._panel_iod_px) * ease,
+            )
+        if mode_time >= ENTRY_ZOOM_SECONDS:
+            return target_anchor, self._panel_iod_px
+        if self._entry_start is None:
+            self._entry_start = (
+                np.array([eye_mid[0] * self.width, eye_mid[1] * self.height]),
+                iod * self.width,
+            )
+        start_anchor, start_iod = self._entry_start
+        progress = mode_time / ENTRY_ZOOM_SECONDS
+        ease = progress * progress * (3.0 - 2.0 * progress)  # smoothstep
+        return (
+            start_anchor + (target_anchor - start_anchor) * ease,
+            start_iod + (self._panel_iod_px - start_iod) * ease,
+        )
+
+    def _project(self, local: np.ndarray, roll: float) -> np.ndarray:
+        """Project face-local points with the current (possibly zooming) anchor/scale."""
+        return _project_to_panel(
+            local,
+            roll,
+            self.width,
+            self.height,
+            anchor=self._proj_anchor,
+            iod_px=self._proj_iod_px,
+        )
+
+    def _render_face(
+        self,
+        frame: Frame,
+        points: np.ndarray,
+        hair_mask: np.ndarray | None,
+        mode_time: float,
+        exit_progress: float | None,
+    ) -> None:
+        """Run the measure → exaggerate → project pipeline and draw all strokes."""
+        eye_mid, iod, roll = _face_basis(points)
+        if iod < FACE_MIN_IOD_NORM:
+            return
+        self._proj_anchor, self._proj_iod_px = self._projection_params(
+            eye_mid, iod, mode_time, exit_progress
+        )
+        local = _to_face_local(points, eye_mid, iod, roll)
+        measured = _measure_metrics(local, roll)
+        exag = _exaggerate(measured)
+        warped = _apply_exaggeration(local, measured, exag)
+        panel = self._project(warped, exag.roll)
+
+        if hair_mask is not None:
+            measured_profile = _hair_profile_from_mask(hair_mask, eye_mid, iod, roll)
+            self._hair_profile = _smooth_hair_profile(self._hair_profile, measured_profile)
+        hair_strokes: list[HairStroke] = []
+        if self._hair_profile is not None:
+            hair_strokes = _hair_strokes(self._hair_profile, warped)
+            self._draw_hair(frame, hair_strokes, exag.roll)
+
+        _draw_polyline(frame, [_pt(panel, index) for index in FACE_OVAL_INDICES], closed=True)
+        self._draw_ears(frame, warped, hair_strokes, exag.roll)
+        left_eye_top = self._draw_eye(
+            frame,
+            panel,
+            side="left",
+            outer=LEFT_EYE_OUTER,
+            inner=LEFT_EYE_INNER,
+            iris=LEFT_IRIS_CENTER,
+            gap_iod=exag.eye_open_left,
+        )
+        right_eye_top = self._draw_eye(
+            frame,
+            panel,
+            side="right",
+            outer=RIGHT_EYE_OUTER,
+            inner=RIGHT_EYE_INNER,
+            iris=RIGHT_IRIS_CENTER,
+            gap_iod=exag.eye_open_right,
+        )
+        self._draw_brow(frame, panel, LEFT_BROW_INDICES, left_eye_top)
+        self._draw_brow(frame, panel, RIGHT_BROW_INDICES, right_eye_top)
+        self._draw_nose(frame, panel)
+        self._draw_mouth(frame, panel, exag)
+
+    def _update_eye_state(self, side: str, gap_iod: float) -> bool:
+        """Apply open/close hysteresis for one eye and return whether it is open."""
+        threshold = EYE_CLOSE_MIN_IOD if self._eye_open[side] else EYE_OPEN_MIN_IOD
+        self._eye_open[side] = gap_iod >= threshold
+        return self._eye_open[side]
+
+    def _draw_eye(
+        self,
+        frame: Frame,
+        panel: np.ndarray,
+        *,
+        side: str,
+        outer: int,
+        inner: int,
+        iris: int,
+        gap_iod: float,
+    ) -> float:
+        """Draw one eye (lids + iris, or a closed line); return its topmost stroke y."""
+        p_outer = _pt(panel, outer)
+        p_inner = _pt(panel, inner)
+        center_y = (p_outer[1] + p_inner[1]) / 2.0
+        if not self._update_eye_state(side, gap_iod):
+            draw_line(frame, p_outer, p_inner)
+            return center_y
+        mid_x = (p_outer[0] + p_inner[0]) / 2.0
+        half_gap = max(
+            EYE_MIN_HALF_GAP_PX, gap_iod * self._proj_iod_px * EYE_GAP_DISPLAY_GAIN / 2.0
+        )
+        _draw_polyline(frame, [p_outer, (mid_x, center_y - half_gap), p_inner])
+        _draw_polyline(frame, [p_outer, (mid_x, center_y + half_gap), p_inner])
+        iris_x, iris_y = _pt(panel, iris)
+        low_x, high_x = sorted((p_outer[0], p_inner[0]))
+        iris_x = _clamp(iris_x, low_x + 1.0, high_x - 1.0)
+        iris_y = _clamp(iris_y, center_y - half_gap + 1.0, center_y + half_gap - 1.0)
+        draw_point(frame, iris_x, iris_y)
+        return center_y - half_gap
+
+    def _draw_brow(
+        self, frame: Frame, panel: np.ndarray, indices: list[int], eye_top_y: float
+    ) -> None:
+        """Draw one brow, shifted up if needed to stay clear of the eye below it."""
+        points = [_pt(panel, index) for index in indices]
+        lowest = max(point[1] for point in points)
+        overshoot = lowest - (eye_top_y - MIN_BROW_EYE_GAP_ROWS)
+        if overshoot > 0:
+            points = [(x, y - overshoot) for x, y in points]
+        _draw_polyline(frame, points)
+
+    def _draw_nose(self, frame: Frame, panel: np.ndarray) -> None:
+        """Draw the nose bridge and base, shifted up if needed to clear the upper lip."""
+        bridge = _pt(panel, NOSE_BRIDGE)
+        tip = _pt(panel, NOSE_TIP)
+        base_left = _pt(panel, NOSE_BASE_LEFT)
+        base_right = _pt(panel, NOSE_BASE_RIGHT)
+        lip_y = _pt(panel, UPPER_LIP_TOP)[1]
+        lowest = max(tip[1], base_left[1], base_right[1])
+        overshoot = lowest - (lip_y - MIN_NOSE_LIP_GAP_ROWS)
+        if overshoot > 0:
+            tip = (tip[0], tip[1] - overshoot)
+            base_left = (base_left[0], base_left[1] - overshoot)
+            base_right = (base_right[0], base_right[1] - overshoot)
+        draw_line(frame, bridge, tip)
+        draw_line(frame, base_left, base_right)
+
+    def _draw_mouth(self, frame: Frame, panel: np.ndarray, exag: FaceMetrics) -> None:
+        """Draw the mouth: both lip polylines when open, a single mid polyline when closed."""
+        upper = [_pt(panel, index) for index in MOUTH_UPPER_INDICES]
+        lower = [_pt(panel, index) for index in MOUTH_LOWER_INDICES]
+        if exag.mouth_open * self._proj_iod_px >= MOUTH_OPEN_MIN_PX:
+            _draw_polyline(frame, upper)
+            _draw_polyline(frame, lower)
+        else:
+            mid = [
+                ((ux + lx) / 2.0, (uy + ly) / 2.0)
+                for (ux, uy), (lx, ly) in zip(upper, lower, strict=True)
+            ]
+            _draw_polyline(frame, mid)
+
+    def _draw_hair(self, frame: Frame, strokes: list[HairStroke], roll: float) -> None:
+        """Fill the hair mass with a comb of thick strokes plus a silhouette polyline."""
+        if not strokes:
+            return
+        endpoints = np.array([point for _, top, bottom in strokes for point in (top, bottom)])
+        panel = self._project(endpoints, roll)
+        stroke_width = max(1.0, HAIR_STROKE_WIDTH_PX * self._proj_iod_px / self._panel_iod_px)
+        tops: dict[int, tuple[float, float]] = {}
+        for k, (column, _, _) in enumerate(strokes):
+            top = (float(panel[2 * k, 0]), float(panel[2 * k, 1]))
+            bottom = (float(panel[2 * k + 1, 0]), float(panel[2 * k + 1, 1]))
+            thick_line(frame, top, bottom, width=stroke_width)
+            tops[column] = top
+        columns = sorted(tops)
+        for left, right in zip(columns, columns[1:], strict=False):
+            if right - left == 1:  # break the silhouette across no-hair gaps
+                draw_line(frame, tops[left], tops[right])
+
+    def _draw_ears(
+        self, frame: Frame, warped: np.ndarray, hair_strokes: list[HairStroke], roll: float
+    ) -> None:
+        """Draw ear brackets on the oval sides unless side hair covers them."""
+        for ear in _ear_polylines(warped):
+            side_sign = 1.0 if ear[1, 0] >= 0 else -1.0
+            if _ear_hidden_by_hair(hair_strokes, side_sign):
+                continue
+            panel = self._project(ear, roll)
+            _draw_polyline(frame, [(float(x), float(y)) for x, y in panel])
+
+    def _render_idle(self, frame: Frame, now: float) -> None:
+        """Draw a simple blinking placeholder face that invites viewers closer."""
+        center_x = (self.width - 1) / 2.0
+        center_y = (self.height - 1) / 2.0
+        radius = min(self.width, self.height) / 2.0 - IDLE_FACE_MARGIN_PX
+        draw_circle(frame, (center_x, center_y), radius)
+        blinking = now % IDLE_BLINK_PERIOD_SEC < IDLE_BLINK_CLOSED_SEC
+        eye_y = center_y - radius * IDLE_EYE_OFFSET_Y_FRAC
+        for direction in (-1.0, 1.0):
+            eye_x = center_x + direction * radius * IDLE_EYE_OFFSET_X_FRAC
+            if blinking:
+                draw_line(frame, (eye_x - 1.0, eye_y), (eye_x + 1.0, eye_y))
+            else:
+                draw_point(frame, eye_x, eye_y)
+                draw_point(frame, eye_x, eye_y - 1.0)
+        mouth_y = center_y + radius * IDLE_MOUTH_OFFSET_Y_FRAC
+        half_width = radius * IDLE_MOUTH_HALF_WIDTH_FRAC
+        draw_line(frame, (center_x - half_width, mouth_y), (center_x + half_width, mouth_y))

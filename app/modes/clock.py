@@ -169,6 +169,9 @@ class Clock:
             draw_line(
                 self.frame,
                 (cx, cy),
-                (cx + second_len * math.sin(second_angle), cy - second_len * math.cos(second_angle)),
+                (
+                    cx + second_len * math.sin(second_angle),
+                    cy - second_len * math.cos(second_angle),
+                ),
                 color=0,
             )

@@ -114,7 +114,12 @@ class Button(MenuItem):
 
 
 class Checkbox(MenuItem):
-    """A menu item that toggles a boolean and shows a check box."""
+    """A menu item that toggles a boolean and shows a check box.
+
+    ``checked_provider`` keeps the box in sync with externally mutable state
+    (e.g. a setting also toggled from the web UI): when set, the displayed
+    state is re-read from it on every draw.
+    """
 
     def __init__(
         self,
@@ -123,12 +128,16 @@ class Checkbox(MenuItem):
         width: int,
         checked: bool = False,
         on_click: Callable[..., Any] | None = None,
+        checked_provider: Callable[[], bool] | None = None,
     ) -> None:
         super().__init__(label, row, width, on_click=on_click)
         self.checked = checked
+        self.checked_provider = checked_provider
 
     def draw(self, frame: Frame) -> None:
         """Render the label, divider, check box (blinking while hovered), and hover progress."""
+        if self.checked_provider is not None:
+            self.checked = bool(self.checked_provider())
         write(frame, self.label, x=7, y=self.y, size=5, style="regular")
         sep = min(self.y + 6, frame.shape[0] - 1)
         frame[sep, 0 : self.width] = 1
@@ -202,6 +211,7 @@ class Menu:
                     width,
                     checked=mode_manager.pose_enabled,
                     on_click=mode_manager.toggle_pose_enabled,
+                    checked_provider=lambda: mode_manager.pose_enabled,
                 ),
             ],
             [
@@ -225,17 +235,21 @@ class Menu:
             [
                 Button("BOARD", 0, width, on_click=self._make_mode_setter(ModeManager.MODE_BOARD)),
                 Button("PAINT", 1, width, on_click=self._make_mode_setter(ModeManager.MODE_PAINT)),
-                Button("CLOCK", 2, width, on_click=self._make_mode_setter(ModeManager.MODE_CLOCK)),
+                Button(
+                    "FACE", 2, width, on_click=self._make_mode_setter(ModeManager.MODE_CARICATURE)
+                ),
             ],
             [
+                Button("LIFE", 0, width, on_click=self._make_mode_setter(ModeManager.MODE_LIFE)),
+                Button(
+                    "SAND", 1, width, on_click=self._make_mode_setter(ModeManager.MODE_SANDFALL)
+                ),
                 Button(
                     "FONTS",
-                    0,
+                    2,
                     width,
                     on_click=self._make_mode_setter(ModeManager.MODE_FONT_PREVIEW),
                 ),
-                Button("CLOCK", 1, width, on_click=self._make_mode_setter(ModeManager.MODE_CLOCK)),
-                Button("MENU", 2, width, on_click=self._make_mode_setter(ModeManager.MODE_MENU)),
             ],
         ]
 
