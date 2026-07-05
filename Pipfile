@@ -17,6 +17,7 @@ evdev = "*"
 flippydot = {editable = true, path = "./flipPyDot"}
 mcp = "*"
 anthropic = "*"
+openai = "*"
 
 [dev-packages]
 pytest = "*"

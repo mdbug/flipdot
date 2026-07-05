@@ -39,7 +39,7 @@ def test_missing_model_disables_with_single_warning(monkeypatch, tmp_path, caplo
 
 
 def test_mediapipe_missing_disables(monkeypatch, tmp_path):
-    (tmp_path / "selfie_multiclass_256x256.tflite").write_bytes(b"stub")
+    (tmp_path / "hair_segmenter.tflite").write_bytes(b"stub")
     for name in ("mediapipe", "mediapipe.tasks", "mediapipe.tasks.python"):
         monkeypatch.setitem(sys.modules, name, None)
     module = _load_module(monkeypatch, tmp_path)
@@ -55,6 +55,69 @@ def test_none_frame_returns_none_without_initializing(monkeypatch, tmp_path):
     assert module._started is False  # lazy: a None frame must not trigger model init
 
 
+class _StopAfterCreation:
+    """Fake worker event whose first wait aborts the loop (creation already ran)."""
+
+    def wait(self):
+        raise StopIteration
+
+    def clear(self):
+        pass
+
+
+def _run_worker_creation(module, monkeypatch, fail_gpu):
+    """Run the worker's segmenter-creation phase synchronously; return delegates used."""
+    monkeypatch.setitem(sys.modules, "mediapipe", types.SimpleNamespace())
+    monkeypatch.setattr(module, "_bg_event", _StopAfterCreation())
+    created = []
+    delegates = types.SimpleNamespace(GPU="gpu", CPU="cpu")
+
+    def create_segmenter(delegate):
+        if fail_gpu and delegate == "gpu":
+            raise RuntimeError("no GPU delegate in this wheel")
+        created.append(delegate)
+        return types.SimpleNamespace(segment_for_video=lambda image, ts: None)
+
+    try:
+        module._hair_bg_worker(create_segmenter, delegates)
+    except StopIteration:
+        pass
+    return created
+
+
+def test_gpu_delegate_preferred(monkeypatch, tmp_path):
+    module = _load_module(monkeypatch, tmp_path)
+
+    created = _run_worker_creation(module, monkeypatch, fail_gpu=False)
+
+    assert created == ["gpu"]
+    assert module._disabled is False
+
+
+def test_gpu_delegate_falls_back_to_cpu(monkeypatch, tmp_path, caplog):
+    module = _load_module(monkeypatch, tmp_path)
+
+    with caplog.at_level(logging.WARNING):
+        created = _run_worker_creation(module, monkeypatch, fail_gpu=True)
+
+    assert created == ["cpu"]
+    assert module._disabled is False
+    assert any("falling back to CPU" in r.getMessage() for r in caplog.records)
+
+
+def test_creation_failure_on_both_delegates_disables(monkeypatch, tmp_path):
+    module = _load_module(monkeypatch, tmp_path)
+    monkeypatch.setitem(sys.modules, "mediapipe", types.SimpleNamespace())
+    delegates = types.SimpleNamespace(GPU="gpu", CPU="cpu")
+
+    def create_segmenter(delegate):
+        raise RuntimeError("model rejected")
+
+    module._hair_bg_worker(create_segmenter, delegates)
+
+    assert module._disabled is True
+
+
 def test_worker_rate_limits_failure_warnings(monkeypatch, tmp_path, caplog):
     """An intermittently failing segmenter must not warn once per failed frame."""
     module = _load_module(monkeypatch, tmp_path)
@@ -68,7 +131,6 @@ def test_worker_rate_limits_failure_warnings(monkeypatch, tmp_path, caplog):
         def segment_for_video(self, image, ts):
             raise RuntimeError("boom")
 
-    monkeypatch.setattr(module, "_segmenter", _FailingSegmenter())
     # Keep the disable threshold out of the way: this test is about the
     # warning cadence, not the wedged-model shutdown.
     monkeypatch.setattr(module, "_MAX_CONSECUTIVE_FAILURES", 100)
@@ -92,7 +154,10 @@ def test_worker_rate_limits_failure_warnings(monkeypatch, tmp_path, caplog):
 
     with caplog.at_level(logging.WARNING):
         try:
-            module._hair_bg_worker()
+            module._hair_bg_worker(
+                lambda delegate: _FailingSegmenter(),
+                types.SimpleNamespace(GPU="gpu", CPU="cpu"),
+            )
         except StopIteration:
             pass
 

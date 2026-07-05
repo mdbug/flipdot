@@ -235,6 +235,22 @@ if "mp_pose" not in globals():
 # ---------------------------------------------------------------------------
 
 
+def _normalize_segmentation_mask(seg: np.ndarray) -> np.ndarray:
+    """Return the mask in the CPU delegate's layout: ``(H, W)`` float32 in [0, 1].
+
+    The GPU delegate reads the mask back from an RGBA texture as ``(H, W, 4)``
+    uint8 with the confidence in channel 0, while the CPU delegate returns
+    ``(H, W)`` float32 — downstream consumers (e.g. ``silhouette``) threshold
+    against the float layout. Always returns a copy detached from MediaPipe's
+    internal buffer.
+    """
+    if seg.ndim == 3:
+        seg = seg[..., 0]
+    if seg.dtype == np.uint8:
+        return seg.astype(np.float32) / 255.0
+    return seg.copy()
+
+
 def get_human_pose(frame: np.ndarray) -> Any:
     """Run pose detection on a BGR frame, returning a pose-results wrapper."""
     input_image = cv2.resize(frame, (60, 60))
@@ -246,7 +262,7 @@ def get_human_pose(frame: np.ndarray) -> Any:
         result = _pose_landmarker.detect_for_video(mp_image, ts_ms)
         seg_mask = None
         if result.segmentation_masks:
-            seg_mask = result.segmentation_masks[0].numpy_view().copy()
+            seg_mask = _normalize_segmentation_mask(result.segmentation_masks[0].numpy_view())
         return _PoseResultsWrapper(result, seg_mask)
     else:
         return _pose_legacy.process(input_image)
