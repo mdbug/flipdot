@@ -46,7 +46,11 @@
               <span aria-hidden="true">&#9776;</span>
             </button>
             <p id="chatTitle" class="chat-bar-title">New conversation</p>
-            <span id="chatUsageTotal" class="chat-bar-usage hidden" title="Session token usage and estimated cost"></span>
+            <span
+              id="chatUsageTotal"
+              class="chat-bar-usage hidden"
+              title="Session token usage and estimated cost"
+            ></span>
           </div>
           <div id="chatLog" class="chat-log" aria-live="polite">
             <div id="chatEmpty" class="chat-empty">
@@ -73,10 +77,9 @@
             <div class="chat-composer-toolbar">
               <span id="chatCount" class="chat-count">0 / 2000</span>
               <div class="chat-composer-actions">
+                <!-- Populated from /api/chat/models; the static option is a fallback. -->
                 <select id="chatModel" class="chat-model" aria-label="Model">
                   <option value="claude-opus-4-8" selected>Claude Opus 4.8</option>
-                  <option value="claude-sonnet-5">Claude Sonnet 5</option>
-                  <option value="claude-fable-5">Claude Fable 5</option>
                 </select>
                 <button id="chatStop" type="button" class="chat-stop hidden" title="Stop">
                   <span aria-hidden="true">■</span>

@@ -14,7 +14,7 @@ function mockSessions(page, data = SESSIONS_RESPONSE) {
 
 function mockChatStatus(page) {
   page.route("/api/chat/status", (route) =>
-    route.fulfill({ json: { available: true, busy: false, session_id: null } }),
+    route.fulfill({ json: { available: true, busy: false, session_id: null } })
   );
 }
 
@@ -71,7 +71,7 @@ test("submitting the form appends a user bubble and sends to /api/chat", async (
       status: 200,
       headers: { "Content-Type": "text/plain" },
       body: streamLine + "\n",
-    }),
+    })
   );
 
   await page.goto("/chat");
@@ -95,7 +95,7 @@ test("session item click POSTs to resume endpoint and updates title", async ({ p
   page.route("/api/chat/sessions/abc123/resume", (route) =>
     route.fulfill({
       json: { id: "abc123", title: "Draw a circle", messages: [] },
-    }),
+    })
   );
 
   await page.goto("/chat");
@@ -107,4 +107,77 @@ test("session item click POSTs to resume endpoint and updates title", async ({ p
 
   expect(request.method()).toBe("POST");
   await expect(page.locator("#chatTitle")).toHaveText("Draw a circle");
+});
+
+const MODELS_RESPONSE = {
+  default: "claude-opus-4-8",
+  locked: null,
+  models: [
+    { id: "claude-opus-4-8", label: "Claude Opus 4.8", provider: "anthropic", available: true },
+    { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", provider: "anthropic", available: true },
+    { id: "gpt-5.4-mini", label: "GPT-5.4 mini", provider: "openai", available: false },
+    { id: "z-ai/glm-5.2", label: "GLM-5.2", provider: "openrouter", available: true },
+  ],
+};
+
+function mockChatModels(page, data = MODELS_RESPONSE) {
+  page.route("/api/chat/models", (route) => route.fulfill({ json: data }));
+}
+
+test("model selector populates grouped by provider, disabling keyless models", async ({ page }) => {
+  mockSessions(page, { sessions: [], active_id: null });
+  mockChatStatus(page);
+  mockChatModels(page);
+  await page.goto("/chat");
+
+  const select = page.locator("#chatModel");
+  await expect(select.locator("optgroup")).toHaveCount(3);
+  await expect(select.locator('optgroup[label="Anthropic"] option')).toHaveCount(2);
+  const openaiOption = select.locator('option[value="gpt-5.4-mini"]');
+  await expect(openaiOption).toBeDisabled();
+  await expect(openaiOption).toHaveText("GPT-5.4 mini (no API key)");
+  await expect(select.locator('option[value="z-ai/glm-5.2"]')).toBeEnabled();
+});
+
+test("model selector locks after the first message and unlocks on new chat", async ({ page }) => {
+  mockSessions(page, { sessions: [], active_id: null });
+  mockChatStatus(page);
+  mockChatModels(page);
+  page.route("/api/chat", (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({ type: "text", text: "ok" }) + "\n",
+    })
+  );
+  page.route("/api/chat/reset", (route) => route.fulfill({ json: { status: "ok" } }));
+
+  await page.goto("/chat");
+  const select = page.locator("#chatModel");
+  await expect(select).toBeEnabled();
+
+  await page.locator("#chatInput").fill("hello");
+  await page.locator("#chatSend").click();
+  await expect(select).toBeDisabled();
+
+  await page.locator("#chatNew").click();
+  await expect(select).toBeEnabled();
+});
+
+test("resuming a session locks the selector to the session's model", async ({ page }) => {
+  mockSessions(page);
+  mockChatStatus(page);
+  mockChatModels(page);
+  page.route("/api/chat/sessions/abc123/resume", (route) =>
+    route.fulfill({
+      json: { id: "abc123", title: "Draw a circle", messages: [], model: "claude-haiku-4-5" },
+    })
+  );
+
+  await page.goto("/chat");
+  await page.locator("#sessionList .session-open").first().click();
+
+  const select = page.locator("#chatModel");
+  await expect(select).toBeDisabled();
+  await expect(select).toHaveValue("claude-haiku-4-5");
 });

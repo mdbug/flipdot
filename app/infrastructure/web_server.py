@@ -320,6 +320,10 @@ class WebServer:
         self._chat_lock = asyncio.Lock()
         self._chat_sessions = ChatSessionStore()
         self._chat_session_id: str | None = None
+        # The model is locked for the lifetime of a conversation (histories are
+        # provider-native, so switching providers mid-chat would corrupt them).
+        # None until the first message of a fresh conversation locks it.
+        self._chat_model: str | None = None
 
         # Build the MCP server (if enabled) before the FastAPI app. The same
         # object backs two consumers: the in-UI Claude chat, which calls its
@@ -891,6 +895,22 @@ class WebServer:
         def get_chat_status() -> dict[str, bool]:
             return {"available": chat_backend.chat_available(self._mcp is not None)}
 
+        @self._app.get("/api/chat/models")
+        async def get_chat_models() -> dict[str, Any]:
+            return {
+                "default": chat_backend.resolve_model(None),
+                "locked": self._chat_model,
+                "models": [
+                    {
+                        "id": model_id,
+                        "label": entry["label"],
+                        "provider": entry["provider"],
+                        "available": chat_backend.provider_available(entry["provider"]),
+                    }
+                    for model_id, entry in chat_backend.MODELS.items()
+                ],
+            }
+
         @self._app.post("/api/chat")
         async def post_chat(payload: ChatPayload) -> StreamingResponse:
             message = payload.message.strip()
@@ -902,10 +922,14 @@ class WebServer:
                 # consistent if a second request arrives mid-stream.
                 async with self._chat_lock:
                     new_session = self._chat_session_id is None
+                    # Lock the model on the first message; later turns ignore the
+                    # payload's model so the history stays provider-native.
+                    if self._chat_model is None:
+                        self._chat_model = chat_backend.resolve_model(payload.model)
                     self._chat_messages.append({"role": "user", "content": message})
                     turn_usage: dict | None = None
                     async for event in chat_backend.run_chat(
-                        self._mcp, self._chat_messages, model=payload.model
+                        self._mcp, self._chat_messages, model=self._chat_model
                     ):
                         # Snatch this turn's token/cost totals off the stream so we
                         # can fold them into the persisted session total below.
@@ -922,13 +946,13 @@ class WebServer:
                     if len(self._chat_messages) <= 1:
                         return
                     if self._chat_session_id is None:
-                        record = self._chat_sessions.create(title=message, model=payload.model)
+                        record = self._chat_sessions.create(title=message, model=self._chat_model)
                         self._chat_session_id = record["id"]
                     summary = self._chat_sessions.save(
                         self._chat_session_id,
                         messages=chat_backend.serialize_messages(self._chat_messages),
                         title=message if new_session else None,
-                        model=payload.model,
+                        model=self._chat_model,
                         usage=turn_usage,
                     )
                     yield (
@@ -947,6 +971,7 @@ class WebServer:
             async with self._chat_lock:
                 self._chat_messages.clear()
                 self._chat_session_id = None
+                self._chat_model = None
             return {"status": "ok"}
 
         @self._app.get("/api/chat/sessions")
@@ -980,6 +1005,10 @@ class WebServer:
                 self._chat_messages.clear()
                 self._chat_messages.extend(record.get("messages") or [])
                 self._chat_session_id = session_id
+                # Restore the session's model lock; an unknown (e.g. removed)
+                # model leaves it unlocked so the next message re-resolves.
+                stored_model = record.get("model")
+                self._chat_model = stored_model if stored_model in chat_backend.MODELS else None
             return record
 
         @self._app.patch("/api/chat/sessions/{session_id}")
@@ -1008,6 +1037,7 @@ class WebServer:
                 if self._chat_session_id == session_id:
                     self._chat_messages.clear()
                     self._chat_session_id = None
+                    self._chat_model = None
             return {"status": "ok"}
 
         @self._app.websocket("/ws")

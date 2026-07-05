@@ -50,15 +50,55 @@ def _build_mcp(mode_manager=None, board=None):
     )
 
 
+def _clear_provider_keys(monkeypatch):
+    for var in (
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
 def test_chat_available_requires_key_and_mcp(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    _clear_provider_keys(monkeypatch)
     assert chat_backend.chat_available(True) is False
     assert chat_backend.chat_available(False) is False
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     assert chat_backend.chat_available(True) is True
     assert chat_backend.chat_available(False) is False  # MCP disabled
+
+
+def test_chat_available_with_any_provider_key(monkeypatch):
+    _clear_provider_keys(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+    assert chat_backend.chat_available(True) is True
+
+    _clear_provider_keys(monkeypatch)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or")
+    assert chat_backend.chat_available(True) is True
+
+
+def test_resolve_model_falls_back_only_for_unknown_models(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
+    # Unknown or missing models fall back to the default.
+    assert chat_backend.resolve_model(None) == chat_backend.DEFAULT_MODEL
+    assert chat_backend.resolve_model("gpt-9000") == chat_backend.DEFAULT_MODEL
+    # Known models are honored as-is, even without provider credentials —
+    # the provider loop reports the missing key instead of switching provider.
+    _clear_provider_keys(monkeypatch)
+    assert chat_backend.resolve_model("gpt-5.4-mini") == "gpt-5.4-mini"
+    assert chat_backend.resolve_model("z-ai/glm-5.2") == "z-ai/glm-5.2"
+
+
+def test_model_registry_pricing_covers_non_openrouter_models():
+    for model_id, entry in chat_backend.MODELS.items():
+        if entry["provider"] == chat_backend.PROVIDER_OPENROUTER:
+            # OpenRouter rates vary per upstream; cost comes from the API.
+            assert model_id not in chat_backend.PRICING
+        else:
+            assert model_id in chat_backend.PRICING
 
 
 def test_tool_schemas_match_mcp_tools():
@@ -92,8 +132,7 @@ def test_call_mcp_tool_reports_errors():
 
 
 def test_run_chat_without_credentials_streams_error(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    _clear_provider_keys(monkeypatch)
     chat_backend._client = None  # reset cached client
     mcp = _build_mcp()
 
@@ -572,8 +611,13 @@ def test_chat_routes_registered_and_guarded(monkeypatch):
 
     from app.infrastructure.web_server import WebServer
 
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    for var in (
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
 
     class Hub:
         def submit_pointer(self, *a, **k):
@@ -603,3 +647,106 @@ def test_chat_routes_registered_and_guarded(monkeypatch):
         assert lines[-1]["type"] == "error"
 
         assert client.post("/api/chat/reset").json() == {"status": "ok"}
+
+
+def test_haiku_omits_adaptive_thinking(monkeypatch):
+    """Haiku 4.5 rejects the adaptive-thinking shape, so the kwarg is dropped."""
+    mcp = _build_mcp(mode_manager=DummyModeManager())
+    script = [
+        {
+            "texts": ["ok"],
+            "final": _FakeFinal(content=[_FakeBlock("text", text="ok")], stop_reason="end_turn"),
+        }
+    ]
+    fake = _FakeClient(script)
+    monkeypatch.setattr(chat_backend, "get_async_client", lambda: fake)
+
+    async def collect(model):
+        return [
+            json.loads(line)
+            async for line in chat_backend.run_chat(
+                mcp, [{"role": "user", "content": "hi"}], model=model
+            )
+        ]
+
+    events = asyncio.run(collect("claude-haiku-4-5"))
+    assert events[-1]["type"] == "done"
+    call = fake.messages.calls[0]
+    assert call["model"] == "claude-haiku-4-5"
+    assert "thinking" not in call
+
+
+def test_other_claude_models_keep_adaptive_thinking(monkeypatch):
+    mcp = _build_mcp(mode_manager=DummyModeManager())
+    script = [
+        {
+            "texts": ["ok"],
+            "final": _FakeFinal(content=[_FakeBlock("text", text="ok")], stop_reason="end_turn"),
+        }
+    ]
+    fake = _FakeClient(script)
+    monkeypatch.setattr(chat_backend, "get_async_client", lambda: fake)
+
+    async def collect():
+        return [
+            json.loads(line)
+            async for line in chat_backend.run_chat(
+                mcp, [{"role": "user", "content": "hi"}], model="claude-sonnet-5"
+            )
+        ]
+
+    asyncio.run(collect())
+    assert fake.messages.calls[0]["thinking"] == {"type": "adaptive", "display": "summarized"}
+
+
+def test_usage_dict_prices_haiku():
+    tokens = {"input": 1_000_000, "output": 1_000_000, "cache_write": 0, "cache_read": 0}
+    priced = chat_backend._usage_dict("claude-haiku-4-5", tokens)
+    assert priced["cost"] == pytest.approx(6.0)  # $1 in + $5 out
+
+
+def test_usage_dict_prices_openai_models():
+    tokens = {"input": 1_000_000, "output": 1_000_000, "cache_write": 0, "cache_read": 1_000_000}
+    priced = chat_backend._usage_dict("gpt-5.4-mini", tokens)
+    assert priced["cost"] == pytest.approx(0.75 + 4.5 + 0.075)
+
+
+def test_usage_dict_openrouter_models_unpriced():
+    tokens = {"input": 1000, "output": 1000, "cache_write": 0, "cache_read": 0}
+    assert chat_backend._usage_dict("z-ai/glm-5.2", tokens)["cost"] is None
+
+
+def test_run_chat_dispatches_openai_models(monkeypatch):
+    from app.infrastructure import chat_openai
+
+    seen = {}
+
+    async def fake_loop(mcp, messages, *, model):
+        seen["model"] = model
+        yield chat_backend._event({"type": "done"})
+
+    monkeypatch.setattr(chat_openai, "run_openai_chat", fake_loop)
+    mcp = _build_mcp()
+
+    async def collect(model):
+        return [
+            json.loads(line)
+            async for line in chat_backend.run_chat(
+                mcp, [{"role": "user", "content": "hi"}], model=model
+            )
+        ]
+
+    events = asyncio.run(collect("gpt-5.5"))
+    assert seen["model"] == "gpt-5.5"
+    assert events == [{"type": "done"}]
+
+    events = asyncio.run(collect("deepseek/deepseek-v4-flash"))
+    assert seen["model"] == "deepseek/deepseek-v4-flash"
+    assert events == [{"type": "done"}]
+
+
+def test_usage_dict_prices_dated_model_ids():
+    """The API reports dated snapshot ids; pricing falls back to the alias."""
+    tokens = {"input": 1_000_000, "output": 1_000_000, "cache_write": 0, "cache_read": 0}
+    priced = chat_backend._usage_dict("claude-haiku-4-5-20251001", tokens)
+    assert priced["cost"] == pytest.approx(6.0)

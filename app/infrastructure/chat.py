@@ -20,10 +20,45 @@ from typing import Any
 
 # Default model. Override with the ANTHROPIC_MODEL env var.
 DEFAULT_MODEL = "claude-opus-4-8"
-# Models the in-UI selector may choose. All support the adaptive-thinking
-# request shape used below, so no per-model thinking handling is needed
-# (Fable 5 has thinking always on, which the same shape covers).
-ALLOWED_MODELS = ("claude-opus-4-8", "claude-sonnet-5", "claude-fable-5")
+
+# Providers the chat can talk to. OpenAI and OpenRouter share the OpenAI
+# Chat Completions wire format (see app/infrastructure/chat_openai.py).
+PROVIDER_ANTHROPIC = "anthropic"
+PROVIDER_OPENAI = "openai"
+PROVIDER_OPENROUTER = "openrouter"
+
+# Models the in-UI selector may choose. ``thinking: False`` marks Anthropic
+# models that reject the adaptive-thinking request shape (Haiku 4.5); the
+# other Claude entries all accept it (Fable 5 has thinking always on, which
+# the same shape covers).
+MODELS: dict[str, dict[str, Any]] = {
+    "claude-haiku-4-5": {
+        "provider": PROVIDER_ANTHROPIC,
+        "label": "Claude Haiku 4.5",
+        "thinking": False,
+    },
+    "claude-sonnet-5": {"provider": PROVIDER_ANTHROPIC, "label": "Claude Sonnet 5"},
+    "claude-opus-4-8": {"provider": PROVIDER_ANTHROPIC, "label": "Claude Opus 4.8"},
+    "claude-fable-5": {"provider": PROVIDER_ANTHROPIC, "label": "Claude Fable 5"},
+    "gpt-5.4-nano": {"provider": PROVIDER_OPENAI, "label": "GPT-5.4 nano"},
+    "gpt-5.4-mini": {"provider": PROVIDER_OPENAI, "label": "GPT-5.4 mini"},
+    "gpt-5.4": {"provider": PROVIDER_OPENAI, "label": "GPT-5.4"},
+    "gpt-5.5": {"provider": PROVIDER_OPENAI, "label": "GPT-5.5"},
+    "deepseek/deepseek-v4-flash": {
+        "provider": PROVIDER_OPENROUTER,
+        "label": "DeepSeek V4 Flash",
+    },
+    "deepseek/deepseek-v4-pro": {
+        "provider": PROVIDER_OPENROUTER,
+        "label": "DeepSeek V4 Pro",
+    },
+    "z-ai/glm-5.2": {"provider": PROVIDER_OPENROUTER, "label": "GLM-5.2"},
+    "nvidia/nemotron-3-ultra-550b-a55b:free": {
+        "provider": PROVIDER_OPENROUTER,
+         "label": "Nvidia Nemotron 3 Ultra (Free)"
+    },
+    "poolside/laguna-m.1:free": {"provider": PROVIDER_OPENROUTER, "label": "Poolside Laguna M.1 (Free)"},
+}
 MAX_TOKENS = 32768
 
 # Claude Fable 5's safety classifiers can decline a request (a successful
@@ -34,14 +69,23 @@ FALLBACK_MODEL = "claude-opus-4-8"
 SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-06-01"
 FALLBACK_ENABLED_MODELS = ("claude-fable-5",)
 
-# USD per 1M tokens, per model. ``cache_write`` is the 5-minute-TTL rate (1.25x
-# input) and ``cache_read`` the cache-hit rate (0.1x input) — the standard
-# Anthropic cache economics. A model missing from this table renders tokens
-# without a dollar figure (cost is None) rather than a guessed number.
+# USD per 1M tokens, per model. For Anthropic, ``cache_write`` is the
+# 5-minute-TTL rate (1.25x input) and ``cache_read`` the cache-hit rate (0.1x
+# input) — the standard Anthropic cache economics. OpenAI models have no
+# cache-write charge (automatic caching), only a discounted ``cache_read``.
+# A model missing from this table renders tokens without a dollar figure
+# (cost is None) rather than a guessed number — OpenRouter models are
+# intentionally absent because their rates vary by upstream provider; the
+# OpenAI-compatible loop reports OpenRouter's API-returned cost instead.
 PRICING: dict[str, dict[str, float]] = {
     "claude-opus-4-8": {"input": 5.0, "output": 25.0, "cache_write": 6.25, "cache_read": 0.5},
     "claude-fable-5": {"input": 10.0, "output": 50.0, "cache_write": 12.5, "cache_read": 1.0},
     "claude-sonnet-5": {"input": 3.0, "output": 15.0, "cache_write": 3.75, "cache_read": 0.3},
+    "claude-haiku-4-5": {"input": 1.0, "output": 5.0, "cache_write": 1.25, "cache_read": 0.1},
+    "gpt-5.5": {"input": 5.0, "output": 30.0, "cache_write": 0.0, "cache_read": 0.5},
+    "gpt-5.4": {"input": 2.5, "output": 15.0, "cache_write": 0.0, "cache_read": 0.25},
+    "gpt-5.4-mini": {"input": 0.75, "output": 4.5, "cache_write": 0.0, "cache_read": 0.075},
+    "gpt-5.4-nano": {"input": 0.2, "output": 1.25, "cache_write": 0.0, "cache_read": 0.02},
 }
 
 # Claude Sonnet 5 launched with introductory pricing (cache rates scale with the
@@ -86,13 +130,42 @@ class ChatUnavailable(RuntimeError):
     """Raised when chat cannot run (missing API key or MCP disabled)."""
 
 
-def _has_credentials() -> bool:
-    return bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN"))
+def provider_available(provider: str) -> bool:
+    """Whether API credentials for ``provider`` are present in the environment."""
+    if provider == PROVIDER_ANTHROPIC:
+        return bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN"))
+    if provider == PROVIDER_OPENAI:
+        return bool(os.getenv("OPENAI_API_KEY"))
+    if provider == PROVIDER_OPENROUTER:
+        return bool(os.getenv("OPENROUTER_API_KEY"))
+    return False
+
+
+def model_available(model: str) -> bool:
+    """Whether ``model`` is known and its provider has credentials."""
+    entry = MODELS.get(model)
+    return entry is not None and provider_available(entry["provider"])
+
+
+def resolve_model(model: str | None) -> str:
+    """Return the model to use for a request.
+
+    Unknown or missing models fall back to the default (env-overridable) model.
+    A *known* model is returned as-is even when its provider has no credentials
+    — the provider loop then reports a clear error instead of silently handing
+    the conversation to a different provider (histories are provider-native).
+    """
+    if model is not None and model in MODELS:
+        return model
+    default = os.getenv("ANTHROPIC_MODEL", DEFAULT_MODEL)
+    return default if default in MODELS else DEFAULT_MODEL
 
 
 def chat_available(mcp_enabled: bool) -> bool:
-    """Whether chat can run: MCP enabled and API credentials present."""
-    return bool(mcp_enabled) and _has_credentials()
+    """Whether chat can run: MCP enabled and credentials for any provider present."""
+    return bool(mcp_enabled) and any(
+        provider_available(p) for p in (PROVIDER_ANTHROPIC, PROVIDER_OPENAI, PROVIDER_OPENROUTER)
+    )
 
 
 _client = None
@@ -107,7 +180,7 @@ def get_async_client() -> Any:
     global _client
     if _client is not None:
         return _client
-    if not _has_credentials():
+    if not provider_available(PROVIDER_ANTHROPIC):
         raise ChatUnavailable(
             "No Anthropic API credentials found. Set ANTHROPIC_API_KEY in the "
             "environment (.env) to enable chat."
@@ -206,10 +279,17 @@ def _add_usage(acc: dict[str, int], usage: Any) -> None:
 
 
 def _rates(model: str | None) -> dict[str, float] | None:
-    """Return the per-MTok rates in effect for ``model`` today, or None if unpriced."""
+    """Return the per-MTok rates in effect for ``model`` today, or None if unpriced.
+
+    The API can report a dated snapshot id (e.g. ``claude-haiku-4-5-20251001``)
+    for a model priced under its alias, so a miss falls back to a prefix match.
+    """
     if model == "claude-sonnet-5" and date.today() <= SONNET_5_INTRO_END:
         return SONNET_5_INTRO_PRICING
-    return PRICING.get(model or "")
+    rates = PRICING.get(model or "")
+    if rates is None and model:
+        rates = next((PRICING[alias] for alias in PRICING if model.startswith(f"{alias}-")), None)
+    return rates
 
 
 def _cost(model: str | None, tokens: dict[str, int]) -> float | None:
@@ -305,22 +385,35 @@ async def run_chat(
 ) -> AsyncIterator[str]:
     """Run the streaming agentic loop, yielding NDJSON event strings.
 
-    ``messages`` is mutated in place: the assistant turns and tool-result turns are
-    appended so the caller can persist the conversation across requests.
+    Dispatches to the provider that serves the resolved model. ``messages`` is
+    mutated in place: the assistant turns and tool-result turns are appended so
+    the caller can persist the conversation across requests.
     """
     if mcp is None:
         yield _event({"type": "error", "message": "MCP server is disabled (ENABLE_MCP=false)."})
         return
 
+    resolved = resolve_model(model)
+    provider = MODELS[resolved]["provider"]
+    if provider in (PROVIDER_OPENAI, PROVIDER_OPENROUTER):
+        from app.infrastructure import chat_openai
+
+        async for event in chat_openai.run_openai_chat(mcp, messages, model=resolved):
+            yield event
+        return
+
+    async for event in _run_anthropic_chat(mcp, messages, model=resolved):
+        yield event
+
+
+async def _run_anthropic_chat(mcp: Any, messages: list[dict], *, model: str) -> AsyncIterator[str]:
+    """Run the Anthropic streaming agentic loop, yielding NDJSON event strings."""
     try:
         client = get_async_client()
     except ChatUnavailable as exc:
         yield _event({"type": "error", "message": str(exc)})
         return
 
-    model = model or os.getenv("ANTHROPIC_MODEL", DEFAULT_MODEL)
-    if model not in ALLOWED_MODELS:
-        model = DEFAULT_MODEL
     tools = await _mcp_tool_schemas(mcp)
 
     # ``messages`` is mutated in place each turn; a per-call copy with the moving
@@ -329,9 +422,12 @@ async def run_chat(
         "model": model,
         "max_tokens": MAX_TOKENS,
         "system": [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": CACHE_CONTROL}],
-        "thinking": {"type": "adaptive", "display": "summarized"},
         "tools": tools,
     }
+    if MODELS.get(model, {}).get("thinking", True):
+        # Haiku 4.5 rejects the adaptive-thinking shape; every other allowed
+        # Claude model accepts it (Fable 5 has thinking always on).
+        stream_kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
     if model in FALLBACK_ENABLED_MODELS:
         # Opt into server-side refusal fallbacks (requires the beta endpoint).
         stream_factory = client.beta.messages.stream

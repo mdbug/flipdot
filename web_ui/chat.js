@@ -53,9 +53,7 @@ function updateEmptyState() {
 /** Remove every rendered message/tool/thinking node, leaving the empty state. */
 function clearLog() {
   chatLog
-    .querySelectorAll(
-      ".chat-bubble, .chat-tool, .chat-thinking, .chat-thinking-block, .chat-usage",
-    )
+    .querySelectorAll(".chat-bubble, .chat-tool, .chat-thinking, .chat-thinking-block, .chat-usage")
     .forEach((el) => el.remove());
   lastToolPill = null;
   thinkingEl = null;
@@ -324,8 +322,10 @@ function setSessionUsage(usage) {
 // --- Session history rendering ----------------------------------------------
 
 /**
- * Rebuild the chat log from a stored Anthropic message history.
- * @param {Array<Object>} messages - Saved messages (role + content blocks).
+ * Rebuild the chat log from a stored message history.
+ * Handles both Anthropic histories (assistant content blocks) and
+ * OpenAI-format histories (string content plus a tool_calls array).
+ * @param {Array<Object>} messages - Saved messages.
  */
 function renderHistory(messages) {
   clearLog();
@@ -339,19 +339,29 @@ function renderHistory(messages) {
     }
     if (msg.role !== "assistant") continue;
     if (typeof content === "string") {
-      addBubble("assistant", content);
-      continue;
-    }
-    for (const block of content || []) {
-      if (block.type === "text" && block.text) {
-        addBubble("assistant", block.text);
-      } else if (block.type === "thinking" && block.thinking) {
-        appendThinking(block.thinking);
-        settleThinking();
-      } else if (block.type === "tool_use") {
-        addTool(block.name, block.input);
-        settleLastTool();
+      if (content) addBubble("assistant", content);
+    } else {
+      for (const block of content || []) {
+        if (block.type === "text" && block.text) {
+          addBubble("assistant", block.text);
+        } else if (block.type === "thinking" && block.thinking) {
+          appendThinking(block.thinking);
+          settleThinking();
+        } else if (block.type === "tool_use") {
+          addTool(block.name, block.input);
+          settleLastTool();
+        }
       }
+    }
+    for (const call of msg.tool_calls || []) {
+      let args = {};
+      try {
+        args = JSON.parse(call.function.arguments || "{}");
+      } catch (_err) {
+        /* leave args empty on malformed JSON */
+      }
+      addTool(call.function.name, args);
+      settleLastTool();
     }
   }
   updateEmptyState();
@@ -474,6 +484,7 @@ async function selectSession(id) {
     setTitle(record.title);
     renderHistory(record.messages);
     setSessionUsage(record.usage);
+    setModelLock(record.model || null);
     markActiveSession();
     closeSidebar();
   } catch (_err) {
@@ -517,6 +528,7 @@ async function deleteSession(id, title) {
       currentSessionId = null;
       clearLog();
       setTitle("New conversation");
+      setModelLock(null);
     }
     loadSessions();
   } catch (_err) {
@@ -536,6 +548,7 @@ async function newConversation() {
   clearLog();
   setTitle("New conversation");
   setSessionUsage(null);
+  setModelLock(null);
   markActiveSession();
   closeSidebar();
   chatInput.focus();
@@ -610,6 +623,8 @@ async function refreshStatus() {
  */
 async function submitMessage(message) {
   addBubble("user", message);
+  // The first message locks the conversation to the selected model.
+  if (chatModel) setModelLock(chatModel.value);
   setEnabled(false);
   setStreaming(true);
   showThinking();
@@ -744,14 +759,70 @@ if (chatEmpty) {
   });
 }
 
-// Remember the model choice across reloads. Guard against a stored value that
-// no longer matches an available option.
-if (chatModel) {
-  const MODEL_KEY = "flipdot.chat.model";
-  const stored = localStorage.getItem(MODEL_KEY);
-  if (stored && [...chatModel.options].some((opt) => opt.value === stored)) {
-    chatModel.value = stored;
+// --- Model selector ----------------------------------------------------------
+
+const MODEL_KEY = "flipdot.chat.model";
+const PROVIDER_LABELS = { anthropic: "Anthropic", openai: "OpenAI", openrouter: "OpenRouter" };
+const MODEL_LOCK_NOTE = "Model is fixed per conversation — start a new chat to switch.";
+
+/**
+ * Lock the model selector to a conversation's model, or unlock it.
+ * @param {string|null} model - The locked model id, or null to unlock.
+ */
+function setModelLock(model) {
+  if (!chatModel) return;
+  if (model) {
+    if ([...chatModel.options].some((opt) => opt.value === model)) {
+      chatModel.value = model;
+    }
+    chatModel.disabled = true;
+    chatModel.title = MODEL_LOCK_NOTE;
+  } else {
+    chatModel.disabled = false;
+    chatModel.title = "";
   }
+}
+
+/**
+ * Populate the model selector from the backend registry, grouped by provider.
+ * Models whose provider has no API key are shown disabled. Restores the stored
+ * preference and re-applies the backend's model lock, if any.
+ */
+async function loadModels() {
+  if (!chatModel) return;
+  try {
+    const response = await fetch("/api/chat/models", { cache: "no-store" });
+    if (!response.ok) throw new Error(`request failed: ${response.status}`);
+    const data = await response.json();
+    const groups = new Map();
+    for (const model of data.models || []) {
+      const label = PROVIDER_LABELS[model.provider] || model.provider;
+      if (!groups.has(label)) {
+        const group = document.createElement("optgroup");
+        group.label = label;
+        groups.set(label, group);
+      }
+      const option = document.createElement("option");
+      option.value = model.id;
+      option.textContent = model.available ? model.label : `${model.label} (no API key)`;
+      option.disabled = !model.available;
+      groups.get(label).appendChild(option);
+    }
+    if (groups.size) {
+      chatModel.replaceChildren(...groups.values());
+    }
+    const usable = (value) =>
+      value && [...chatModel.options].some((opt) => opt.value === value && !opt.disabled);
+    const stored = localStorage.getItem(MODEL_KEY);
+    if (usable(stored)) chatModel.value = stored;
+    else if (usable(data.default)) chatModel.value = data.default;
+    setModelLock(data.locked || null);
+  } catch (_err) {
+    /* keep the static fallback option */
+  }
+}
+
+if (chatModel) {
   chatModel.addEventListener("change", () => {
     localStorage.setItem(MODEL_KEY, chatModel.value);
   });
@@ -760,4 +831,5 @@ if (chatModel) {
 updateEmptyState();
 updateCount();
 refreshStatus();
+loadModels();
 loadSessions();
