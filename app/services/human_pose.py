@@ -299,18 +299,36 @@ def should_draw_detailed_face_features(estimated_distance: float | None) -> bool
     return estimated_distance is not None and estimated_distance < VERY_CLOSE_FACE_DISTANCE
 
 
-def _xy_to_panel_xy(x, y, width, height):
-    panel_x = int(width - (x * width))
-    panel_y = int(y * height)
-    return panel_x, panel_y
-
-
 def _apply_face_perspective_correction(x, y):
     # Camera is mounted above the screen, so pull lower-face landmarks upward.
     strength = max(0.0, FACE_PERSPECTIVE_STRENGTH)
     pivot_y = min(1.0, max(0.0, FACE_PERSPECTIVE_PIVOT_Y))
     y_corrected = y - strength * max(0.0, y - pivot_y)
     return x, min(1.0, max(0.0, y_corrected))
+
+
+def _face_point_to_panel_xy(x: float, y: float, width: int, height: int) -> tuple[float, float]:
+    """Float panel coords of a raw normalized face point: perspective-corrected, mirrored.
+
+    The single projection primitive shared by the face-feature renderer and
+    ``face_feature_anchor``, so the two cannot drift apart.
+    """
+    x, y = _apply_face_perspective_correction(x, y)
+    return width - x * width, y * height
+
+
+def face_feature_anchor(
+    x_mirrored_norm: float, y_norm: float, width: int, height: int
+) -> tuple[float, float]:
+    """Float panel point where ``draw_face_features`` anchors a landmark.
+
+    Takes mirrored normalized coordinates (x already flipped, matching the
+    caricature's face basis) and applies the same projection and eye-row
+    offset as the face-feature renderer, so the caricature's entry and exit
+    zooms land where the sandfall silhouette's face was drawn.
+    """
+    x, y = _face_point_to_panel_xy(1.0 - x_mirrored_norm, y_norm, width, height)
+    return x, y + FACE_FEATURE_Y_OFFSET_PX
 
 
 def _draw_line(dots, x0, y0, x1, y1, value=0):
@@ -348,8 +366,8 @@ def _is_eye_open(landmarks, corner_indices, vertical_pairs):
 def _landmarks_to_panel_points(landmarks, indices, width, height):
     points = []
     for idx in indices:
-        x, y = _apply_face_perspective_correction(landmarks[idx].x, landmarks[idx].y)
-        points.append(_xy_to_panel_xy(x, y, width, height))
+        x, y = _face_point_to_panel_xy(landmarks[idx].x, landmarks[idx].y, width, height)
+        points.append((int(x), int(y)))
     return points
 
 

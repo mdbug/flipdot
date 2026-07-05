@@ -36,7 +36,8 @@ def _load_factory_module(monkeypatch):
     services_pkg = importlib.import_module("app.services")
     hair_stub = types.SimpleNamespace(get_hair_mask=lambda frame: None)
     human_pose_stub = types.SimpleNamespace(
-        draw_face_features=lambda dots, results, width, height, **kwargs: dots
+        draw_face_features=lambda dots, results, width, height, **kwargs: dots,
+        face_feature_anchor=lambda x_norm, y_norm, width, height: (x_norm * width, y_norm * height),
     )
     monkeypatch.setitem(sys.modules, "app.services.hair_segmentation", hair_stub)
     monkeypatch.setitem(sys.modules, "app.services.human_pose", human_pose_stub)
@@ -82,6 +83,7 @@ def test_create_mode_instances_wires_constructor_args(monkeypatch):
     assert instances["menu"].args == (28, 28, mode_manager)
     assert instances["paint"].args == (28, 28, mode_manager)
     assert callable(instances["caricature"].kwargs["hair_mask_provider"])
+    assert callable(instances["caricature"].kwargs["real_face_anchor"])
     assert instances["life"].args == (28, 28)
     assert instances["sandfall"].args == (28, 28)
     assert callable(instances["sandfall"].kwargs["face_renderer"])

@@ -1,5 +1,6 @@
 import logging
 import time
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -57,16 +58,23 @@ class ModeManager:
         self.mode_update_time = time.time()
         self.menu_click_start: float | None = None
         self.pose_enabled = True
+        # Notified after every set_pose_enabled, whatever the source (panel
+        # menu, web UI, ...); the main loop hooks persistence in here.
+        self.on_pose_enabled_changed: Callable[[bool], None] | None = None
+        # True while the last hook invocation raised: the live toggle applied
+        # but was not persisted. Read by the web API to report the failure;
+        # a failed persist is retried even on a same-value set.
+        self.pose_persist_failed = False
+        # One-shot: the last mode change was a menu-close restore (as opposed
+        # to an explicit selection); consumed by the transition policy to
+        # tell a resumed gesture chain from a fresh menu launch.
+        self._restored_from_menu = False
         self.control_source = self.CONTROL_GESTURE
         self.controller_connected = False
         self._manual_clock_selection = False
 
     def set_mode(self, mode: str, entered_via: str | None = None) -> None:
-        """Switch to ``mode`` (falling back to clock if pose is disabled) and note the source."""
-        requested_mode = mode
-        if mode == self.MODE_POSE and not self.pose_enabled:
-            mode = self.MODE_CLOCK
-
+        """Switch to ``mode`` and note the source."""
         normalized_source = self.normalize_control_source(entered_via)
         if normalized_source is not None:
             self.control_source = normalized_source
@@ -75,9 +83,8 @@ class ModeManager:
             previous_mode = self.mode
             self.last_mode = self.mode
             self.mode_start_time = time.time()
-            logger.info(
-                "Mode changed from %s to %s (requested=%s)", previous_mode, mode, requested_mode
-            )
+            self._restored_from_menu = False
+            logger.info("Mode changed from %s to %s", previous_mode, mode)
 
         self.mode = mode
         self.mode_update_time = time.time()
@@ -90,7 +97,7 @@ class ModeManager:
             if self.mode != self.MODE_MENU:
                 self.set_mode(self.MODE_MENU, entered_via=entered_via)
             else:
-                self.set_mode(self._previous_non_menu_mode(), entered_via=entered_via)
+                self._leave_menu(entered_via)
             self.menu_click_start = None
 
     def toggle_menu(self, entered_via: str | None = None) -> None:
@@ -99,8 +106,35 @@ class ModeManager:
             self.set_mode(self.MODE_MENU, entered_via=entered_via)
             return
 
-        self.set_mode(self._previous_non_menu_mode(), entered_via=entered_via)
+        self._leave_menu(entered_via)
         self.menu_click_start = None
+
+    def _leave_menu(self, entered_via: str | None) -> None:
+        """Close the menu, restoring the previous mode and marking it as a restore."""
+        # Order matters: set_mode clears the restore flag on every change,
+        # so it must be raised after the restore switch, not before.
+        self.set_mode(self._previous_non_menu_mode(), entered_via=entered_via)
+        self._restored_from_menu = True
+
+    def consume_menu_restore(self) -> bool:
+        """Return whether the last mode change was a menu-close restore, clearing the flag.
+
+        One-shot like :meth:`consume_manual_clock_selection`, so the signal
+        cannot outlive the policy frame that observes it.
+        """
+        restored = self._restored_from_menu
+        self._restored_from_menu = False
+        return restored
+
+    def retarget_menu_restore(self, mode: str) -> None:
+        """Point the menu's close-restore target at ``mode``.
+
+        Used by the transition policy when the mode the menu would restore
+        stopped being valid while the menu was open (e.g. a chain-entered
+        mode whose chain was ended by the POSE toggle).
+        """
+        if self.mode == self.MODE_MENU:
+            self.last_mode = mode
 
     def _previous_non_menu_mode(self) -> str:
         """Return the mode to restore when leaving the menu (pose if none recorded)."""
@@ -142,9 +176,36 @@ class ModeManager:
             return 30
 
     def set_pose_enabled(self, enabled: bool) -> None:
-        """Set whether the person-driven auto chain (sandfall/caricature) may run."""
-        self.pose_enabled = bool(enabled)
-        logger.info("Pose mode enabled=%s", self.pose_enabled)
+        """Set whether the person-driven auto chain (sandfall/caricature) may run.
+
+        No-op sets (same value) do not fire the change hook, so redundant
+        web/MCP requests never rewrite the settings file — unless the last
+        persist attempt failed, in which case a same-value set retries it.
+        """
+        enabled = bool(enabled)
+        if enabled == self.pose_enabled and not self.pose_persist_failed:
+            return
+        if enabled != self.pose_enabled:
+            self.pose_enabled = enabled
+            logger.info("Pose mode enabled=%s", self.pose_enabled)
+        self._notify_pose_enabled_changed()
+
+    def _notify_pose_enabled_changed(self) -> None:
+        """Fire the persistence hook, recording failure instead of raising.
+
+        The hook runs on whatever thread toggled (render loop, web, MCP), so
+        a persistence error must not crash the caller; ``pose_persist_failed``
+        lets the web API surface it instead of silently returning success.
+        """
+        if self.on_pose_enabled_changed is None:
+            return
+        try:
+            self.on_pose_enabled_changed(self.pose_enabled)
+        except Exception:
+            logger.exception("pose_enabled change hook failed")
+            self.pose_persist_failed = True
+        else:
+            self.pose_persist_failed = False
 
     def toggle_pose_enabled(self) -> None:
         """Flip whether the person-driven auto chain (sandfall/caricature) may run."""

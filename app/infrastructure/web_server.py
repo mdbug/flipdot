@@ -12,7 +12,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
@@ -25,7 +25,10 @@ from app.infrastructure import chat as chat_backend
 from app.infrastructure.mcp_server import build_flipdot_mcp
 from app.modes.contracts import Frame
 from app.services.chat_session_store import ChatSessionStore
-from app.services.settings_store import RuntimeSettingsStore
+from app.services.settings_store import DEFAULT_SETTINGS_PATH, RuntimeSettingsStore
+
+if TYPE_CHECKING:
+    from app.core.mode_manager import ModeManager
 
 logger = logging.getLogger(__name__)
 
@@ -263,13 +266,24 @@ class WebServer:
     """Built-in FastAPI server for frame mirroring and browser input."""
 
     def __init__(
-        self, *, input_hub: Any, host: str, port: int, settings_path: Path | None = None
+        self,
+        *,
+        input_hub: Any,
+        host: str,
+        port: int,
+        settings_path: Path | None = None,
+        settings_store: RuntimeSettingsStore | None = None,
     ) -> None:
         self._input_hub = input_hub
         self._host = host
         self._port = port
-        self._settings_store = RuntimeSettingsStore(
-            settings_path or (Path(__file__).resolve().parents[2] / "state" / "settings.json")
+        if settings_store is not None and settings_path is not None:
+            raise ValueError("pass either settings_store or settings_path, not both")
+        # Sharing the main loop's store matters: RuntimeSettingsStore's lock
+        # is per-instance, so a second instance on the same file would let
+        # concurrent read-modify-writes silently drop each other's sections.
+        self._settings_store = settings_store or RuntimeSettingsStore(
+            settings_path or DEFAULT_SETTINGS_PATH
         )
 
         self._frame_lock = threading.Lock()
@@ -295,7 +309,7 @@ class WebServer:
         self._transition_policy = None
         self._font_preview = None
         self._clock = None
-        self._mode_manager = None
+        self._mode_manager: ModeManager | None = None
 
         # Single shared conversation for the in-UI Claude chat (one physical
         # display = one conversation). Serialized with a lock so overlapping
@@ -771,8 +785,16 @@ class WebServer:
         @self._app.post("/api/settings/pose")
         def post_pose_settings(payload: PoseSettingsPayload) -> JSONResponse:
             mode_manager = self._require_mode_manager()
+            # Persistence happens in ModeManager's on_pose_enabled_changed
+            # hook (wired by the main loop) — the single path shared by every
+            # source (panel menu, web UI, MCP).
             mode_manager.set_pose_enabled(payload.enabled)
-            self._settings_store.save_pose_settings(enabled=bool(mode_manager.pose_enabled))
+            if mode_manager.pose_persist_failed:
+                # The live toggle applied, but the settings write failed: a
+                # silent 200 would revert the choice on the next restart.
+                raise HTTPException(
+                    status_code=500, detail="pose setting applied but could not be persisted"
+                )
             return JSONResponse({"status": "ok", "enabled": bool(mode_manager.pose_enabled)})
 
         @self._app.get("/api/settings/clock")
@@ -1126,11 +1148,15 @@ class WebServer:
         if persisted is not None:
             script_mode.update_interlude_settings(excluded=list(persisted["excluded"]))
 
-    def attach_mode_manager(self, mode_manager) -> None:
+    def attach_mode_manager(self, mode_manager: ModeManager) -> None:
+        """Wire the mode manager the settings/mode APIs drive.
+
+        The persisted pose toggle is applied at startup by the main loop
+        (which also persists changes from every source via the
+        ``on_pose_enabled_changed`` hook); attaching must not clobber the
+        live value with a stale one.
+        """
         self._mode_manager = mode_manager
-        persisted = self._settings_store.load_pose_settings()
-        if persisted is not None:
-            mode_manager.set_pose_enabled(bool(persisted["enabled"]))
 
     def attach_transition_policy(self, transition_policy) -> None:
         self._transition_policy = transition_policy

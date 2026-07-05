@@ -257,3 +257,45 @@ def test_checkbox_provider_syncs_with_external_state(monkeypatch):
     checkbox.draw(frame)
 
     assert checkbox.checked is False
+
+
+def test_checkbox_click_accepts_a_source(monkeypatch):
+    # Every activation path (hover dwell, controller, web) passes a source;
+    # Checkbox.click must accept it like every other MenuItem.
+    menu_module = _load_menu_module(monkeypatch)
+    calls = {"count": 0}
+    checkbox = menu_module.Checkbox(
+        "POSE",
+        0,
+        28,
+        checked=False,
+        on_click=lambda: calls.__setitem__("count", calls["count"] + 1),
+    )
+
+    checkbox.click("web")
+    checkbox.click("controller")
+    checkbox.click()
+
+    assert checkbox.checked is True  # toggled three times from False
+    assert calls["count"] == 3
+
+
+def test_checkbox_hover_dwell_click_does_not_crash(monkeypatch):
+    menu_module = _load_menu_module(monkeypatch)
+    now = {"value": 10.0}
+    monkeypatch.setattr(menu_module.time, "time", lambda: now["value"])
+    calls = {"count": 0}
+    checkbox = menu_module.Checkbox(
+        "POSE",
+        0,
+        28,
+        checked=False,
+        on_click=lambda: calls.__setitem__("count", calls["count"] + 1),
+    )
+
+    checkbox.hover(True, source="gesture")
+    now["value"] += menu_module.MenuItem.CLICK_TIME + 0.1
+    checkbox.hover(True, source="gesture")
+
+    assert calls["count"] == 1
+    assert checkbox.checked is True

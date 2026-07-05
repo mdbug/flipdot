@@ -180,7 +180,7 @@ def test_empty_face_list_is_treated_as_no_face():
 def test_neutral_face_regions():
     frame = _make_mode().get_frame(_ctx(_make_face()))
 
-    assert frame[0:5, :].sum() == 0  # headroom above the oval stays empty (hair space)
+    assert frame[0:4, :].sum() == 0  # slim headroom above the oval (tall hair may clip)
     assert frame[8:11, :].sum() > 0  # brow band
     assert frame[10:14, :].sum() > 0  # eye band
     assert frame[17:24, :].sum() > 0  # mouth band
@@ -656,3 +656,104 @@ def test_exit_progress_zero_keeps_canonical_projection():
     at_zero = _make_mode().get_frame(_ctx(face, exit_progress=0.0))
 
     assert np.array_equal(at_zero, canonical)
+
+
+def test_aborted_exit_hold_eases_back_instead_of_snapping(monkeypatch):
+    fake = {"now": 1000.0}
+    monkeypatch.setattr(caricature.time, "time", lambda: fake["now"])
+    face = _make_face(center=(0.3, 0.3), iod=0.08)
+    mode = _make_mode()
+    mode.get_frame(_ctx(face, exit_progress=0.9))
+    assert mode._displayed_exit_progress == pytest.approx(0.9)
+
+    # The hold aborts (policy reports None); one frame later the face must
+    # still render mostly shrunken, unwinding at EXIT_RECOVERY_PER_SEC.
+    fake["now"] += 1.0 / 30.0
+    mode.get_frame(_ctx(face))
+    expected = 0.9 - caricature.EXIT_RECOVERY_PER_SEC / 30.0
+    assert mode._displayed_exit_progress == pytest.approx(expected)
+
+    # And it fully recovers to the canonical projection in finite time.
+    fake["now"] += 2.0
+    frame = mode.get_frame(_ctx(face))
+    assert mode._displayed_exit_progress == 0.0
+    ys, xs = np.nonzero(frame)
+    assert abs(xs.mean() - (WIDTH - 1) / 2.0) < 3.0
+
+
+def test_entry_zoom_uses_injected_real_face_anchor():
+    anchor_calls = []
+
+    def fake_anchor(x_norm, y_norm, width, height):
+        anchor_calls.append((x_norm, y_norm, width, height))
+        return (5.0, 20.0)
+
+    mode = caricature.Caricature(WIDTH, HEIGHT, _FakeModeManager(), real_face_anchor=fake_anchor)
+    frame = mode.get_frame(_ctx(_make_face(center=(0.3, 0.3), iod=0.08), mode_time=0.0))
+
+    assert anchor_calls, "the injected projection must supply the entry-zoom anchor"
+    ys, xs = np.nonzero(frame)
+    assert abs(xs.mean() - 5.0) < 4.0
+    assert abs(ys.mean() - 20.0) < 4.0
+
+
+def test_hair_mask_resampled_only_when_a_new_mask_arrives(monkeypatch):
+    calls = {"count": 0}
+    real_sampler = caricature._hair_profile_from_mask
+
+    def counting_sampler(*args, **kwargs):
+        calls["count"] += 1
+        return real_sampler(*args, **kwargs)
+
+    monkeypatch.setattr(caricature, "_hair_profile_from_mask", counting_sampler)
+    mask = _make_hair_mask(height_iod=0.6)
+    mode = _make_hair_mode(mask)
+
+    mode.get_frame(_ctx(_make_face()))
+    mode.get_frame(_ctx(_make_face()))
+    # The provider returned the same array object twice: sampled once, so the
+    # hair EMA runs at its tuned per-mask (~7 Hz) rate, not per frame.
+    assert calls["count"] == 1
+
+    mode.hair_mask_provider = lambda frame: mask.copy()
+    mode.get_frame(_ctx(_make_face()))
+    assert calls["count"] == 2
+
+
+def test_exit_hold_during_entry_zoom_does_not_snap_to_full_size():
+    """An exit hold starting mid-entry-zoom blends from the small entry face."""
+    face = _make_face(center=(0.3, 0.3), iod=0.08)
+    entry = _make_mode().get_frame(_ctx(face, mode_time=0.0))
+    exiting = _make_mode().get_frame(_ctx(face, mode_time=0.0, exit_progress=0.1))
+    canonical = _make_mode().get_frame(_ctx(face))
+
+    def spread(frame):
+        ys, xs = np.nonzero(frame)
+        return xs.max() - xs.min()
+
+    # At entry start the base and real projections coincide, so a beginning
+    # exit hold must leave the frame unchanged — not pop to full size.
+    assert np.array_equal(exiting, entry)
+    assert spread(canonical) > spread(exiting) + 4
+
+
+def test_exit_hold_keeps_face_rendered_past_face_hold(monkeypatch):
+    """The shrink-back animation must not flip to the idle face mid exit hold."""
+    fake = {"now": 1000.0}
+    monkeypatch.setattr(caricature.time, "time", lambda: fake["now"])
+    mode = _make_mode()
+    idle_calls = {"count": 0}
+    mode._render_idle = lambda frame, now: idle_calls.__setitem__("count", idle_calls["count"] + 1)
+    mode.get_frame(_ctx(_make_face(center=(0.3, 0.3), iod=0.08), exit_progress=0.2))
+
+    # Face mesh lost mid-hold, past FACE_HOLD_SEC: keep rendering the
+    # (stale) shrinking face instead of the full-size idle invite face.
+    fake["now"] += caricature.FACE_HOLD_SEC + 0.5
+    frame = mode.get_frame(_ctx(None, exit_progress=0.8))
+    assert idle_calls["count"] == 0
+    assert frame.any()
+
+    # Once the hold ends (and the ease-back drains), the idle face resumes.
+    fake["now"] += 2.0
+    mode.get_frame(_ctx(None))
+    assert idle_calls["count"] == 1

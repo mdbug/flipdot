@@ -13,7 +13,6 @@ pointer — so the panel behaves like a mirror.
 from typing import Any
 
 import numpy as np
-from PIL import Image
 
 # mediapipe 33-landmark model indices
 NOSE = 0
@@ -66,16 +65,22 @@ def pose_to_mask(pose_results: Any, width: int, height: int) -> np.ndarray | Non
 
 
 def _segmentation_to_mask(seg: Any, width: int, height: int) -> np.ndarray | None:
-    """Centre-crop the segmentation mask square, threshold, resize, and mirror."""
+    """Centre-crop the segmentation mask square, resize, threshold, and mirror.
+
+    Samples the float mask directly (nearest-neighbour, so thresholding
+    before or after sampling is equivalent) — this runs every rendered
+    sandfall frame, so no full-resolution temporaries are made. Sampling is
+    centre-aligned (the grid PIL's NEAREST used before this ran on numpy),
+    keeping the silhouette where the tuned face-feature offsets expect it.
+    """
     arr = np.asarray(seg)
     hh, ww = arr.shape[:2]
     s = min(hh, ww)
     r0, c0 = (hh - s) // 2, (ww - s) // 2
-    img = Image.fromarray(
-        ((arr[r0 : r0 + s, c0 : c0 + s] > SEGMENTATION_THRESHOLD) * 255).astype(np.uint8)
-    )
-    img = img.resize((width, height), Image.NEAREST)
-    mask = np.asarray(img)[:, ::-1] > 127
+    rows = r0 + np.minimum(((np.arange(height) + 0.5) * s / height).astype(int), s - 1)
+    cols = c0 + np.minimum(((np.arange(width) + 0.5) * s / width).astype(int), s - 1)
+    small = arr[np.ix_(rows, cols)]
+    mask = np.ascontiguousarray((small > SEGMENTATION_THRESHOLD)[:, ::-1])
     return mask if mask.any() else None
 
 

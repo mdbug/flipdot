@@ -37,7 +37,11 @@ def create_mode_instances(width: int, height: int, mode_manager: ModeManager) ->
         "menu": Menu(width, height, mode_manager),
         "paint": Paint(width, height, mode_manager),
         "caricature": Caricature(
-            width, height, mode_manager, hair_mask_provider=hair_segmentation.get_hair_mask
+            width,
+            height,
+            mode_manager,
+            hair_mask_provider=hair_segmentation.get_hair_mask,
+            real_face_anchor=human_pose.face_feature_anchor,
         ),
         "percussion": Percussion(width, height, mode_manager),
         "autodrum": AutoDrum(width, height, mode_manager),

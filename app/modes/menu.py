@@ -152,14 +152,10 @@ class Checkbox(MenuItem):
         if self.hovered and self.hover_start_time:
             frame[self.y + 2, 2] = int(time.time() * 2) % 2
 
-    def hover(self, hovering: bool, source: str | None = None) -> None:
-        super().hover(hovering, source=source)
-
-    def click(self) -> None:  # type: ignore[override]
+    def click(self, source: str | None = None) -> None:
         """Toggle the checked state and notify ``on_click``."""
         self.checked = not self.checked
-        if self.on_click:
-            self.on_click()
+        super().click(source)
 
 
 class Menu:

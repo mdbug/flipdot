@@ -4,11 +4,16 @@ import json
 import threading
 from pathlib import Path
 
+# Single source of truth for where runtime settings live: every composition
+# root (main loop, web server default) must resolve to the same file, or two
+# per-instance store locks end up racing on it.
+DEFAULT_SETTINGS_PATH = Path(__file__).resolve().parents[2] / "state" / "settings.json"
+
 
 class RuntimeSettingsStore:
     """Persists lightweight runtime settings to a JSON file."""
 
-    def __init__(self, settings_path: Path) -> None:
+    def __init__(self, settings_path: Path = DEFAULT_SETTINGS_PATH) -> None:
         self._settings_path = settings_path
         self._lock = threading.Lock()
 

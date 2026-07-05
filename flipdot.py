@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 import time
 
 import numpy as np
@@ -26,6 +27,7 @@ from app.modes.registry import build_mode_registry
 from app.services.controller import ControllerHub
 from app.services.controller_mapping import ControllerInputBridge
 from app.services.fps import FPSTracker
+from app.services.settings_store import RuntimeSettingsStore
 
 PRINT_INTERVAL = 1.0
 POSE_TIMEOUT = 2.0
@@ -173,6 +175,42 @@ def main() -> None:
     paint_clear_gesture_start = None
     paint_clear_gesture_armed = True
     mode_manager = ModeManager()
+    # Apply the persisted person-detection toggle before the first policy
+    # tick (the web server, when enabled, starts too late for this), then
+    # persist every later change whatever its source (panel menu, web UI).
+    # The hook is installed after the restore, so the restore itself is
+    # never re-persisted.
+    settings_store = RuntimeSettingsStore()
+
+    def persist_pose_enabled(enabled: bool) -> None:
+        """Persist the pose toggle without blocking the render loop.
+
+        Web/MCP threads write synchronously so failures propagate into
+        ``ModeManager.pose_persist_failed`` and the API can report them; the
+        panel menu's toggle runs on the main render thread, where file I/O
+        (behind a lock shared with web-thread saves) could stall a frame, so
+        it defers the write to a short-lived background thread. That thread
+        re-reads the live value at write time, so racing toggles converge on
+        the latest state.
+        """
+        if threading.current_thread() is threading.main_thread():
+            threading.Thread(
+                target=_persist_pose_enabled_in_background, name="pose-persist", daemon=True
+            ).start()
+        else:
+            settings_store.save_pose_settings(enabled=enabled)
+
+    def _persist_pose_enabled_in_background() -> None:
+        """Write the current pose toggle, logging (not raising) on failure."""
+        try:
+            settings_store.save_pose_settings(enabled=mode_manager.pose_enabled)
+        except Exception:
+            logger.exception("Failed to persist pose setting from the render loop")
+
+    persisted_pose = settings_store.load_pose_settings()
+    if persisted_pose is not None:
+        mode_manager.set_pose_enabled(bool(persisted_pose["enabled"]))
+    mode_manager.on_pose_enabled_changed = persist_pose_enabled
     mode_instances = create_mode_instances(panel.WIDTH, panel.HEIGHT, mode_manager)
     clock = mode_instances["clock"]
     menu = mode_instances["menu"]
@@ -407,7 +445,14 @@ def main() -> None:
                 # update so cold web stack startup never delays first pixels.
                 from app.infrastructure.web_server import WebServer
 
-                web_server = WebServer(input_hub=input_hub, host=web_ui_host, port=web_ui_port)
+                # Share the main loop's store: RuntimeSettingsStore locks per
+                # instance, so a second instance on the same file would race.
+                web_server = WebServer(
+                    input_hub=input_hub,
+                    host=web_ui_host,
+                    port=web_ui_port,
+                    settings_store=settings_store,
+                )
                 web_server.attach_board(board)
                 web_server.attach_script_mode(script_mode)
                 web_server.attach_mode_manager(mode_manager)

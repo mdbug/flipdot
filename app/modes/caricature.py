@@ -28,6 +28,13 @@ from app.modes.contracts import Frame, RenderContext
 from app.services.draw import draw_circle, draw_line, draw_point, thick_line
 
 HairMaskProvider = Callable[[np.ndarray], "np.ndarray | None"]
+# Maps a mirrored-normalized face point to the float panel position where the
+# sandfall face renderer would draw it: (x_norm, y_norm, width, height) -> (x_px, y_px).
+RealFaceAnchor = Callable[[float, float, int, int], tuple[float, float]]
+
+# Displayed exit progress unwinds at most this fast (fraction/second) when the
+# policy's backing-away hold aborts, instead of snapping to full size.
+EXIT_RECOVERY_PER_SEC = 1.5
 
 logger = logging.getLogger(__name__)
 
@@ -89,9 +96,9 @@ _INDEX_TO_ROW = {index: row for row, index in enumerate(USED_INDICES)}
 _MAX_MESH_INDEX = max(index for index in USED_INDICES if index < LEFT_IRIS_CENTER)
 
 # --- Geometry: how the face-local frame maps onto the panel ---
-# Sized so ~6 rows above the face oval stay free for the hair mass.
-PANEL_IOD_FRAC = 0.24  # inter-ocular distance as a fraction of panel width
-FACE_ANCHOR_Y_FRAC = 0.44  # eye line sits at this fraction of panel height
+# Sized to favor a large face; tall hair may clip at the top edge.
+PANEL_IOD_FRAC = 0.28  # inter-ocular distance as a fraction of panel width
+FACE_ANCHOR_Y_FRAC = 0.42  # eye line sits at this fraction of panel height
 FACE_MIN_IOD_NORM = 0.03  # below this normalized IOD the face is too far to trust
 LOWER_FACE_Y_GAIN = 1.0  # on-device knob for camera-above foreshortening
 # Entrance animation: the caricature first appears where (and as small as)
@@ -123,6 +130,11 @@ HAIR_RAY_TOP_IOD = -3.2  # rays scan from this far above the eye line...
 HAIR_RAY_BOTTOM_IOD = 2.2  # ...down past the chin (side curtains, long hair)
 HAIR_RAY_STEP_IOD = 0.08
 _HAIR_RAY_YS = np.arange(HAIR_RAY_TOP_IOD, HAIR_RAY_BOTTOM_IOD, HAIR_RAY_STEP_IOD)
+# Face-local (x, y) sample grid for the hair rays; contents are constant, only
+# the per-call rotation and eye-mid offset vary.
+_HAIR_SAMPLE_GRID = np.empty((HAIR_COL_XS.size * _HAIR_RAY_YS.size, 2))
+_HAIR_SAMPLE_GRID[:, 0] = np.repeat(HAIR_COL_XS, _HAIR_RAY_YS.size)
+_HAIR_SAMPLE_GRID[:, 1] = np.tile(_HAIR_RAY_YS, HAIR_COL_XS.size)
 HAIR_MIN_COVERAGE = 0.02  # fraction of ray samples that must hit hair to accept a profile
 HAIR_EMA_ALPHA = 0.3  # slower than landmarks: masks arrive at the segmenter's ~7 Hz
 HAIR_ABSENT_HEIGHT_IOD = 0.02  # decayed columns below this collapse to "no hair"
@@ -152,6 +164,11 @@ _EPS = 1e-6
 def _clamp(value: float, lo: float, hi: float) -> float:
     """Clamp ``value`` into ``[lo, hi]``."""
     return min(hi, max(lo, value))
+
+
+def _smoothstep(t: float) -> float:
+    """Ease ``t`` in [0, 1] with the classic smoothstep curve."""
+    return t * t * (3.0 - 2.0 * t)
 
 
 @dataclass(frozen=True)
@@ -375,12 +392,10 @@ def _hair_profile_from_mask(
     """
     n_cols = HAIR_COL_XS.size
     n_rays = _HAIR_RAY_YS.size
-    grid = np.empty((n_cols * n_rays, 2))
-    grid[:, 0] = np.repeat(HAIR_COL_XS, n_rays)
-    grid[:, 1] = np.tile(_HAIR_RAY_YS, n_cols)
     cos_r, sin_r = math.cos(roll), math.sin(roll)
     rotation = np.array([[cos_r, -sin_r], [sin_r, cos_r]])
-    normalized = eye_mid + iod * (grid @ rotation.T)  # mirrored normalized coords
+    # mirrored normalized coords
+    normalized = eye_mid + iod * (_HAIR_SAMPLE_GRID @ rotation.T)
     height, width = mask.shape
     cols = np.round((1.0 - normalized[:, 0]) * (width - 1)).astype(int)  # unmirror
     rows = np.round(normalized[:, 1] * (height - 1)).astype(int)
@@ -548,21 +563,34 @@ class Caricature:
         height: int,
         mode_manager: ModeManager,
         hair_mask_provider: HairMaskProvider | None = None,
+        real_face_anchor: RealFaceAnchor | None = None,
     ) -> None:
         self.width = width
         self.height = height
         self.mode_manager = mode_manager
         self.hair_mask_provider = hair_mask_provider
+        # Projects the real eye midpoint to where the sandfall renderer drew
+        # the face, so entry/exit zooms land on the silhouette's face; falls
+        # back to raw panel scaling when not provided.
+        self.real_face_anchor = real_face_anchor
         self._panel_iod_px = width * PANEL_IOD_FRAC
         self._last_mode_start_time: float | None = None
         self._smoothed: np.ndarray | None = None
         self._hair_profile: np.ndarray | None = None
+        # Identity of the last ingested hair mask: masks arrive at ~7 Hz while
+        # frames render at up to 30, so re-smoothing the same mask would both
+        # waste work and quadruple the EMA's effective rate.
+        self._last_hair_mask: np.ndarray | None = None
         self._last_face_time: float | None = None
+        self._last_render_time: float | None = None
         self._eye_open: dict[str, bool] = {"left": True, "right": True}
         self._showing_face = False
         # Where the entry zoom starts: (anchor px, iod px) of the viewer's
         # real face, captured on the first faced frame after mode entry.
         self._entry_start: tuple[np.ndarray, float] | None = None
+        # Exit progress actually rendered; trails the policy's value so an
+        # aborted exit hold eases back instead of snapping to full size.
+        self._displayed_exit_progress = 0.0
         # Projection used for the current frame (canonical outside the zoom).
         self._proj_anchor: np.ndarray = np.array([(width - 1) / 2.0, height * FACE_ANCHOR_Y_FRAC])
         self._proj_iod_px: float = self._panel_iod_px
@@ -571,10 +599,13 @@ class Caricature:
         """Clear smoothing and per-eye state on mode entry."""
         self._smoothed = None
         self._hair_profile = None
+        self._last_hair_mask = None
         self._last_face_time = None
+        self._last_render_time = None
         self._eye_open = {"left": True, "right": True}
         self._showing_face = False
         self._entry_start = None
+        self._displayed_exit_progress = 0.0
 
     def get_frame(self, context: RenderContext) -> Frame:
         """Render the caricature from the context's face-mesh results."""
@@ -593,26 +624,66 @@ class Caricature:
                 ) * self._smoothed + LANDMARK_EMA_ALPHA * points
             self._last_face_time = now
 
+        exit_progress = self._smooth_exit_progress(context.caricature_exit_progress, now)
+
         frame = np.zeros((self.height, self.width), dtype=np.uint8)
         smoothed = self._smoothed
+        # While an exit hold runs, keep rendering the (stale) face past
+        # FACE_HOLD_SEC: the hold outlives the face-hold window on a fast
+        # walk-away, and flipping to the full-size idle invite face would
+        # break the shrink-onto-head handoff animation.
         has_face = (
             smoothed is not None
             and self._last_face_time is not None
-            and now - self._last_face_time <= FACE_HOLD_SEC
+            and (now - self._last_face_time <= FACE_HOLD_SEC or exit_progress is not None)
         )
         if smoothed is not None and has_face:
             hair_mask = None
             if self.hair_mask_provider is not None:
                 hair_mask = self.hair_mask_provider(context.frame)
-            self._render_face(
-                frame, smoothed, hair_mask, context.mode_time, context.caricature_exit_progress
-            )
+            self._render_face(frame, smoothed, hair_mask, context.mode_time, exit_progress)
         else:
             self._render_idle(frame, now)
         if has_face != self._showing_face:
             self._showing_face = has_face
             logger.debug("Caricature %s", "tracking a face" if has_face else "idle (no face)")
         return frame
+
+    def _smooth_exit_progress(self, exit_progress: float | None, now: float) -> float | None:
+        """Track the policy's exit progress, easing back when the hold aborts.
+
+        The policy's value can drop from ~1.0 to None in one frame (the viewer
+        stepped forward again); unwinding at ``EXIT_RECOVERY_PER_SEC`` instead
+        of jumping keeps the face from popping back to full size.
+        """
+        dt = 0.0
+        if self._last_render_time is not None:
+            dt = max(0.0, now - self._last_render_time)
+        self._last_render_time = now
+
+        target = exit_progress if exit_progress is not None else 0.0
+        if target >= self._displayed_exit_progress:
+            self._displayed_exit_progress = target
+        else:
+            self._displayed_exit_progress = max(
+                target, self._displayed_exit_progress - dt * EXIT_RECOVERY_PER_SEC
+            )
+        return self._displayed_exit_progress if self._displayed_exit_progress > 0.0 else None
+
+    def _real_face_projection(self, eye_mid: np.ndarray, iod: float) -> tuple[np.ndarray, float]:
+        """Return (anchor px, iod px) of the viewer's real on-panel face.
+
+        Uses ``real_face_anchor`` (the sandfall face renderer's projection,
+        with its perspective correction and row offsets) when available, so
+        entry/exit zooms land exactly where sandfall drew the face.
+        """
+        if self.real_face_anchor is not None:
+            anchor = np.array(
+                self.real_face_anchor(float(eye_mid[0]), float(eye_mid[1]), self.width, self.height)
+            )
+        else:
+            anchor = np.array([eye_mid[0] * self.width, eye_mid[1] * self.height])
+        return anchor, iod * self.width
 
     def _projection_params(
         self,
@@ -629,30 +700,28 @@ class Caricature:
         so the caricature appears to grow out of the silhouette's head. While
         ``exit_progress`` runs (the policy's backing-away hold) the projection
         shrinks back onto the viewer's live face, so the handoff to sandfall
-        lands where sandfall will draw its face.
+        lands where sandfall will draw its face. The exit blend starts from
+        whatever the entry/canonical projection currently is, so an exit hold
+        that begins mid-entry-zoom continues from the partially-grown face
+        instead of snapping to full size.
         """
         target_anchor = np.array([(self.width - 1) / 2.0, self.height * FACE_ANCHOR_Y_FRAC])
-        if exit_progress is not None:
-            real_anchor = np.array([eye_mid[0] * self.width, eye_mid[1] * self.height])
-            real_iod = iod * self.width
-            ease = exit_progress * exit_progress * (3.0 - 2.0 * exit_progress)  # smoothstep
-            return (
-                target_anchor + (real_anchor - target_anchor) * ease,
-                self._panel_iod_px + (real_iod - self._panel_iod_px) * ease,
-            )
         if mode_time >= ENTRY_ZOOM_SECONDS:
-            return target_anchor, self._panel_iod_px
-        if self._entry_start is None:
-            self._entry_start = (
-                np.array([eye_mid[0] * self.width, eye_mid[1] * self.height]),
-                iod * self.width,
-            )
-        start_anchor, start_iod = self._entry_start
-        progress = mode_time / ENTRY_ZOOM_SECONDS
-        ease = progress * progress * (3.0 - 2.0 * progress)  # smoothstep
+            base_anchor, base_iod = target_anchor, self._panel_iod_px
+        else:
+            if self._entry_start is None:
+                self._entry_start = self._real_face_projection(eye_mid, iod)
+            start_anchor, start_iod = self._entry_start
+            ease = _smoothstep(mode_time / ENTRY_ZOOM_SECONDS)
+            base_anchor = start_anchor + (target_anchor - start_anchor) * ease
+            base_iod = start_iod + (self._panel_iod_px - start_iod) * ease
+        if exit_progress is None:
+            return base_anchor, base_iod
+        real_anchor, real_iod = self._real_face_projection(eye_mid, iod)
+        ease = _smoothstep(exit_progress)
         return (
-            start_anchor + (target_anchor - start_anchor) * ease,
-            start_iod + (self._panel_iod_px - start_iod) * ease,
+            base_anchor + (real_anchor - base_anchor) * ease,
+            base_iod + (real_iod - base_iod) * ease,
         )
 
     def _project(self, local: np.ndarray, roll: float) -> np.ndarray:
@@ -687,7 +756,11 @@ class Caricature:
         warped = _apply_exaggeration(local, measured, exag)
         panel = self._project(warped, exag.roll)
 
-        if hair_mask is not None:
+        if hair_mask is not None and hair_mask is not self._last_hair_mask:
+            # Masks arrive at ~7 Hz (the provider returns the same array until
+            # the worker finishes a new one); resampling and EMA-smoothing only
+            # new masks keeps HAIR_EMA_ALPHA at its tuned per-mask rate.
+            self._last_hair_mask = hair_mask
             measured_profile = _hair_profile_from_mask(hair_mask, eye_mid, iod, roll)
             self._hair_profile = _smooth_hair_profile(self._hair_profile, measured_profile)
         hair_strokes: list[HairStroke] = []

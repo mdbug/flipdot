@@ -35,6 +35,20 @@ class TransitionPolicy:
     HOURLY_SCRIPT_DURATION = 60.0
     # Seconds without a detected face before caricature mode returns to clock.
     CARICATURE_NO_FACE_TIMEOUT = 8.0
+    # Face-mesh poll interval for a manual caricature abandoned with nobody
+    # in frame: enough to notice a returning face, without running the
+    # landmarker at full rate on an empty scene forever.
+    ABANDONED_FACE_MESH_INTERVAL = 2.0
+    # A manual (menu/MCP-launched) caricature is exempt from the chain's
+    # presence rules, but an empty scene this long means it was abandoned:
+    # return to clock so pose inference stops running at the mode's full
+    # rate forever and clock-anchored behaviors (worldcup, hourly scripts,
+    # chain re-entry) can resume.
+    MANUAL_CARICATURE_ABANDON_TIMEOUT = 300.0
+    # Modes the gesture chain may preempt with sandfall when a person shows
+    # up. An allow-list so new modes are safe from passer-by hijack by
+    # default (the board and running scripts must not be taken over).
+    CHAIN_PREEMPTIBLE_MODES = (ModeManager.MODE_CLOCK,)
     # Very-close hysteresis: enter caricature below ENTER, leave it above EXIT.
     # ENTER mirrors human_pose.VERY_CLOSE_FACE_DISTANCE's default (0.5).
     CARICATURE_ENTER_DISTANCE = 0.5
@@ -44,6 +58,15 @@ class TransitionPolicy:
     # hold continuously before they fire.
     CARICATURE_ENTER_HOLD_SECONDS = 1.0
     CARICATURE_EXIT_HOLD_SECONDS = 2.0
+    # A total dropout (no distance, no face) may keep the exit hold running
+    # only after this much definite backing-away was observed first; a hold
+    # seeded by a single wild far reading is cancelled instead of silently
+    # completing against a still-present viewer.
+    CARICATURE_EXIT_CONFIRM_SECONDS = 0.3
+    # Brief facing-check flickers hold an in-progress menu dwell, but a
+    # sustained untrusted streak resets it so turned-away arms-crossed
+    # misfires can never bank dwell time toward opening the menu.
+    MENU_GESTURE_UNTRUST_GRACE_SECONDS = 0.5
 
     def __init__(
         self,
@@ -77,17 +100,30 @@ class TransitionPolicy:
         self._last_hourly_script_hour: int | None = None
         self._hourly_script_active = False
         self._last_shuffle_date: Any = None
-        # Mode to return to when a policy-entered ("auto") caricature ends
-        # because the viewer backed away. None => caricature (if active) was
-        # menu/MCP-launched and ignores distance.
-        self._caricature_return_mode: str | None = None
-        # True only while sandfall was auto-entered from the clock; menu/web-
-        # launched sandfall keeps its idle-forever behavior.
-        self._sandfall_via_chain = False
+        # Stage of the auto gesture chain (clock -> sandfall -> caricature):
+        # the chain-entered mode this policy expects to be active, or None
+        # when the active mode is menu/MCP-launched and therefore exempt from
+        # the chain's presence/distance rules. The menu only parks the chain
+        # (closing it restores the previous mode); any other external mode
+        # change — including an explicit menu selection — ends it.
+        self._chain_stage: str | None = None
+        # True while the chain is parked because the menu is open on top of it.
+        self._chain_parked_in_menu = False
         # Hold timers (time.monotonic) smoothing the noisy distance estimate
-        # on the caricature enter/exit edges.
+        # on the caricature enter/exit edges. The enter hold pauses (rather
+        # than resets) across pose dropouts, which are common at very close
+        # range; ``_very_close_paused_at`` marks where the pause began.
         self._very_close_since: float | None = None
+        self._very_close_paused_at: float | None = None
         self._backing_away_since: float | None = None
+        # Last time a definite far reading extended the exit hold; a total
+        # dropout consults it to tell confirmed backing-away from one wild
+        # frame (see CARICATURE_EXIT_CONFIRM_SECONDS).
+        self._backing_away_last_definite: float | None = None
+        # Start of the current untrusted arms-crossed streak (facing gate
+        # down while the gesture reads crossed); bounds how long a menu
+        # dwell may be held across untrusted frames.
+        self._menu_gesture_untrusted_since: float | None = None
 
     @staticmethod
     def _worldcup_event_key(event: dict[str, Any]) -> Any:
@@ -242,35 +278,122 @@ class TransitionPolicy:
         """Whether the viewer is inside the caricature enter threshold."""
         return distance is not None and distance < self.CARICATURE_ENTER_DISTANCE
 
-    def _sustained_very_close(self, eyes_visible: bool, distance: float | None) -> bool:
+    def _sustained_very_close(
+        self, person_present: bool, eyes_visible: bool, distance: float | None
+    ) -> bool:
         """Whether the viewer has stayed very close, facing the camera, long enough.
 
         The raw distance estimate produces wild single-frame readings while the
         viewer is turned away, so caricature entry requires the facing gate plus
-        an uninterrupted ``CARICATURE_ENTER_HOLD_SECONDS`` hold.
+        an uninterrupted ``CARICATURE_ENTER_HOLD_SECONDS`` hold. Pose dropouts
+        (no landmarks at all — common at very close range where the body leaves
+        the frame) pause the hold rather than reset it; only a viewer who is
+        demonstrably present but far or turned away resets it.
         """
-        if eyes_visible and self._is_very_close(distance):
-            now_mono = time.monotonic()
+        now_mono = time.monotonic()
+        if person_present and eyes_visible and self._is_very_close(distance):
             if self._very_close_since is None:
                 self._very_close_since = now_mono
+            elif self._very_close_paused_at is not None:
+                # Resume: absent time does not count toward the hold.
+                self._very_close_since += now_mono - self._very_close_paused_at
+            self._very_close_paused_at = None
             return now_mono - self._very_close_since >= self.CARICATURE_ENTER_HOLD_SECONDS
+        if not person_present:
+            if self._very_close_since is not None and self._very_close_paused_at is None:
+                self._very_close_paused_at = now_mono
+            return False
         self._very_close_since = None
+        self._very_close_paused_at = None
         return False
 
-    def _enter_auto_caricature(self, mode_manager: ModeManager, return_mode: str) -> None:
-        """Switch to caricature, remembering the chain mode to return to."""
-        self._caricature_return_mode = return_mode
+    def _reset_hold_timers(self) -> None:
+        """Clear the caricature enter/exit hold timers."""
         self._very_close_since = None
+        self._very_close_paused_at = None
         self._backing_away_since = None
+        self._backing_away_last_definite = None
+
+    def _set_chain_stage(self, stage: str | None) -> None:
+        """Move the gesture chain to ``stage`` (None ends it) and clear its hold timers."""
+        self._chain_stage = stage
+        self._chain_parked_in_menu = False
+        self._reset_hold_timers()
+
+    def _end_chain(self) -> None:
+        """Forget the gesture chain and its hold timers."""
+        self._set_chain_stage(None)
+
+    def _enter_auto_caricature(self, mode_manager: ModeManager) -> None:
+        """Hand the chain from sandfall to caricature."""
+        self._set_chain_stage(ModeManager.MODE_CARICATURE)
         mode_manager.set_mode(ModeManager.MODE_CARICATURE)
 
-    def _submit_face_mesh(self, frame: Frame) -> Any:
-        """Submit ``frame`` for face-mesh inference (throttled) and return the latest results."""
+    def _fill_facing_and_distance(self, state: TransitionState, pose_results: Any) -> None:
+        """Fill the frame's facing/angle/distance readings from pose landmarks."""
+        state.eyes_visible, state.reason, state.angle = human_pose.eyes_visible_and_facing_camera(
+            pose_results
+        )
+        state.estimated_distance, _ = human_pose.estimate_distance(pose_results)
+
+    def _update_presence_state(
+        self, state: TransitionState, frame: Frame, pose_results: Any
+    ) -> None:
+        """Fill facing/distance state and, when close enough, face-mesh results."""
+        self._fill_facing_and_distance(state, pose_results)
+        if human_pose.should_draw_face_features(state.estimated_distance):
+            state.face_mesh_results = self._submit_face_mesh(frame)
+        else:
+            self._cached_face_mesh_results = None
+
+    def _update_exit_hold(self, state: TransitionState, face_present: bool) -> None:
+        """Advance the chain caricature's backing-away exit hold.
+
+        Sets ``state.caricature_exit_progress`` while the hold runs (1.0 means
+        the hold is complete). A definite close reading cancels the hold, and
+        so does a dropped distance estimate while the face mesh still tracks a
+        face — pose distance routinely drops at very close range, where a
+        tracked face proves the viewer has not left. A distance dropout with
+        no tracked face (the viewer turned and walked off) keeps the hold
+        running so a fast walk-away still hands off — but only when at least
+        ``CARICATURE_EXIT_CONFIRM_SECONDS`` of definite far readings preceded
+        the dropout; one wild far frame followed by a close-range dropout is
+        noise, not a departure.
+        """
         now_mono = time.monotonic()
-        if (
-            self.face_mesh_submit_interval == 0.0
-            or now_mono - self._last_face_mesh_submit >= self.face_mesh_submit_interval
+        distance = state.estimated_distance
+        if distance is not None:
+            if distance > self.CARICATURE_EXIT_DISTANCE:
+                if self._backing_away_since is None:
+                    self._backing_away_since = now_mono
+                self._backing_away_last_definite = now_mono
+            else:
+                self._backing_away_since = None
+        elif face_present:
+            self._backing_away_since = None
+        elif self._backing_away_since is not None and (
+            self._backing_away_last_definite is None
+            or self._backing_away_last_definite - self._backing_away_since
+            < self.CARICATURE_EXIT_CONFIRM_SECONDS
         ):
+            self._backing_away_since = None
+        if self._backing_away_since is not None:
+            # Lets the caricature shrink back onto the viewer's head while
+            # the exit hold runs down.
+            state.caricature_exit_progress = min(
+                1.0, (now_mono - self._backing_away_since) / self.CARICATURE_EXIT_HOLD_SECONDS
+            )
+
+    def _submit_face_mesh(self, frame: Frame, interval: float | None = None) -> Any:
+        """Submit ``frame`` for face-mesh inference (throttled) and return the latest results.
+
+        ``interval`` overrides the default submit throttle (used to slow-poll
+        an abandoned manual caricature).
+        """
+        if interval is None:
+            interval = self.face_mesh_submit_interval
+        now_mono = time.monotonic()
+        if interval == 0.0 or now_mono - self._last_face_mesh_submit >= interval:
             self._cached_face_mesh_results = human_pose.get_face_mesh(frame)
             self._last_face_mesh_submit = now_mono
         return self._cached_face_mesh_results
@@ -307,30 +430,37 @@ class TransitionPolicy:
             mode_manager.set_mode(ModeManager.MODE_CLOCK)
             current_mode = mode_manager.mode
 
-        # Any external mode change (menu, MCP, web, worldcup, sleep) ends the
-        # gesture chain: the caricature return mode is only meaningful while in
-        # caricature, and the sandfall chain flag only while in sandfall or the
-        # caricature it handed off to.
-        if current_mode != ModeManager.MODE_CARICATURE:
-            self._caricature_return_mode = None
-            self._backing_away_since = None
-        if current_mode not in (ModeManager.MODE_SANDFALL, ModeManager.MODE_CARICATURE):
-            self._sandfall_via_chain = False
-        if current_mode != ModeManager.MODE_SANDFALL:
-            self._very_close_since = None
+        # The chain owns the mode it last set. Any external change (MCP, web,
+        # worldcup, sleep, a menu selection of a different mode) ends it; the
+        # menu itself only parks the chain, since closing the menu restores
+        # the previous mode and the chain then resumes. Leaving the menu into
+        # the chain mode *without* a restore means the user explicitly
+        # selected it — a manual launch, which also ends the chain.
+        if self._chain_stage is not None:
+            if current_mode == ModeManager.MODE_MENU:
+                self._chain_parked_in_menu = True
+            elif current_mode != self._chain_stage:
+                self._end_chain()
+            elif self._chain_parked_in_menu and not mode_manager.consume_menu_restore():
+                self._end_chain()
+            else:
+                self._chain_parked_in_menu = False
+        if current_mode != self._chain_stage:
+            # Hold timers only run while actually observing the chain mode.
+            self._reset_hold_timers()
 
         # The menu's POSE toggle governs the whole auto gesture chain: turning
         # it off ends any chain-entered mode immediately (menu/MCP-launched
         # sandfall and caricature are unaffected).
-        if not mode_manager.pose_enabled and (
-            self._sandfall_via_chain or self._caricature_return_mode is not None
-        ):
-            self._sandfall_via_chain = False
-            self._caricature_return_mode = None
-            self._backing_away_since = None
-            self._very_close_since = None
-            mode_manager.set_mode(ModeManager.MODE_CLOCK)
-            current_mode = mode_manager.mode
+        if not mode_manager.pose_enabled and self._chain_stage is not None:
+            self._end_chain()
+            if current_mode != ModeManager.MODE_MENU:
+                mode_manager.set_mode(ModeManager.MODE_CLOCK)
+                current_mode = mode_manager.mode
+            else:
+                # The chain mode the menu parked over is dead; closing the
+                # menu must not resurrect it as an unowned manual mode.
+                mode_manager.retarget_menu_restore(ModeManager.MODE_CLOCK)
 
         # Prioritize live World Cup information when idle on clock mode, unless
         # the user manually selected clock and no new match has gone live since.
@@ -360,6 +490,12 @@ class TransitionPolicy:
                 mode_manager.set_mode(ModeManager.MODE_CLOCK)
             return state
 
+        # Each branch decides whether the arms-crossed menu gesture is trusted
+        # this frame; the shared handler runs once after the branch chain.
+        # Presence modes require the facing gate because is_arms_crossed
+        # misfires on a viewer who is turned away.
+        menu_gesture_allowed = False
+
         if current_mode in (
             ModeManager.MODE_MENU,
             ModeManager.MODE_PAINT,
@@ -373,68 +509,73 @@ class TransitionPolicy:
             ModeManager.MODE_FONT_PREVIEW,
             ModeManager.MODE_LIFE,
         ):
-            if human_pose.is_arms_crossed(pose_results):
-                mode_manager.click_menu(entered_via=ModeManager.CONTROL_GESTURE)
-            else:
-                mode_manager.reset_menu_click()
+            menu_gesture_allowed = True
 
         elif current_mode == ModeManager.MODE_CARICATURE:
             # The live caricature always wants face-mesh landmarks (no distance
-            # gate); the mode itself is a pure renderer over the results.
-            state.face_mesh_results = self._submit_face_mesh(frame)
+            # gate); the mode itself is a pure renderer over the results. A
+            # manual caricature abandoned past the no-face timeout drops to a
+            # slow face-mesh poll, so an empty scene does not run the
+            # landmarker at full rate forever while a returning face (even
+            # one pose misses) is still noticed within the poll interval.
+            person_present = bool(pose_results and pose_results.pose_landmarks)
+            abandoned_manual = (
+                self._chain_stage != ModeManager.MODE_CARICATURE
+                and not person_present
+                and mode_manager.get_time_since_last_mode_update() > self.CARICATURE_NO_FACE_TIMEOUT
+            )
+            state.face_mesh_results = self._submit_face_mesh(
+                frame,
+                interval=self.ABANDONED_FACE_MESH_INTERVAL if abandoned_manual else None,
+            )
             face_present = bool(
                 state.face_mesh_results is not None
                 and getattr(state.face_mesh_results, "multi_face_landmarks", None)
             )
-            state.estimated_distance, _ = human_pose.estimate_distance(pose_results)
-            backing_away = (
-                state.estimated_distance is not None
-                and state.estimated_distance > self.CARICATURE_EXIT_DISTANCE
-            )
-            now_mono = time.monotonic()
-            if self._caricature_return_mode is not None and backing_away:
-                if self._backing_away_since is None:
-                    self._backing_away_since = now_mono
-                # Lets the caricature shrink back onto the viewer's head
-                # while the exit hold runs down.
-                state.caricature_exit_progress = min(
-                    1.0, (now_mono - self._backing_away_since) / self.CARICATURE_EXIT_HOLD_SECONDS
-                )
-            else:
-                self._backing_away_since = None
+            self._fill_facing_and_distance(state, pose_results)
+            # A tracked face is as strong a facing signal as the pose gate —
+            # and more reliable at caricature range, where pose landmarks
+            # routinely drop out; without it a very close viewer could be
+            # unable to open the menu at all.
+            menu_gesture_allowed = state.eyes_visible or face_present
 
-            if (
-                self._caricature_return_mode is not None
-                and self._backing_away_since is not None
-                and now_mono - self._backing_away_since >= self.CARICATURE_EXIT_HOLD_SECONDS
-            ):
-                # Auto-entered from the gesture chain: sustained backing past
-                # the hysteresis exit returns to the mode we came from.
-                return_mode = self._caricature_return_mode
-                self._caricature_return_mode = None
-                self._backing_away_since = None
-                mode_manager.set_mode(return_mode)
-            elif face_present:
+            if face_present:
                 # Keepalive: refreshes mode_update_time without resetting the mode.
                 mode_manager.set_mode(ModeManager.MODE_CARICATURE)
-            elif mode_manager.get_time_since_last_mode_update() > self.CARICATURE_NO_FACE_TIMEOUT:
-                self._caricature_return_mode = None
+
+            if self._chain_stage == ModeManager.MODE_CARICATURE:
+                # Chain-entered only: menu/MCP-launched caricature is exempt
+                # from presence rules and idles on the invite face instead.
+                self._update_exit_hold(state, face_present)
+                if (
+                    state.caricature_exit_progress is not None
+                    and state.caricature_exit_progress >= 1.0
+                ):
+                    # Sustained backing past the hysteresis exit hands the
+                    # chain back to sandfall.
+                    self._set_chain_stage(ModeManager.MODE_SANDFALL)
+                    mode_manager.set_mode(ModeManager.MODE_SANDFALL)
+                elif (
+                    not face_present
+                    and mode_manager.get_time_since_last_mode_update()
+                    > self.CARICATURE_NO_FACE_TIMEOUT
+                ):
+                    self._end_chain()
+                    mode_manager.set_mode(ModeManager.MODE_CLOCK)
+            elif (
+                not person_present
+                and not face_present
+                and mode_manager.get_time_since_last_mode_update()
+                > self.MANUAL_CARICATURE_ABANDON_TIMEOUT
+            ):
+                # A manual caricature is presence-exempt while anyone might
+                # engage, but a scene empty for minutes was abandoned: return
+                # to clock instead of running pose at full rate forever.
                 mode_manager.set_mode(ModeManager.MODE_CLOCK)
 
-            if human_pose.is_arms_crossed(pose_results):
-                mode_manager.click_menu(entered_via=ModeManager.CONTROL_GESTURE)
-            else:
-                mode_manager.reset_menu_click()
-
         elif current_mode == ModeManager.MODE_POSE:
-            state.eyes_visible, state.reason, state.angle = (
-                human_pose.eyes_visible_and_facing_camera(pose_results)
-            )
-            state.estimated_distance, _ = human_pose.estimate_distance(pose_results)
-            if human_pose.should_draw_face_features(state.estimated_distance):
-                state.face_mesh_results = self._submit_face_mesh(frame)
-            else:
-                self._cached_face_mesh_results = None
+            self._update_presence_state(state, frame, pose_results)
+            menu_gesture_allowed = state.eyes_visible
 
             if pose_results and pose_results.pose_landmarks:
                 # Keepalive: refreshes mode_update_time without resetting the mode.
@@ -442,46 +583,33 @@ class TransitionPolicy:
             elif mode_manager.get_time_since_last_mode_update() > self.pose_timeout:
                 mode_manager.set_mode(ModeManager.MODE_CLOCK)
 
-            if human_pose.is_arms_crossed(pose_results) and state.eyes_visible:
-                mode_manager.click_menu(entered_via=ModeManager.CONTROL_GESTURE)
-            else:
-                mode_manager.reset_menu_click()
-
         elif current_mode == ModeManager.MODE_SANDFALL:
-            state.eyes_visible, state.reason, state.angle = (
-                human_pose.eyes_visible_and_facing_camera(pose_results)
-            )
-            state.estimated_distance, _ = human_pose.estimate_distance(pose_results)
             # Face mesh feeds the eyes/mouth overlay on the silhouette.
-            if human_pose.should_draw_face_features(state.estimated_distance):
-                state.face_mesh_results = self._submit_face_mesh(frame)
-            else:
-                self._cached_face_mesh_results = None
-            if self._sandfall_via_chain:
+            self._update_presence_state(state, frame, pose_results)
+            menu_gesture_allowed = state.eyes_visible
+
+            if self._chain_stage == ModeManager.MODE_SANDFALL:
                 # Chain-entered sandfall mirrors pose mode's presence rules;
-                # menu/web-launched sandfall idles indefinitely.
+                # menu/web-launched sandfall idles indefinitely. The hold is
+                # evaluated every frame; a pose dropout pauses it (the chain's
+                # own timeout below bounds how long a pause can last).
                 person_present = bool(pose_results and pose_results.pose_landmarks)
-                if person_present and self._sustained_very_close(
-                    state.eyes_visible, state.estimated_distance
+                if self._sustained_very_close(
+                    person_present, state.eyes_visible, state.estimated_distance
                 ):
-                    self._enter_auto_caricature(mode_manager, ModeManager.MODE_SANDFALL)
+                    self._enter_auto_caricature(mode_manager)
                 elif person_present:
                     mode_manager.set_mode(ModeManager.MODE_SANDFALL)
                 elif mode_manager.get_time_since_last_mode_update() > self.pose_timeout:
+                    self._end_chain()
                     mode_manager.set_mode(ModeManager.MODE_CLOCK)
-
-            if human_pose.is_arms_crossed(pose_results):
-                mode_manager.click_menu(entered_via=ModeManager.CONTROL_GESTURE)
-            else:
-                mode_manager.reset_menu_click()
 
         else:
             # Clock and fallback modes.
+            menu_gesture_allowed = not mode_manager.pose_enabled
             if mode_manager.pose_enabled:
-                state.eyes_visible, state.reason, state.angle = (
-                    human_pose.eyes_visible_and_facing_camera(pose_results)
-                )
-                state.estimated_distance, _ = human_pose.estimate_distance(pose_results)
+                self._fill_facing_and_distance(state, pose_results)
+                menu_gesture_allowed = state.eyes_visible
                 if (
                     pose_results
                     and pose_results.pose_landmarks
@@ -489,20 +617,31 @@ class TransitionPolicy:
                     and state.estimated_distance is not None
                     and state.estimated_distance < self.pose_distance_threshold
                 ):
-                    if mode_manager.mode not in (
-                        ModeManager.MODE_MENU,
-                        ModeManager.MODE_PAINT,
-                        ModeManager.MODE_CARICATURE,
-                    ):
-                        self._sandfall_via_chain = True
+                    if mode_manager.mode in self.CHAIN_PREEMPTIBLE_MODES:
+                        self._set_chain_stage(ModeManager.MODE_SANDFALL)
                         mode_manager.set_mode(ModeManager.MODE_SANDFALL)
 
-            if human_pose.is_arms_crossed(pose_results) and (
-                state.eyes_visible or not mode_manager.pose_enabled
-            ):
+        if human_pose.is_arms_crossed(pose_results):
+            if menu_gesture_allowed:
+                self._menu_gesture_untrusted_since = None
                 mode_manager.click_menu(entered_via=ModeManager.CONTROL_GESTURE)
             else:
-                mode_manager.reset_menu_click()
+                # A brief untrusted flicker (e.g. the facing check dropping
+                # mid-dwell) holds an in-progress dwell, but only within the
+                # grace window: click_menu credits raw wall-clock time, so an
+                # unbounded hold would let a long turned-away misfire streak
+                # complete the dwell on the first trusted frame.
+                now_mono = time.monotonic()
+                if self._menu_gesture_untrusted_since is None:
+                    self._menu_gesture_untrusted_since = now_mono
+                elif (
+                    now_mono - self._menu_gesture_untrusted_since
+                    > self.MENU_GESTURE_UNTRUST_GRACE_SECONDS
+                ):
+                    mode_manager.reset_menu_click()
+        else:
+            self._menu_gesture_untrusted_since = None
+            mode_manager.reset_menu_click()
 
         if current_mode == ModeManager.MODE_PAINT and mode_manager.mode != ModeManager.MODE_PAINT:
             paint_mode.clear()

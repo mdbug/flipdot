@@ -9,7 +9,9 @@ The segmenter initializes lazily on first use: importing this module never
 imports mediapipe, so it stays cheap and import-safe on machines without it.
 When mediapipe or the model file (``selfie_multiclass_256x256.tflite``) is
 unavailable the service logs one warning, permanently disables itself, and
-returns None — the caricature then simply renders without hair.
+returns None — the caricature then simply renders without hair. Transient
+per-frame inference errors are logged and survived; only a persistent run of
+consecutive failures (a genuinely wedged model) disables the service.
 """
 
 from __future__ import annotations
@@ -30,6 +32,13 @@ HAIR_SEGMENT_MAX_FPS = float(os.getenv("HAIR_SEGMENT_MAX_FPS", "7"))
 _HAIR_CLASS_INDEX = 1  # selfie_multiclass classes: 0=bg, 1=hair, 2=body, 3=face, 4=clothes
 _MODEL_INPUT_SIZE = 256
 _MODEL_FILENAME = "selfie_multiclass_256x256.tflite"
+# A single bad frame must not kill hair for the process lifetime; only this
+# many consecutive inference failures count as a wedged model.
+_MAX_CONSECUTIVE_FAILURES = 10
+# An intermittently failing segmenter (never 10 in a row) must not flood the
+# log at the worker rate: per-frame failures are aggregated into one warning
+# per interval.
+_FAILURE_WARN_INTERVAL_SEC = 30.0
 
 # Model directory resolution mirrors app.services.human_pose (not imported here:
 # importing it would trigger its import-time pose-model initialization).
@@ -54,9 +63,14 @@ _segmenter: Any = None
 _bg_lock = threading.Lock()
 _bg_frame: list[np.ndarray | None] = [None]
 _bg_result: list[np.ndarray | None] = [None]
+_bg_result_time: list[float] = [0.0]
 _bg_event = threading.Event()
 
 _submit_interval = 0.0 if HAIR_SEGMENT_MAX_FPS <= 0 else 1.0 / HAIR_SEGMENT_MAX_FPS
+# Results older than this are stale (previous viewer/session) and not served.
+# Scaled to the configured cadence so a slow (sub-1-Hz) HAIR_SEGMENT_MAX_FPS
+# does not expire every healthy result between submissions.
+_RESULT_MAX_AGE_SEC = max(1.0, 2.0 * _submit_interval)
 _last_submit = 0.0
 
 
@@ -78,6 +92,9 @@ def _disable(reason: str) -> None:
 def _hair_bg_worker() -> None:
     """Background thread: segment the latest submitted frame without blocking the loop."""
     ts = 0
+    consecutive_failures = 0
+    failures_since_warn = 0
+    last_failure_warn: float | None = None
     import mediapipe as mp  # resolved by _ensure_started before the thread launches
 
     while True:
@@ -97,11 +114,32 @@ def _hair_bg_worker() -> None:
             ts = max(ts + 1, int(time.monotonic() * 1000))
             result = _segmenter.segment_for_video(mp_image, ts)
             mask = result.category_mask.numpy_view() == _HAIR_CLASS_INDEX
-        except Exception as err:  # a wedged model must never crash the loop
-            _disable(f"segmentation failed: {err}")
-            return
+        except Exception as err:
+            # One malformed frame must not kill hair for the process
+            # lifetime; only a persistent run of failures (a wedged model)
+            # disables the service.
+            consecutive_failures += 1
+            if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                _disable(f"segmentation failed {consecutive_failures}x consecutively: {err}")
+                return
+            failures_since_warn += 1
+            now_mono = time.monotonic()
+            if last_failure_warn is None or now_mono - last_failure_warn >= (
+                _FAILURE_WARN_INTERVAL_SEC
+            ):
+                logger.warning(
+                    "Hair segmentation failed on %d frame(s) since the last warning (%s);"
+                    " continuing",
+                    failures_since_warn,
+                    err,
+                )
+                last_failure_warn = now_mono
+                failures_since_warn = 0
+            continue
+        consecutive_failures = 0
         with _bg_lock:
             _bg_result[0] = mask
+            _bg_result_time[0] = time.monotonic()
 
 
 def _ensure_started() -> bool:
@@ -141,8 +179,10 @@ def get_hair_mask(frame: np.ndarray | None) -> np.ndarray | None:
     """Submit ``frame`` for hair segmentation (throttled) and return the latest mask.
 
     Returns a ``(256, 256)`` boolean mask in the raw (unmirrored) camera raster
-    orientation, or None until the first result arrives or when the service is
-    disabled. Safe to call every rendered frame.
+    orientation, or None until the first result arrives, when the latest result
+    is stale (older than ``_RESULT_MAX_AGE_SEC`` — e.g. from a previous
+    caricature session), or when the service is disabled. Safe to call every
+    rendered frame.
     """
     global _last_submit
     if frame is None or not _ensure_started():
@@ -154,4 +194,6 @@ def get_hair_mask(frame: np.ndarray | None) -> np.ndarray | None:
             _bg_frame[0] = frame
         _bg_event.set()
     with _bg_lock:
+        if now_mono - _bg_result_time[0] > _RESULT_MAX_AGE_SEC:
+            return None
         return _bg_result[0]
