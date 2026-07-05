@@ -50,6 +50,12 @@ PRICING: dict[str, dict[str, float]] = {
 SONNET_5_INTRO_PRICING = {"input": 2.0, "output": 10.0, "cache_write": 2.5, "cache_read": 0.2}
 SONNET_5_INTRO_END = date(2026, 8, 31)
 
+# 5-minute-TTL prompt cache marker. Two breakpoints per request: one on the
+# system prompt (caching the tool schemas + system prefix) and a moving one on
+# the last message, so each turn of the tool loop re-reads the whole history at
+# the 0.1x cache-read rate instead of full input price.
+CACHE_CONTROL = {"type": "ephemeral"}
+
 SYSTEM_PROMPT = (
     "You control a 28x28 monochrome flip-dot display through "
     "the provided tools. Pixels are either lit or dark — there is no colour or "
@@ -229,6 +235,26 @@ def _usage_dict(model: str | None, tokens: dict[str, int]) -> dict[str, Any]:
     }
 
 
+def _messages_with_cache_breakpoint(messages: list[dict]) -> list[dict]:
+    """Return the history with a cache breakpoint on the final content block.
+
+    The persisted ``messages`` list is left untouched — the UI and session store
+    rely on user turns keeping plain-string content — so only shallow copies of
+    the last message and its final block carry the marker.
+    """
+    if not messages:
+        return messages
+    last = messages[-1]
+    content = last.get("content")
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content, "cache_control": CACHE_CONTROL}]
+    elif isinstance(content, list) and content and isinstance(content[-1], dict):
+        content = content[:-1] + [{**content[-1], "cache_control": CACHE_CONTROL}]
+    else:
+        return messages
+    return messages[:-1] + [{**last, "content": content}]
+
+
 def _fallback_served_by(final: Any) -> str | None:
     """Return the model that took over if a server-side fallback fired this turn.
 
@@ -297,14 +323,14 @@ async def run_chat(
         model = DEFAULT_MODEL
     tools = await _mcp_tool_schemas(mcp)
 
-    # ``messages`` is mutated in place each turn; the stream reads the live list.
+    # ``messages`` is mutated in place each turn; a per-call copy with the moving
+    # cache breakpoint is set as stream_kwargs["messages"] inside the loop.
     stream_kwargs: dict[str, Any] = {
         "model": model,
         "max_tokens": MAX_TOKENS,
-        "system": SYSTEM_PROMPT,
+        "system": [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": CACHE_CONTROL}],
         "thinking": {"type": "adaptive", "display": "summarized"},
         "tools": tools,
-        "messages": messages,
     }
     if model in FALLBACK_ENABLED_MODELS:
         # Opt into server-side refusal fallbacks (requires the beta endpoint).
@@ -322,6 +348,7 @@ async def run_chat(
 
     try:
         while True:
+            stream_kwargs["messages"] = _messages_with_cache_breakpoint(messages)
             async with stream_factory(**stream_kwargs) as stream:
                 async for event in stream:
                     if event.type != "content_block_delta":

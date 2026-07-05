@@ -192,8 +192,10 @@ class _FakeMessages:
     def __init__(self, script):
         self._script = script
         self._turn = 0
+        self.calls = []
 
     def stream(self, **kwargs):
+        self.calls.append(kwargs)
         turn = self._script[self._turn]
         self._turn += 1
         return _FakeStream(turn["texts"], turn["final"], turn.get("thoughts"))
@@ -262,6 +264,76 @@ def test_run_chat_full_loop_executes_tool(monkeypatch):
     assert board.text_objects[-1]["text"] == "HELLO"
     # History captured the assistant turn, the tool result, and the final turn.
     assert any(m["role"] == "user" and isinstance(m["content"], list) for m in messages)
+
+
+def test_messages_with_cache_breakpoint_wraps_string_content():
+    messages = [{"role": "user", "content": "hi"}]
+    marked = chat_backend._messages_with_cache_breakpoint(messages)
+
+    assert marked[-1]["content"] == [
+        {"type": "text", "text": "hi", "cache_control": chat_backend.CACHE_CONTROL}
+    ]
+    # The persisted history is untouched: user turns keep plain-string content.
+    assert messages[-1]["content"] == "hi"
+
+
+def test_messages_with_cache_breakpoint_marks_last_tool_result():
+    result_a = {"type": "tool_result", "tool_use_id": "a", "content": "one"}
+    result_b = {"type": "tool_result", "tool_use_id": "b", "content": "two"}
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "user", "content": [result_a, result_b]},
+    ]
+    marked = chat_backend._messages_with_cache_breakpoint(messages)
+
+    blocks = marked[-1]["content"]
+    assert "cache_control" not in blocks[0]
+    assert blocks[1]["cache_control"] == chat_backend.CACHE_CONTROL
+    # The original block dicts were not mutated.
+    assert "cache_control" not in result_a and "cache_control" not in result_b
+
+
+def test_run_chat_requests_carry_cache_breakpoints(monkeypatch):
+    mcp = _build_mcp(mode_manager=DummyModeManager(), board=DummyBoard())
+    script = [
+        {
+            "texts": [""],
+            "final": _FakeFinal(
+                content=[
+                    _FakeBlock("tool_use", name="show_message", input={"text": "HI"}, id="toolu_1")
+                ],
+                stop_reason="tool_use",
+            ),
+        },
+        {
+            "texts": ["Done!"],
+            "final": _FakeFinal(content=[_FakeBlock("text", text="Done!")], stop_reason="end_turn"),
+        },
+    ]
+    client = _FakeClient(script)
+    monkeypatch.setattr(chat_backend, "get_async_client", lambda: client)
+
+    messages = [{"role": "user", "content": "show hi"}]
+
+    async def collect():
+        return [json.loads(line) async for line in chat_backend.run_chat(mcp, messages)]
+
+    asyncio.run(collect())
+
+    assert len(client.messages.calls) == 2
+    for call in client.messages.calls:
+        # System prompt breakpoint caches the tools + system prefix.
+        assert call["system"][0]["cache_control"] == chat_backend.CACHE_CONTROL
+        # Moving breakpoint sits on the final block of the final message.
+        assert call["messages"][-1]["content"][-1]["cache_control"] == chat_backend.CACHE_CONTROL
+    # The persisted history gained no cache markers and kept the user string.
+    assert messages[0]["content"] == "show hi"
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    assert "cache_control" not in block
 
 
 def test_run_chat_surfaces_refusal(monkeypatch):
