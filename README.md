@@ -2,7 +2,9 @@
 
 An interactive art installation on a **28×28 flip-dot display** — four stacked AlfaZeta XY5 28×7 modules driven by an NVIDIA Jetson Orin Nano. A webcam feeds MediaPipe pose and face-mesh detection, and the display reacts to whoever walks by: your silhouette becomes a falling-sand toy, walk up close and it draws a live line-art caricature of your face, cross your arms and a menu opens that you operate by hovering your finger. The panel can also be driven by Bluetooth game controllers, a browser console, and AI agents (an in-UI Claude/GPT chat or any external MCP client).
 
-<!-- TODO: photo/GIF of the installation in action -->
+<!-- TODO: photo/GIF of the physical installation -->
+
+![Web console mirroring the live panel — showing a sailboat the AI chat just drew](docs/screenshots/console.png)
 
 ## Modes
 
@@ -76,6 +78,14 @@ With `ENABLE_WEB_UI=true`, a FastAPI server mirrors the live frame to browsers o
 - `/scripts` — write, run, and save sandboxed Python animations
 - `/font-grid` — bitmap font browser
 - `/controller-metrics` — live BLE link quality/RSSI for connected gamepads
+
+![AI chat drawing a sailboat on the display with GLM-5.2](docs/screenshots/chat.png)
+
+The screenshots above are the chat asking for "a sailboat on the waves" and the resulting frame on the panel — the model iterates with its tools (`draw_stroke`, `get_display`, `run_script`) until the drawing looks right, and saves the result as a reusable script.
+
+![Script browser with a saved animation's source](docs/screenshots/scripts.png)
+
+![Bitmap font browser comparing glyph variants](docs/screenshots/font-grid.png)
 
 The same tool set (`get_display` as ASCII art, `set_mode`, board drawing, `run_script`, …) is exposed over **MCP** at `/mcp` for external AI agents. The endpoint stays disabled until `MCP_AUTH_TOKEN` is set, and is bearer-token-gated with DNS-rebinding protection.
 
