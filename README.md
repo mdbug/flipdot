@@ -105,7 +105,7 @@ The same tool set (`get_display` as ASCII art, `set_mode`, board drawing, `run_s
 
 ## Configuration
 
-All configuration is via `.env` (loaded with `python-dotenv`). Everything is optional; the display runs with no `.env` at all.
+All configuration is via `.env` (loaded with `python-dotenv`) — see [.env.example](.env.example) for the annotated full list. Everything is optional; the display runs with no `.env` at all.
 
 | Variable | Purpose |
 | --- | --- |

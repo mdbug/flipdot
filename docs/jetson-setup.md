@@ -102,7 +102,7 @@ WEATHER_CITY=Berlin
 WEATHER_COUNTRY_CODE=DE
 ```
 
-The full list of variables is in [AGENTS.md](../AGENTS.md) ("Hardware & environment").
+The annotated full list of variables is in [.env.example](../.env.example) at the repo root.
 
 ## 6. Bluetooth & controllers
 
