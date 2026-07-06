@@ -2,11 +2,9 @@
 
 An interactive art installation on a **28×28 flip-dot display** — four stacked AlfaZeta XY5 28×7 modules driven by an NVIDIA Jetson Orin Nano. A webcam feeds MediaPipe pose and face-mesh detection, and the display reacts to whoever walks by: your silhouette becomes a falling-sand toy, walk up close and it draws a live line-art caricature of your face, cross your arms and a menu opens that you operate by hovering your finger. The panel can also be driven by Bluetooth game controllers, a browser console, and AI agents (an in-UI Claude/GPT chat or any external MCP client).
 
-<!-- TODO: photo/GIF of the physical installation -->
+<img src="docs/images/sandfall-caricature.gif" width="300" alt="The installation reacting to a viewer: sand falls around their silhouette, then morphs into a line-art caricature of their face">
 
-![Web console mirroring the live panel — playing a spiral animation the AI chat wrote](docs/screenshots/console.gif)
-
-*The web console mirroring the panel live — running a "swirl" animation the in-UI AI chat wrote and saved seconds earlier.*
+*The installation reacting to a viewer walking up: their silhouette collects falling sand, then the display morphs into a live caricature of their face.*
 
 ## Modes
 
@@ -88,7 +86,9 @@ With `ENABLE_WEB_UI=true`, a FastAPI server mirrors the live frame to browsers o
 
 ![AI chat creating a spiral animation with Claude Fable 5](docs/screenshots/chat.png)
 
-That conversation produced the animation in the GIF at the top of this page: asked for a mesmerizing looping animation of its own choosing, Claude Fable 5 wrote a sandboxed Python frame generator with `run_script`, looked at the result with `get_display`, refined it twice, and saved the final double-arm spiral as a reusable `swirl` script.
+![Web console mirroring the live panel — playing the spiral animation the AI chat wrote](docs/screenshots/console.gif)
+
+The GIF shows the web console mirroring the panel live, running what that conversation produced: asked for a mesmerizing looping animation of its own choosing, Claude Fable 5 wrote a sandboxed Python frame generator with `run_script`, looked at the result with `get_display`, refined it twice, and saved the final double-arm spiral as a reusable `swirl` script.
 
 | | |
 | --- | --- |
