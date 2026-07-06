@@ -54,7 +54,10 @@ flipPyDot/           # vendored fork of the AlfaZeta flip-dot driver (git submod
 - **Display:** 4× AlfaZeta XY5 28×7 flip-dot modules, stacked vertically into a 28×28 panel; RS-485 serial at `/dev/ttyUSB0`, 57600 baud, driven by the vendored [flipPyDot](https://github.com/mdbug/flipPyDot) library through a background writer thread.
 - **Compute:** NVIDIA Jetson Orin Nano (JetPack R36, Python 3.10). Pose inference runs on the GPU via a [custom GPU-enabled MediaPipe wheel](https://github.com/mdbug/mediapipe-jetson-gpu) (~5× faster than CPU: 42 ms vs 208 ms per frame).
 - **Camera:** any V4L2 webcam at `/dev/video0`.
-- **Controllers (optional):** Bluetooth HID gamepads read via `evdev`; a systemd unit disables Bluetooth ERTM, which otherwise causes multi-second input freezes.
+- **Controllers (optional):** two [IINE GameBrick Mini retro controllers](https://iine.store/products/iine-gamebrick-mini-retro-controller) — credit-card-sized NES-style Bluetooth gamepads (D-pad + A/B) — read via `evdev`, one per player for the two-player games (pong, tank). Any Bluetooth HID gamepad works. A systemd unit disables Bluetooth ERTM, which otherwise causes multi-second input freezes, and the connection tuning in `CONTROLLER_*` env vars helps these low-power pads ride through signal fades.
+
+  <img src="docs/images/iine-gamebrick-mini.webp" width="320" alt="IINE GameBrick Mini retro controllers in Famicom and NES colorways">
+
 
 None of this is required for development — see below.
 
