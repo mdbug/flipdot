@@ -58,6 +58,8 @@ flipPyDot/           # vendored fork of the AlfaZeta flip-dot driver (git submod
 
   <img src="docs/images/iine-gamebrick-mini.webp" width="320" alt="IINE GameBrick Mini retro controllers in Famicom and NES colorways">
 
+- **Bluetooth:** a [TP-Link UB500 Plus](https://www.tp-link.com/de/home-networking/adapter/ub500-plus/) USB dongle with an external antenna. The Jetson's onboard Bluetooth module has too weak a signal for the low-power controllers across the room, causing constant dropouts — a udev rule ([ops/udev/99-flipdot-disable-onboard-bt.rules](ops/udev/99-flipdot-disable-onboard-bt.rules), installed by `deploy.sh`) disables the onboard radio so the dongle is the only adapter.
+
 
 None of this is required for development — see below.
 
