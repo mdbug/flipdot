@@ -5,10 +5,10 @@ from typing import Any
 import requests
 from dotenv import load_dotenv
 
-CITY = "Aachen"
-COUNTRY_CODE = "DE"
-
 load_dotenv()
+
+CITY = os.getenv("WEATHER_CITY", "Berlin")
+COUNTRY_CODE = os.getenv("WEATHER_COUNTRY_CODE", "DE")
 
 
 def get_weather_forecast(

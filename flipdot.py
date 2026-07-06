@@ -35,9 +35,11 @@ MODE_BLEND_SECONDS = 1.0
 SPIN_WAIT_MIN_FPS = 20
 SPIN_GUARD_SEC = 0.012
 PAINT_CLEAR_HOLD_SEC = 1.0
-PRIMARY_CONTROLLER_ADDRESS = os.getenv("PRIMARY_CONTROLLER_ADDRESS", "AA:BB:CC:DD:EE:02")
-PRIMARY_CONTROLLER_NAME = os.getenv("PRIMARY_CONTROLLER_NAME", "IINE_keyboard")
-SECONDARY_CONTROLLER_ADDRESS = os.getenv("SECONDARY_CONTROLLER_ADDRESS", "AA:BB:CC:DD:EE:03")
+# Controller Bluetooth addresses come from .env; with neither an address nor a
+# name hint configured, a ControllerHub matches no device and stays idle.
+PRIMARY_CONTROLLER_ADDRESS = os.getenv("PRIMARY_CONTROLLER_ADDRESS", "")
+PRIMARY_CONTROLLER_NAME = os.getenv("PRIMARY_CONTROLLER_NAME", "")
+SECONDARY_CONTROLLER_ADDRESS = os.getenv("SECONDARY_CONTROLLER_ADDRESS", "")
 # BLE connection params requested after each controller connects (see
 # ControllerHub). A longer supervision timeout lets weak controllers ride
 # through brief signal fades instead of dropping; set the timeout to 0 to

@@ -55,9 +55,12 @@ MODELS: dict[str, dict[str, Any]] = {
     "z-ai/glm-5.2": {"provider": PROVIDER_OPENROUTER, "label": "GLM-5.2"},
     "nvidia/nemotron-3-ultra-550b-a55b:free": {
         "provider": PROVIDER_OPENROUTER,
-         "label": "Nvidia Nemotron 3 Ultra (Free)"
+        "label": "Nvidia Nemotron 3 Ultra (Free)",
     },
-    "poolside/laguna-m.1:free": {"provider": PROVIDER_OPENROUTER, "label": "Poolside Laguna M.1 (Free)"},
+    "poolside/laguna-m.1:free": {
+        "provider": PROVIDER_OPENROUTER,
+        "label": "Poolside Laguna M.1 (Free)",
+    },
 }
 MAX_TOKENS = 32768
 

@@ -17,7 +17,6 @@ except Exception:  # pragma: no cover - optional dependency on some dev machines
 
 logger = logging.getLogger(__name__)
 
-TARGET_CONTROLLER_ADDRESS = "AA:BB:CC:DD:EE:01"
 _UNSET = object()
 _BATTERY_PERCENTAGE_HEX_WITH_DEC_RE = re.compile(
     r"Battery Percentage:\s*0x[0-9a-fA-F]+\s*\((\d{1,3})\)",
@@ -65,7 +64,7 @@ class ControllerHub:
     def __init__(
         self,
         *,
-        target_address: str = TARGET_CONTROLLER_ADDRESS,
+        target_address: str = "",
         target_name_hint: str | None = None,
         scan_interval_sec: float = 0.2,
         reconnect_delay_sec: float = 0.05,
