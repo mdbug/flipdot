@@ -4,7 +4,9 @@ An interactive art installation on a **28×28 flip-dot display** — four stacke
 
 <!-- TODO: photo/GIF of the physical installation -->
 
-![Web console mirroring the live panel — showing a sailboat the AI chat just drew](docs/screenshots/console.png)
+![Web console mirroring the live panel — playing a fish animation the AI chat wrote](docs/screenshots/console.gif)
+
+*The web console mirroring the panel live — running a fish animation the in-UI AI chat wrote and saved seconds earlier.*
 
 ## Modes
 
@@ -79,13 +81,18 @@ With `ENABLE_WEB_UI=true`, a FastAPI server mirrors the live frame to browsers o
 - `/font-grid` — bitmap font browser
 - `/controller-metrics` — live BLE link quality/RSSI for connected gamepads
 
-![AI chat drawing a sailboat on the display with GLM-5.2](docs/screenshots/chat.png)
+![AI chat creating a fish animation with GLM-5.2](docs/screenshots/chat.png)
 
-The screenshots above are the chat asking for "a sailboat on the waves" and the resulting frame on the panel — the model iterates with its tools (`draw_stroke`, `get_display`, `run_script`) until the drawing looks right, and saves the result as a reusable script.
+That conversation produced the animation in the GIF at the top of this page: asked for "fish swimming across the display, with bubbles rising", the model wrote a sandboxed Python frame generator with `run_script`, checked the result with `get_display`, and saved it as a reusable `fish_bubbles` script — one turn, about a cent.
 
-![Script browser with a saved animation's source](docs/screenshots/scripts.png)
-
-![Bitmap font browser comparing glyph variants](docs/screenshots/font-grid.png)
+| | |
+| --- | --- |
+| ![Board editor with a text object selected](docs/screenshots/board.png) | ![Console settings rail with sleep, person detection, and clock options](docs/screenshots/settings.png) |
+| *Board mode: movable text objects + freehand drawing* | *Settings rail: sleep window, person detection, clock face* |
+| ![Script browser with a saved animation's source](docs/screenshots/scripts.png) | ![Bitmap font browser comparing glyph variants](docs/screenshots/font-grid.png) |
+| *Script browser with saved animations* | *Bitmap font grid comparing glyph variants* |
+| ![Controller metrics diagnostics page](docs/screenshots/metrics.png) | |
+| *BLE controller link diagnostics* | |
 
 The same tool set (`get_display` as ASCII art, `set_mode`, board drawing, `run_script`, …) is exposed over **MCP** at `/mcp` for external AI agents. The endpoint stays disabled until `MCP_AUTH_TOKEN` is set, and is bearer-token-gated with DNS-rebinding protection.
 
