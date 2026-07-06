@@ -4,9 +4,9 @@ An interactive art installation on a **28×28 flip-dot display** — four stacke
 
 <!-- TODO: photo/GIF of the physical installation -->
 
-![Web console mirroring the live panel — playing a fish animation the AI chat wrote](docs/screenshots/console.gif)
+![Web console mirroring the live panel — playing a spiral animation the AI chat wrote](docs/screenshots/console.gif)
 
-*The web console mirroring the panel live — running a fish animation the in-UI AI chat wrote and saved seconds earlier.*
+*The web console mirroring the panel live — running a "swirl" animation the in-UI AI chat wrote and saved seconds earlier.*
 
 ## Modes
 
@@ -81,9 +81,9 @@ With `ENABLE_WEB_UI=true`, a FastAPI server mirrors the live frame to browsers o
 - `/font-grid` — bitmap font browser
 - `/controller-metrics` — live BLE link quality/RSSI for connected gamepads
 
-![AI chat creating a fish animation with GLM-5.2](docs/screenshots/chat.png)
+![AI chat creating a spiral animation with Claude Fable 5](docs/screenshots/chat.png)
 
-That conversation produced the animation in the GIF at the top of this page: asked for "fish swimming across the display, with bubbles rising", the model wrote a sandboxed Python frame generator with `run_script`, checked the result with `get_display`, and saved it as a reusable `fish_bubbles` script — one turn, about a cent.
+That conversation produced the animation in the GIF at the top of this page: asked for a mesmerizing looping animation of its own choosing, Claude Fable 5 wrote a sandboxed Python frame generator with `run_script`, looked at the result with `get_display`, refined it twice, and saved the final double-arm spiral as a reusable `swirl` script.
 
 | | |
 | --- | --- |
@@ -91,8 +91,8 @@ That conversation produced the animation in the GIF at the top of this page: ask
 | *Board mode: movable text objects + freehand drawing* | *Settings rail: sleep window, person detection, clock face* |
 | ![Script browser with a saved animation's source](docs/screenshots/scripts.png) | ![Bitmap font browser comparing glyph variants](docs/screenshots/font-grid.png) |
 | *Script browser with saved animations* | *Bitmap font grid comparing glyph variants* |
-| ![Controller metrics diagnostics page](docs/screenshots/metrics.png) | |
-| *BLE controller link diagnostics* | |
+| ![Controller metrics diagnostics page](docs/screenshots/metrics.png) | ![RSSI graph of both controllers over time](docs/screenshots/metrics-rssi.png) |
+| *BLE controller link diagnostics* | *Live RSSI history for both gamepads* |
 
 The same tool set (`get_display` as ASCII art, `set_mode`, board drawing, `run_script`, …) is exposed over **MCP** at `/mcp` for external AI agents. The endpoint stays disabled until `MCP_AUTH_TOKEN` is set, and is bearer-token-gated with DNS-rebinding protection.
 
