@@ -125,18 +125,13 @@ All configuration is via `.env` (loaded with `python-dotenv`). Everything is opt
 
 ## Deployment (Jetson)
 
+Setting the device up from scratch — OS user, Python deps, the GPU MediaPipe wheel, model files, Bluetooth pairing — is covered in **[docs/jetson-setup.md](docs/jetson-setup.md)**. Once the device is prepared, deploys are one command from the repo root:
+
 ```bash
 ./deploy.sh            # rsync to the device, install systemd/udev/logrotate units, restart
 ```
 
-The service runs as `flipdot.service` (`Restart=always`, logs in `/var/log/flipdot/`). MediaPipe model files are excluded from the rsync and must be downloaded once on the device:
-
-```bash
-mkdir -p ~/flipdot/models && cd ~/flipdot/models
-wget -q https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task
-wget -q https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
-wget -q https://storage.googleapis.com/mediapipe-models/image_segmenter/hair_segmenter/float32/latest/hair_segmenter.tflite
-```
+The service runs as `flipdot.service` (`Restart=always`, logs in `/var/log/flipdot/`).
 
 ## Development
 
