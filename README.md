@@ -37,10 +37,13 @@ An interactive art installation on a **28×28 flip-dot display** — four stacke
 https://github.com/user-attachments/assets/ba153ce7-c223-44e9-9c2e-ac5783aacf4f
 
 ### Pong
-https://github.com/user-attachments/assets/af19545c-9593-4af2-a3c6-cc89eade747e
+https://github.com/user-attachments/assets/37f837c6-b312-447e-9c93-726ef9310f7d
+
+### Tank
+https://github.com/user-attachments/assets/fd05c761-5f53-4609-a85b-2863d48afd1a
 
 ### Autodrum
-https://github.com/user-attachments/assets/73635a1d-6f6d-4070-9972-933c9ec773c2
+https://github.com/user-attachments/assets/96b1e760-b9ba-4196-8f3f-f0c5005aef70
 
 ## How it works
 
