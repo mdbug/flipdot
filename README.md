@@ -14,7 +14,7 @@ An interactive art installation on a **28×28 flip-dot display** — four stacke
 | `sandfall` | Falling-sand toy where your silhouette is a collision obstacle; lit eyes/mouth appear up close | |
 | `caricature` | Live line-art caricature mirror from face-mesh landmarks + hair segmentation | |
 | `life` | Conway's Game of Life seeded by your silhouette | |
-| `tetris` | Playable Tetris with gesture controls | [<img src="docs/videos/tetris_preview.gif" width="240" alt="Tetris on the flip-dot panel">](docs/videos/tetris.mp4) |
+| `tetris` | Playable Tetris — by gestures, controller, or an AI agent (the demo is played by the AI, see the robot icon) | [<img src="docs/videos/tetris_preview.gif" width="240" alt="Tetris on the flip-dot panel, played by the AI agent">](docs/videos/tetris.mp4) |
 | `pong` | Pong with smooth, continuous gesture control | [<img src="docs/videos/pong_preview.gif" width="240" alt="Pong on the flip-dot panel">](docs/videos/pong.mp4) |
 | `tank` | Two-tank combat in the style of Atari *Combat* | [<img src="docs/videos/tank_preview.gif" width="240" alt="Tank combat on the flip-dot panel">](docs/videos/tank.mp4) |
 | `percussion` | Play the flip-dot panel as a drum machine (the dots *are* the sound) | |
@@ -37,7 +37,7 @@ An interactive art installation on a **28×28 flip-dot display** — four stacke
 <tr>
 <td width="50%">
 
-**Tetris** — played with gesture controls while the panel drums the music with its own dots. 🔊 Turn the sound on to hear it!
+**Tetris** — played by the AI agent (that's its robot icon in the sidebar) while the panel drums the music with its own dots. 🔊 Turn the sound on to hear it!
 
 https://github.com/user-attachments/assets/ba153ce7-c223-44e9-9c2e-ac5783aacf4f
 
