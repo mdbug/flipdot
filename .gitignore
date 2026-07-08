@@ -185,3 +185,6 @@ web_ui/node_modules/
 
 # VS Code
 .vscode/
+
+# Videos — track the committed .mp4 demos, ignore the large source .mov files
+docs/videos/*.mov

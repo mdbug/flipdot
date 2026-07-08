@@ -8,26 +8,26 @@ An interactive art installation on a **28×28 flip-dot display** — four stacke
 
 ## Modes
 
-| Mode | What it does |
-| --- | --- |
-| `clock` | Time as a digital or analog face (web-configurable) |
-| `sandfall` | Falling-sand toy where your silhouette is a collision obstacle; lit eyes/mouth appear up close |
-| `caricature` | Live line-art caricature mirror from face-mesh landmarks + hair segmentation |
-| `life` | Conway's Game of Life seeded by your silhouette |
-| `tetris` | Playable Tetris with gesture controls |
-| `pong` | Pong with smooth, continuous gesture control |
-| `tank` | Two-tank combat in the style of Atari *Combat* |
-| `percussion` | Play the flip-dot panel as a drum machine (the dots *are* the sound) |
-| `autodrum` | Autonomous drum sequencer playing recognizable song patterns |
-| `beatmirror` | Dance mode: a mirror that only looks at you on the beat |
-| `worldcup` | Live World Cup scores, flashing on goals |
-| `board` | Persistent editable board: draw layer plus movable text/image objects |
-| `paint` | Free-draw canvas (dwell or controller button to draw) |
-| `script` | Runs LLM- or user-authored sandboxed Python animations |
-| `menu` | Dwell-activated on-panel menu |
-| `pose` | Stick-figure rendering of the detected pose |
-| `font_preview` | Compare bitmap font variants side by side |
-| `sleep` | Dark idle mode during configured night hours |
+| Mode | What it does | Demo |
+| --- | --- | --- |
+| `clock` | Time as a digital or analog face (web-configurable) | |
+| `sandfall` | Falling-sand toy where your silhouette is a collision obstacle; lit eyes/mouth appear up close | |
+| `caricature` | Live line-art caricature mirror from face-mesh landmarks + hair segmentation | |
+| `life` | Conway's Game of Life seeded by your silhouette | |
+| `tetris` | Playable Tetris with gesture controls | <video src="https://github.com/mdbug/flipdot/raw/master/docs/videos/tetris.mp4" width="240" controls muted loop playsinline></video> |
+| `pong` | Pong with smooth, continuous gesture control | <video src="https://github.com/mdbug/flipdot/raw/master/docs/videos/pong.mp4" width="240" controls muted loop playsinline></video> |
+| `tank` | Two-tank combat in the style of Atari *Combat* | <video src="https://github.com/mdbug/flipdot/raw/master/docs/videos/tank.mp4" width="240" controls muted loop playsinline></video> |
+| `percussion` | Play the flip-dot panel as a drum machine (the dots *are* the sound) | |
+| `autodrum` | Autonomous drum sequencer playing recognizable song patterns | <video src="https://github.com/mdbug/flipdot/raw/master/docs/videos/march.mp4" width="240" controls muted loop playsinline></video> |
+| `beatmirror` | Dance mode: a mirror that only looks at you on the beat | |
+| `worldcup` | Live World Cup scores, flashing on goals | |
+| `board` | Persistent editable board: draw layer plus movable text/image objects | |
+| `paint` | Free-draw canvas (dwell or controller button to draw) | |
+| `script` | Runs LLM- or user-authored sandboxed Python animations | |
+| `menu` | Dwell-activated on-panel menu | |
+| `pose` | Stick-figure rendering of the detected pose | |
+| `font_preview` | Compare bitmap font variants side by side | |
+| `sleep` | Dark idle mode during configured night hours | |
 
 ## How it works
 
