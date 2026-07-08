@@ -31,28 +31,16 @@ An interactive art installation on a **28×28 flip-dot display** — four stacke
 
 *Click a preview to watch the full clip with sound — the flip-dot clicks are half the fun.*
 
-<!--
-Optional upgrade — inline video players with sound (GitHub strips <video> tags, and only
-"attachment" uploads render as players): edit this file on github.com, uncomment the
-section below, then drag docs/videos/tetris.mp4, pong.mp4, tank.mp4 and march.mp4 from a
-local checkout into the editor, one under each heading, replacing the TODO lines. GitHub
-uploads each file and inserts a https://github.com/user-attachments/assets/... URL that
-renders as an inline player.
-
 ## Demos
 
 ### Tetris
-TODO drag tetris.mp4 here
+https://github.com/user-attachments/assets/ba153ce7-c223-44e9-9c2e-ac5783aacf4f
 
 ### Pong
-TODO drag pong.mp4 here
-
-### Tank
-TODO drag tank.mp4 here
+https://github.com/user-attachments/assets/af19545c-9593-4af2-a3c6-cc89eade747e
 
 ### Autodrum
-TODO drag march.mp4 here
--->
+https://github.com/user-attachments/assets/73635a1d-6f6d-4070-9972-933c9ec773c2
 
 ## How it works
 
