@@ -14,11 +14,11 @@ An interactive art installation on a **28×28 flip-dot display** — four stacke
 | `sandfall` | Falling-sand toy where your silhouette is a collision obstacle; lit eyes/mouth appear up close | |
 | `caricature` | Live line-art caricature mirror from face-mesh landmarks + hair segmentation | |
 | `life` | Conway's Game of Life seeded by your silhouette | |
-| `tetris` | Playable Tetris with gesture controls | <video src="https://github.com/mdbug/flipdot/raw/master/docs/videos/tetris.mp4" width="240" controls muted loop playsinline></video> |
-| `pong` | Pong with smooth, continuous gesture control | <video src="https://github.com/mdbug/flipdot/raw/master/docs/videos/pong.mp4" width="240" controls muted loop playsinline></video> |
-| `tank` | Two-tank combat in the style of Atari *Combat* | <video src="https://github.com/mdbug/flipdot/raw/master/docs/videos/tank.mp4" width="240" controls muted loop playsinline></video> |
+| `tetris` | Playable Tetris with gesture controls | [<img src="docs/videos/tetris_preview.gif" width="240" alt="Tetris on the flip-dot panel">](docs/videos/tetris.mp4) |
+| `pong` | Pong with smooth, continuous gesture control | [<img src="docs/videos/pong_preview.gif" width="240" alt="Pong on the flip-dot panel">](docs/videos/pong.mp4) |
+| `tank` | Two-tank combat in the style of Atari *Combat* | [<img src="docs/videos/tank_preview.gif" width="240" alt="Tank combat on the flip-dot panel">](docs/videos/tank.mp4) |
 | `percussion` | Play the flip-dot panel as a drum machine (the dots *are* the sound) | |
-| `autodrum` | Autonomous drum sequencer playing recognizable song patterns | <video src="https://github.com/mdbug/flipdot/raw/master/docs/videos/march.mp4" width="240" controls muted loop playsinline></video> |
+| `autodrum` | Autonomous drum sequencer playing recognizable song patterns | [<img src="docs/videos/march_preview.gif" width="240" alt="Autodrum playing the Imperial March">](docs/videos/march.mp4) |
 | `beatmirror` | Dance mode: a mirror that only looks at you on the beat | |
 | `worldcup` | Live World Cup scores, flashing on goals | |
 | `board` | Persistent editable board: draw layer plus movable text/image objects | |
@@ -28,6 +28,31 @@ An interactive art installation on a **28×28 flip-dot display** — four stacke
 | `pose` | Stick-figure rendering of the detected pose | |
 | `font_preview` | Compare bitmap font variants side by side | |
 | `sleep` | Dark idle mode during configured night hours | |
+
+*Click a preview to watch the full clip with sound — the flip-dot clicks are half the fun.*
+
+<!--
+Optional upgrade — inline video players with sound (GitHub strips <video> tags, and only
+"attachment" uploads render as players): edit this file on github.com, uncomment the
+section below, then drag docs/videos/tetris.mp4, pong.mp4, tank.mp4 and march.mp4 from a
+local checkout into the editor, one under each heading, replacing the TODO lines. GitHub
+uploads each file and inserts a https://github.com/user-attachments/assets/... URL that
+renders as an inline player.
+
+## Demos
+
+### Tetris
+TODO drag tetris.mp4 here
+
+### Pong
+TODO drag pong.mp4 here
+
+### Tank
+TODO drag tank.mp4 here
+
+### Autodrum
+TODO drag march.mp4 here
+-->
 
 ## How it works
 
