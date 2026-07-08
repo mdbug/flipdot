@@ -33,17 +33,40 @@ An interactive art installation on a **28×28 flip-dot display** — four stacke
 
 ## Demos
 
-### Tetris
+<table>
+<tr>
+<td width="50%">
+
+**Tetris** — played with gesture controls while the panel drums the music with its own dots. 🔊 Turn the sound on to hear it!
+
 https://github.com/user-attachments/assets/ba153ce7-c223-44e9-9c2e-ac5783aacf4f
 
-### Pong
+</td>
+<td width="50%">
+
+**Pong** — smooth, continuous two-player control; the score flashes up after every goal.
+
 https://github.com/user-attachments/assets/37f837c6-b312-447e-9c93-726ef9310f7d
 
-### Tank
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**Tank** — two-tank combat in the style of Atari *Combat*, one Bluetooth gamepad per player.
+
 https://github.com/user-attachments/assets/fd05c761-5f53-4609-a85b-2863d48afd1a
 
-### Autodrum
+</td>
+<td width="50%">
+
+**Autodrum** — the drum sequencer hammers out the Imperial March on the dots. 🔊 Sound on — the flip-dot clicks *are* the music.
+
 https://github.com/user-attachments/assets/96b1e760-b9ba-4196-8f3f-f0c5005aef70
+
+</td>
+</tr>
+</table>
 
 ## How it works
 
