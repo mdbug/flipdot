@@ -3,6 +3,17 @@ import sys
 import types
 
 
+class _SyncThread:
+    """Drop-in for threading.Thread that runs the target inline on start()."""
+
+    def __init__(self, target=None, **_kwargs):
+        self._target = target
+
+    def start(self):
+        if self._target is not None:
+            self._target()
+
+
 def _load_clock_module(monkeypatch):
     weather_stub = types.SimpleNamespace(
         get_weather_forecast=lambda: {
@@ -52,6 +63,9 @@ def test_get_weather_uses_hourly_cache(monkeypatch):
 
     monkeypatch.setattr(clock_module.time, "time", fake_time)
     monkeypatch.setattr(clock_module, "get_weather_forecast", fake_weather)
+    # The refresh runs on a background thread in production; run it inline here
+    # so the cache-hit assertions stay deterministic.
+    monkeypatch.setattr(clock_module.threading, "Thread", _SyncThread)
 
     clock = clock_module.Clock(width=28, height=28)
     now["value"] = 0.1

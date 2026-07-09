@@ -9,6 +9,10 @@ load_dotenv()
 
 CITY = os.getenv("WEATHER_CITY", "Berlin")
 COUNTRY_CODE = os.getenv("WEATHER_COUNTRY_CODE", "DE")
+# Bound every network call so a slow/black-holed API can never hang the caller
+# indefinitely (the clock refreshes this on a background thread, but a leaked
+# hung request would still accumulate a stuck thread each hour).
+REQUEST_TIMEOUT_SEC = 5.0
 
 
 def get_weather_forecast(
@@ -25,9 +29,10 @@ def get_weather_forecast(
     if not api_key:
         return {"error": "Missing OPENWEATHER_API_KEY environment variable"}
 
-    # Base URLs for OpenWeatherMap API
-    current_weather_url = "http://api.openweathermap.org/data/2.5/weather"
-    forecast_url = "http://api.openweathermap.org/data/2.5/forecast"
+    # Base URLs for OpenWeatherMap API. HTTPS so the appid (API key) is never
+    # sent in cleartext query params over the wire.
+    current_weather_url = "https://api.openweathermap.org/data/2.5/weather"
+    forecast_url = "https://api.openweathermap.org/data/2.5/forecast"
 
     # Parameters for API calls
     params = {
@@ -38,12 +43,14 @@ def get_weather_forecast(
 
     try:
         # Get current weather
-        current_response = requests.get(current_weather_url, params=params)
+        current_response = requests.get(
+            current_weather_url, params=params, timeout=REQUEST_TIMEOUT_SEC
+        )
         current_response.raise_for_status()
         current_data = current_response.json()
 
         # Get forecast data
-        forecast_response = requests.get(forecast_url, params=params)
+        forecast_response = requests.get(forecast_url, params=params, timeout=REQUEST_TIMEOUT_SEC)
         forecast_response.raise_for_status()
         forecast_data = forecast_response.json()
 

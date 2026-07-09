@@ -1,4 +1,6 @@
+import logging
 import math
+import threading
 import time
 from datetime import datetime
 from typing import Any
@@ -9,6 +11,8 @@ from app.modes.contracts import Frame
 from app.services.draw import draw_line, fill_circle, thick_line
 from app.services.text import write, write_centered
 from app.services.weather import get_weather_forecast
+
+logger = logging.getLogger(__name__)
 
 
 class Clock:
@@ -32,6 +36,9 @@ class Clock:
         self.last_weather_update = time.time() - Clock.WEATHER_INTERVAL
         self.last_frame_update = time.time() - Clock.CLOCK_INTERVAL
         self.weather: dict[str, Any] | None = None
+        # A refresh is in flight on a background thread; guards against stacking
+        # up concurrent fetches while one is still running.
+        self._weather_refresh_in_flight = False
         self.style = Clock.STYLE_DIGITAL
         self.seconds = False
         self.frame = np.zeros((height, width), dtype=np.uint8)
@@ -59,11 +66,41 @@ class Clock:
         return self.get_settings()
 
     def get_weather(self) -> dict[str, Any] | None:
-        """Return the cached forecast, refreshing it at most once per ``WEATHER_INTERVAL``."""
-        if time.time() - self.last_weather_update > Clock.WEATHER_INTERVAL:
-            self.weather = get_weather_forecast()
-            self.last_weather_update = time.time()
+        """Return the cached forecast, kicking off a throttled background refresh.
+
+        The fetch runs on a daemon thread so a slow (or hung) API call can never
+        stall the single-threaded render loop that calls this. The interval
+        timestamp is advanced when the refresh is *scheduled* (not when it
+        finishes) so a slow fetch does not spawn a new thread every frame.
+        """
+        now = time.time()
+        if (
+            now - self.last_weather_update > Clock.WEATHER_INTERVAL
+            and not self._weather_refresh_in_flight
+        ):
+            self.last_weather_update = now
+            self._weather_refresh_in_flight = True
+            threading.Thread(
+                target=self._refresh_weather, name="clock-weather", daemon=True
+            ).start()
         return self.weather
+
+    def _refresh_weather(self) -> None:
+        """Fetch the forecast off the render thread, keeping only a valid payload.
+
+        ``get_weather_forecast`` returns an ``{"error": ...}`` dict on failure;
+        storing that would make the digital renderer raise on a missing
+        ``current_temperature`` key, so an error (or exception) leaves the last
+        good forecast in place instead.
+        """
+        try:
+            result = get_weather_forecast()
+        except Exception:
+            logger.exception("Weather refresh failed")
+            result = None
+        if isinstance(result, dict) and "error" not in result:
+            self.weather = result
+        self._weather_refresh_in_flight = False
 
     def get_frame(self) -> Frame:
         """Return the clock frame, re-rendering at most once per ``CLOCK_INTERVAL``."""

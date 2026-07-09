@@ -305,7 +305,7 @@ def test_board_endpoints_mutate_attached_board():
 
 
 def test_frame_payload_includes_controller_status(monkeypatch):
-    monkeypatch.setattr("app.infrastructure.web_server.time.monotonic", lambda: 12.345)
+    monkeypatch.setattr("app.infrastructure.controller_metrics.time.monotonic", lambda: 12.345)
     server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8127)
     client = TestClient(server._app)
 
@@ -383,7 +383,7 @@ def test_frame_payload_includes_multiple_controller_statuses():
 
 
 def test_controller_status_endpoint_uses_provider_snapshot(monkeypatch):
-    monkeypatch.setattr("app.infrastructure.web_server.time.monotonic", lambda: 42.125)
+    monkeypatch.setattr("app.infrastructure.controller_metrics.time.monotonic", lambda: 42.125)
     server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8128)
     client = TestClient(server._app)
 
@@ -451,8 +451,10 @@ def test_controller_status_endpoint_includes_multiple_controllers():
 
 def test_controller_metrics_endpoint_records_samples_and_disconnects(monkeypatch):
     clock = {"monotonic": 100.0, "wall": 1_700_000_000.0}
-    monkeypatch.setattr("app.infrastructure.web_server.time.monotonic", lambda: clock["monotonic"])
-    monkeypatch.setattr("app.infrastructure.web_server.time.time", lambda: clock["wall"])
+    monkeypatch.setattr(
+        "app.infrastructure.controller_metrics.time.monotonic", lambda: clock["monotonic"]
+    )
+    monkeypatch.setattr("app.infrastructure.controller_metrics.time.time", lambda: clock["wall"])
     server = WebServer(input_hub=DummyInputHub(), host="127.0.0.1", port=8132)
     client = TestClient(server._app)
 

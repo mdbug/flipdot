@@ -33,11 +33,7 @@ def dispatch_actions(
             continue
 
         if action.action == "toggle_menu":
-            entered_via = _to_control_source(action.source)
-            try:
-                mode_manager.toggle_menu(entered_via=entered_via)
-            except TypeError:
-                mode_manager.toggle_menu()
+            mode_manager.toggle_menu(entered_via=_to_control_source(action.source))
         elif action.action == "paint_clear" and mode_manager.mode == ModeManager.MODE_PAINT:
             paint.clear()
         elif (
