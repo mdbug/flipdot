@@ -66,12 +66,14 @@ class MenuItem:
         self.hovered = hovering
 
     def click(self, source: str | None = None) -> None:
-        """Invoke ``on_click``, passing ``source`` when the callback accepts it."""
+        """Invoke ``on_click``, passing the triggering input source.
+
+        Every callback must accept an optional ``source`` argument; the old
+        retry-without-arguments fallback silently swallowed genuine
+        ``TypeError``s raised inside the callback and invoked it twice.
+        """
         if self.on_click:
-            try:
-                self.on_click(source)
-            except TypeError:
-                self.on_click()
+            self.on_click(source)
 
     def get_hover_duration(self) -> float:
         """Return seconds the pointer has dwelled on this item (0 if not hovering)."""
@@ -206,7 +208,7 @@ class Menu:
                     2,
                     width,
                     checked=mode_manager.pose_enabled,
-                    on_click=mode_manager.toggle_pose_enabled,
+                    on_click=lambda source=None: mode_manager.toggle_pose_enabled(),
                     checked_provider=lambda: mode_manager.pose_enabled,
                 ),
             ],

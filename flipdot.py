@@ -3,7 +3,6 @@ import os
 import threading
 import time
 
-import numpy as np
 from dotenv import load_dotenv
 
 from app.services.logging_setup import setup_logging
@@ -304,8 +303,6 @@ def main() -> None:
 
             capture_time = time.time() - t_start
 
-            dots = np.zeros((panel.HEIGHT, panel.WIDTH), dtype=np.uint8)
-
             t_process_start = time.time()
 
             controller_snapshots = get_controller_statuses()
@@ -315,10 +312,11 @@ def main() -> None:
             )
             mode_manager.update_controller_connected(controller_active)
 
-            controller_pressed_events = (
-                primary_controller_hub.drain_pressed_events()
-                | secondary_controller_hub.drain_pressed_events()
-            )
+            # Drain each hub separately so per-side edges survive for modes
+            # that assign a controller per player (tank); the merged set keeps
+            # feeding the single-player paths.
+            primary_pressed_events = primary_controller_hub.drain_pressed_events()
+            secondary_pressed_events = secondary_controller_hub.drain_pressed_events()
             controller_bridge.process(
                 snapshot=controller_snapshot,
                 primary_snapshot=controller_snapshots[0] if controller_snapshots else None,
@@ -337,7 +335,9 @@ def main() -> None:
                 pong_game=pong_game,
                 tank_game=tank_game,
                 percussion=percussion,
-                pressed_events=controller_pressed_events,
+                pressed_events=primary_pressed_events | secondary_pressed_events,
+                primary_pressed_events=primary_pressed_events,
+                secondary_pressed_events=secondary_pressed_events,
             )
 
             # Skip the expensive per-frame pose inference when the controller is
@@ -421,6 +421,9 @@ def main() -> None:
                 fps_limit = 30
 
             if debug:
+                # Renderers may return a cached internal frame (e.g. clock);
+                # copy before mutating so the overlay never leaks into it.
+                dots = dots.copy()
                 dots[22:, :] = 0  # Clear bottom part of the panel
                 dots[-1, -1] = fps_tracker.total_frames % 2
                 estimated_distance = transition_state.estimated_distance

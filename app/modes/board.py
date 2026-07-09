@@ -4,6 +4,7 @@ import os
 import re
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,19 @@ import app.services.image as image_service
 import app.services.text as text
 from app.core.mode_manager import ModeManager
 from app.modes.contracts import Frame
+
+
+class _MutationScope:
+    """Handle yielded by :meth:`Board._mutation`; ``cancel()`` skips the save."""
+
+    __slots__ = ("save",)
+
+    def __init__(self) -> None:
+        self.save = True
+
+    def cancel(self) -> None:
+        """Skip persisting this mutation (no-op paths and non-persisting moves)."""
+        self.save = False
 
 
 class Board:
@@ -58,6 +72,11 @@ class Board:
         default_boards_dir = self._state_path.parent / "boards"
         self._boards_dir = Path(os.getenv("BOARD_STATES_DIR", str(default_boards_dir)))
         self._supported_chars_cache: dict[tuple[str, int, str], Any] = {}
+        # Persistence runs outside self._lock (see _mutation); the sequence
+        # number plus this second lock keep concurrent writers ordered.
+        self._save_seq = 0
+        self._last_written_seq = 0
+        self._save_io_lock = threading.Lock()
         self._load_state()
 
     def _new_id(self, prefix: str) -> str:
@@ -241,16 +260,38 @@ class Board:
     def _board_path(self, name):
         return self._boards_dir / f"{name}.json"
 
-    def _save_named_board(self, name):
-        board_name = self._sanitize_name(name)
-        payload = self._board_payload()
-        payload["active_board"] = board_name
-        self._atomic_write_json(self._board_path(board_name), payload)
+    @contextmanager
+    def _mutation(self):
+        """Serialize a state mutation and persist it after the lock is released.
 
-    def _save_state(self):
-        payload = self._board_payload()
-        self._atomic_write_json(self._state_path, payload)
-        self._save_named_board(self._active_board)
+        The file I/O runs *outside* ``self._lock`` so a slow disk can never
+        stall ``get_frame`` (the render loop contends on the same lock), while
+        the write still completes before the mutating method returns. The
+        snapshot is built under the lock and carries a sequence number;
+        :meth:`_write_snapshot` skips stale ones, so two concurrent mutations
+        can never write an older state over a newer one. An exception inside
+        the block propagates without persisting; call ``cancel()`` on the
+        yielded scope to skip persisting explicitly (no-op paths and
+        ``persist=False`` moves).
+        """
+        scope = _MutationScope()
+        snapshot = None
+        with self._lock:
+            yield scope
+            if scope.save:
+                self._save_seq += 1
+                snapshot = (self._save_seq, self._board_payload(), self._active_board)
+        if snapshot is not None:
+            self._write_snapshot(*snapshot)
+
+    def _write_snapshot(self, seq: int, payload: dict, active_board: str) -> None:
+        """Write ``payload`` to the state file and the active board's file."""
+        with self._save_io_lock:
+            if seq <= self._last_written_seq:
+                return
+            self._last_written_seq = seq
+            self._atomic_write_json(self._state_path, payload)
+            self._atomic_write_json(self._board_path(active_board), payload)
 
     def _reset_empty(self):
         self._draw_layer[:, :] = 0
@@ -604,18 +645,18 @@ class Board:
 
     def save_board(self, name: str) -> dict[str, str]:
         """Persist the current board under ``name`` and make it active."""
-        with self._lock:
+        with self._mutation():
             board_name = self._sanitize_name(name)
             self._active_board = board_name
-            self._save_state()
             return {"name": board_name, "active": self._active_board}
 
     def load_board(self, name: str) -> bool:
         """Load the named board (pushing an undo point); return False if it doesn't exist."""
-        with self._lock:
+        with self._mutation() as mut:
             board_name = self._sanitize_name(name)
             path = self._board_path(board_name)
             if not os.path.exists(path):
+                mut.cancel()
                 return False
             with open(path, encoding="utf-8") as f:
                 payload = json.load(f)
@@ -623,59 +664,61 @@ class Board:
             self._active_board = board_name
             self._load_board_payload(payload)
             self._active_board = board_name
-            self._save_state()
             return True
 
     def delete_board(self, name: str) -> bool:
         """Delete a named board (never ``default``); return whether it was removed."""
-        with self._lock:
+        with self._mutation() as mut:
             board_name = self._sanitize_name(name)
             if board_name == "default":
+                mut.cancel()
                 return False
             path = self._board_path(board_name)
             if not os.path.exists(path):
+                mut.cancel()
                 return False
             os.remove(path)
             if self._active_board == board_name:
                 self._active_board = "default"
                 self._reset_empty()
-                self._save_state()
+            else:
+                mut.cancel()
             return True
 
     def rename_board(self, old_name: str, new_name: str) -> bool:
         """Rename a saved board; return False if the source is missing or target exists."""
-        with self._lock:
+        with self._mutation() as mut:
             source = self._sanitize_name(old_name)
             target = self._sanitize_name(new_name)
             source_path = self._board_path(source)
             target_path = self._board_path(target)
-            if not os.path.exists(source_path):
-                return False
-            if os.path.exists(target_path):
+            if not os.path.exists(source_path) or os.path.exists(target_path):
+                mut.cancel()
                 return False
             source_path.rename(target_path)
             if self._active_board == source:
                 self._active_board = target
-                self._save_state()
+            else:
+                mut.cancel()
             return True
 
     def add_text_object(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Add a text object from ``payload``, select it, and return its serialized form."""
-        with self._lock:
+        with self._mutation():
             self._push_undo()
             item = self._normalize_text_object(payload)
             self._text_objects.append(item)
             self._select(text_id=item["id"])
-            self._save_state()
             return self._serialize_text_object(item)
 
     def update_text_object(
         self, object_id: str, payload: dict[str, Any] | None
     ) -> dict[str, Any] | None:
         """Update a text object in place; return its serialized form or None if missing."""
-        with self._lock:
+        with self._mutation() as mut:
             index, existing = self._find_text(object_id)
             if existing is None:
+                mut.cancel()
                 return None
 
             self._push_undo()
@@ -684,31 +727,32 @@ class Board:
             normalized = self._normalize_text_object(candidate, object_id=object_id)
             self._text_objects[index] = normalized
             self._select(text_id=normalized["id"])
-            self._save_state()
             return self._serialize_text_object(normalized)
 
     def move_text_object(
         self, object_id: str, x: int, y: int, *, persist: bool = True
     ) -> dict[str, Any] | None:
         """Move a text object to ``(x, y)``; return its serialized form or None if missing."""
-        with self._lock:
+        with self._mutation() as mut:
             index, existing = self._find_text(object_id)
             if existing is None:
+                mut.cancel()
                 return None
             if persist:
                 self._push_undo()
+            else:
+                mut.cancel()
             self._text_objects[index]["x"] = int(x)
             self._text_objects[index]["y"] = int(y)
             self._select(text_id=object_id)
-            if persist:
-                self._save_state()
             return self._serialize_text_object(self._text_objects[index])
 
     def delete_text_object(self, object_id: str) -> bool:
         """Delete a text object; return whether it existed."""
-        with self._lock:
+        with self._mutation() as mut:
             index, _existing = self._find_text(object_id)
             if index < 0:
+                mut.cancel()
                 return False
             self._push_undo()
             deleted = self._text_objects.pop(index)
@@ -717,12 +761,11 @@ class Board:
                 self._legacy_text_id = ""
             self._selected_text_ids.discard(deleted["id"])
             self._sync_selection_scalars()
-            self._save_state()
             return True
 
     def add_image_object(self, pixels: Any, x: int = 0, y: int = 0) -> dict[str, Any]:
         """Add an image object at ``(x, y)``, select it, and return its serialized form."""
-        with self._lock:
+        with self._mutation():
             self._push_undo()
             item = self._normalize_image_object(
                 {
@@ -733,37 +776,37 @@ class Board:
             )
             self._image_objects.append(item)
             self._select(image_id=item["id"])
-            self._save_state()
             return self._serialize_image_object(item)
 
     def move_image_object(
         self, object_id: str, x: int, y: int, *, persist: bool = True
     ) -> dict[str, Any] | None:
         """Move an image object to ``(x, y)``; return its serialized form or None if missing."""
-        with self._lock:
+        with self._mutation() as mut:
             index, existing = self._find_image(object_id)
             if existing is None:
+                mut.cancel()
                 return None
             if persist:
                 self._push_undo()
+            else:
+                mut.cancel()
             self._image_objects[index]["x"] = int(x)
             self._image_objects[index]["y"] = int(y)
             self._select(image_id=object_id)
-            if persist:
-                self._save_state()
             return self._serialize_image_object(self._image_objects[index])
 
     def delete_image_object(self, object_id: str) -> bool:
         """Delete an image object; return whether it existed."""
-        with self._lock:
+        with self._mutation() as mut:
             index, _existing = self._find_image(object_id)
             if index < 0:
+                mut.cancel()
                 return False
             self._push_undo()
             deleted = self._image_objects.pop(index)
             self._selected_image_ids.discard(deleted["id"])
             self._sync_selection_scalars()
-            self._save_state()
             return True
 
     def hit_test(self, x: float, y: float, *, select: bool = True, all_hits: bool = False) -> Any:
@@ -817,11 +860,15 @@ class Board:
         if not normalized:
             return []
 
-        with self._lock:
+        with self._mutation() as mut:
+            if not persist:
+                mut.cancel()
             for item in normalized:
                 if item["kind"] == "text" and self._find_text(item["id"])[1] is None:
+                    mut.cancel()
                     return None
                 if item["kind"] == "image" and self._find_image(item["id"])[1] is None:
+                    mut.cancel()
                     return None
 
             if persist:
@@ -845,8 +892,6 @@ class Board:
                     selected_image.append(item["id"])
 
             self._select(text_ids=selected_text, image_ids=selected_image)
-            if persist:
-                self._save_state()
             return moved
 
     def place_uploaded_image(
@@ -873,10 +918,9 @@ class Board:
                 "object": self.add_image_object(matrix, x=x, y=y),
             }
 
-        with self._lock:
+        with self._mutation():
             self._push_undo()
             self._blit(self._draw_layer, matrix, x, y)
-            self._save_state()
         return {
             "mode": "stamp",
             "width": int(matrix.shape[1]),
@@ -896,7 +940,7 @@ class Board:
         tool_name = str(tool or "line").strip().lower()
         if tool_name not in {"line", "rectangle", "circle"}:
             raise ValueError("unsupported shape tool")
-        with self._lock:
+        with self._mutation():
             self._push_undo()
             p0 = self._to_pixel(start["x"], start["y"])
             p1 = self._to_pixel(end["x"], end["y"])
@@ -908,11 +952,10 @@ class Board:
                 self._draw_rect(p0, p1, line_width=width, color=draw_color)
             elif tool_name == "circle":
                 self._draw_circle(p0, p1, line_width=width, color=draw_color)
-            self._save_state()
 
     def set_text(self, value: str) -> None:
         """Set the single legacy text object's content (creating it if needed)."""
-        with self._lock:
+        with self._mutation():
             self._push_undo()
             if not self._legacy_text_id:
                 self._legacy_text_id = self._new_id("txt")
@@ -957,7 +1000,6 @@ class Board:
                         max_length=32,
                     )
                     self._text_objects[index] = item
-            self._save_state()
 
     def apply_stroke(
         self, points: list[dict[str, float]] | None, *, line_width: int = 1, color: str = "on"
@@ -967,7 +1009,7 @@ class Board:
         if not normalized_points:
             return
 
-        with self._lock:
+        with self._mutation():
             self._push_undo()
             width = self._normalize_line_width(line_width)
             draw_color = self._normalize_color(color)
@@ -985,11 +1027,9 @@ class Board:
                         pixel_points[idx - 1], pixel_points[idx], line_width=width, color=draw_color
                     )
 
-            self._save_state()
-
     def clear(self) -> None:
         """Wipe the draw layer and all objects (pushing an undo point)."""
-        with self._lock:
+        with self._mutation():
             self._push_undo()
             self._draw_layer[:, :] = 0
             self._text_objects = []
@@ -1000,16 +1040,15 @@ class Board:
             self._selected_image_ids = set()
             self._legacy_text_id = ""
             self._scroll_offsets = {}
-            self._save_state()
 
     def undo(self) -> bool:
         """Restore the most recent snapshot; return False if the undo stack is empty."""
-        with self._lock:
+        with self._mutation() as mut:
             if not self._undo_stack:
+                mut.cancel()
                 return False
             previous = self._undo_stack.pop()
             self._restore_snapshot(previous)
-            self._save_state()
             return True
 
     def export_state(self) -> dict[str, Any]:

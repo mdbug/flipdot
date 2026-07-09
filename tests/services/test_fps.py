@@ -47,4 +47,5 @@ def test_timing_stats_are_reported_in_milliseconds(monkeypatch):
     assert round(stats["process_ms"], 3) == 30.0
     assert round(stats["panel_ms"], 3) == 2.0
     assert round(stats["sleep_ms"], 3) == 6.0
-    assert round(stats["total_ms"], 3) == 50.0
+    # Total covers every stage: capture + process + panel + sleep.
+    assert round(stats["total_ms"], 3) == 58.0

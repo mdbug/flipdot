@@ -57,7 +57,13 @@ class FPSTracker:
             "process_ms": float(np.mean(self.process_times)) * 1000,
             "panel_ms": float(np.mean(self.panel_times)) * 1000,
             "sleep_ms": float(np.mean(self.sleep_times)) * 1000,
-            "total_ms": float(np.mean(self.capture_times) + np.mean(self.process_times)) * 1000,
+            "total_ms": float(
+                np.mean(self.capture_times)
+                + np.mean(self.process_times)
+                + np.mean(self.panel_times)
+                + np.mean(self.sleep_times)
+            )
+            * 1000,
         }
 
     def get_stats(self) -> dict[str, float]:

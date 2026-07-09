@@ -150,11 +150,18 @@ class Clock:
                 style="regular",
             )
             self.frame[20:24, 1:27] = 0
-            for rain_forecasts in weather["hourly_rain_forecast"]:
-                hour = int(rain_forecasts["time"].split(":")[0])
-                rain_prob = round(rain_forecasts["rain_probability"] * 4)
-                self.frame[20:24, hour + 1 : 26] = 0
-                self.frame[24 - rain_prob : 24, hour + 1 : 26] = 1
+            # Each forecast paints only its own band (up to the next entry's
+            # hour; the last one extends to the strip's right edge), so the
+            # rendering is independent of the API's ordering.
+            forecasts = sorted(
+                weather["hourly_rain_forecast"],
+                key=lambda entry: int(entry["time"].split(":")[0]),
+            )
+            for entry, next_entry in zip(forecasts, [*forecasts[1:], None], strict=True):
+                hour = int(entry["time"].split(":")[0])
+                end_col = 26 if next_entry is None else int(next_entry["time"].split(":")[0]) + 1
+                rain_rows = max(0, min(4, round(entry["rain_probability"] * 4)))
+                self.frame[24 - rain_rows : 24, hour + 1 : end_col] = 1
 
     def _render_analog(self) -> None:
         """Render an analog face: a white disc with black hour/minute hands.

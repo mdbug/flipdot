@@ -225,3 +225,39 @@ def test_analog_face_is_mirror_symmetric_at_noon(monkeypatch):
     frame = clock.frame
     for k in range(1, 13):
         assert (frame[:, 13 - k] == frame[:, 13 + k]).all()
+
+
+def test_rain_strip_is_independent_of_forecast_order(monkeypatch):
+    clock_module = _load_clock_module(monkeypatch)
+    monkeypatch.setattr(clock_module, "datetime", FakeDateTime)
+
+    entries = [
+        {"time": "09:00", "rain_probability": 0.5},
+        {"time": "12:00", "rain_probability": 1.0},
+        {"time": "15:00", "rain_probability": 0.25},
+    ]
+
+    def render(forecast):
+        clock = clock_module.Clock(width=28, height=28)
+        monkeypatch.setattr(
+            clock_module.Clock,
+            "get_weather",
+            lambda self: {
+                "current_temperature": 20,
+                "max_temperature_today": 25,
+                "hourly_rain_forecast": forecast,
+            },
+        )
+        clock.update_frame()
+        return clock.frame.copy()
+
+    sorted_frame = render(entries)
+    shuffled_frame = render([entries[2], entries[0], entries[1]])
+
+    assert (sorted_frame == shuffled_frame).all()
+    # Each entry owns its own band: the 12:00 forecast (probability 1.0)
+    # fills all four strip rows from column 13 up to the 15:00 band.
+    assert (sorted_frame[20:24, 13:16] == 1).all()
+    # The 15:00 forecast (0.25 -> one row) paints only the bottom strip row.
+    assert (sorted_frame[23, 16:26] == 1).all()
+    assert (sorted_frame[20:23, 16:26] == 0).all()

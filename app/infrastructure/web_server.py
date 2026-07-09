@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import threading
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -35,6 +36,11 @@ logger = logging.getLogger(__name__)
 # Cap raw image uploads so a single request can't exhaust memory before the
 # image layer ever sees it (the panel is only 28x28; this is generous headroom).
 _MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+
+# Controller status is polled at up to 30 Hz per WebSocket client (plus REST
+# calls); a short-lived shared cache keeps provider calls and metrics samples
+# at that rate in total instead of multiplying per client.
+_CONTROLLER_STATUS_CACHE_SEC = 1.0 / 30.0
 
 
 def _mcp_enabled() -> bool:
@@ -295,6 +301,9 @@ class WebServer:
         self._controls: list[dict] = []
         self._controller_status_provider: Callable[[], dict | list[dict]] | None = None
         self._controller_metrics = ControllerMetrics()
+        self._controller_status_cache: tuple[dict, list[dict]] | None = None
+        self._controller_status_cached_monotonic = 0.0
+        self._controller_status_cache_lock = threading.Lock()
         self._board = None
         self._script_mode = None
         self._transition_policy = None
@@ -924,6 +933,7 @@ class WebServer:
                     # payload's model so the history stays provider-native.
                     if self._chat_model is None:
                         self._chat_model = chat_backend.resolve_model(payload.model)
+                    history_len_before = len(self._chat_messages)
                     self._chat_messages.append({"role": "user", "content": message})
                     turn_usage: dict | None = None
                     async for event in chat_backend.run_chat(
@@ -931,17 +941,26 @@ class WebServer:
                     ):
                         # Snatch this turn's token/cost totals off the stream so we
                         # can fold them into the persisted session total below.
-                        if '"type": "usage"' in event:
-                            try:
-                                turn_usage = json.loads(event)
-                            except json.JSONDecodeError:
-                                turn_usage = None
+                        # Each event is one NDJSON line; parse it rather than
+                        # substring-sniffing, which a text event containing the
+                        # marker string would fool.
+                        try:
+                            parsed = json.loads(event)
+                        except json.JSONDecodeError:
+                            parsed = None
+                        if isinstance(parsed, dict) and parsed.get("type") == "usage":
+                            turn_usage = parsed
                         yield event
 
-                    # Only persist once the assistant has actually replied; a turn
-                    # that errored out (no key / MCP off) leaves just the bare user
-                    # message, which isn't worth a saved session.
-                    if len(self._chat_messages) <= 1:
+                    # A turn that errored before any assistant reply (no key,
+                    # provider down) appended nothing after the user message:
+                    # drop it so the history never carries an unanswered turn,
+                    # and skip persisting. A fresh conversation left empty also
+                    # releases the model lock — nothing is provider-native yet.
+                    if len(self._chat_messages) == history_len_before + 1:
+                        self._chat_messages.pop()
+                        if not self._chat_messages and self._chat_session_id is None:
+                            self._chat_model = None
                         return
                     if self._chat_session_id is None:
                         record = self._chat_sessions.create(title=message, model=self._chat_model)
@@ -1176,9 +1195,36 @@ class WebServer:
     def attach_controller_status_provider(
         self, provider: Callable[[], dict | list[dict]] | None
     ) -> None:
-        self._controller_status_provider = provider
+        """Wire the controller-status source, dropping any cached payload.
+
+        Invalidation matters: the provider is attached after startup, and a
+        freshly attached source must take effect on the next request instead
+        of waiting out a cached empty status.
+        """
+        with self._controller_status_cache_lock:
+            self._controller_status_provider = provider
+            self._controller_status_cache = None
 
     def _controller_status_payload(self) -> tuple[dict, list[dict]]:
+        """Return (merged status, per-hub statuses), cached for a frame interval.
+
+        Every WebSocket client and REST poller funnels through here; the cache
+        bounds provider calls and metrics recording to ~30 Hz in total no
+        matter how many clients are connected.
+        """
+        with self._controller_status_cache_lock:
+            now = time.monotonic()
+            if (
+                self._controller_status_cache is not None
+                and now - self._controller_status_cached_monotonic < _CONTROLLER_STATUS_CACHE_SEC
+            ):
+                return self._controller_status_cache
+            fresh = self._controller_status_payload_uncached()
+            self._controller_status_cache = fresh
+            self._controller_status_cached_monotonic = now
+            return fresh
+
+    def _controller_status_payload_uncached(self) -> tuple[dict, list[dict]]:
         provider = self._controller_status_provider
         if provider is None:
             empty = ControllerMetrics.empty_status()

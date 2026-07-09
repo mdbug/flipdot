@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 CLOSE_FACE_DISTANCE = float(os.getenv("CLOSE_FACE_DISTANCE", "0.9"))
 VERY_CLOSE_FACE_DISTANCE = float(os.getenv("VERY_CLOSE_FACE_DISTANCE", "0.5"))
+FOCAL_SCALE = float(os.getenv("FOCAL_SCALE", "1.0"))
 
 # ---------------------------------------------------------------------------
 # MediaPipe Tasks API (>= 0.10) with GPU delegate, falling back to legacy API
@@ -41,7 +42,6 @@ _face_bg_lock = threading.Lock()
 _face_bg_frame = [None]  # latest frame to process (overwritten, not queued)
 _face_bg_result = [None]  # latest completed result
 _face_bg_event = threading.Event()
-_face_bg_ts = [0]  # monotonic timestamp counter (bg thread only)
 
 
 # ---------------------------------------------------------------------------
@@ -683,26 +683,28 @@ def eyes_visible_and_facing_camera(pose_results: Any) -> tuple[bool, str, float 
             return False, f"Not directly facing camera: {angle_deg:.1f}°", angle_deg
 
 
+# Known real-world landmark separations (meters) used by estimate_distance;
+# module-level because the estimate runs per frame in several policy branches.
+_KNOWN_DISTANCES: list[dict[str, Any]] = [
+    {"landmark0": 11, "landmark1": 12, "value": 0.45, "name": "shoulder width"},
+    {"landmark0": 23, "landmark1": 24, "value": 0.37, "name": "hip width"},
+    {"landmark0": 11, "landmark1": 23, "value": 0.4, "name": "left shoulder to hip"},
+    {"landmark0": 12, "landmark1": 24, "value": 0.4, "name": "right shoulder to hip"},
+    {"landmark0": 2, "landmark1": 5, "value": 0.06, "name": "eye distance"},
+    {"landmark0": 7, "landmark1": 8, "value": 0.14, "name": "ear distance"},
+]
+
+
 def estimate_distance(pose_results: Any) -> tuple[float | None, list]:
     """Return (distance, per-landmark estimates) from apparent body size."""
-    FOCAL_SCALE = float(os.getenv("FOCAL_SCALE", "1.0"))
-
     # Estimate distance based on the size of the person in the frame
     if pose_results is None or pose_results.pose_landmarks is None:
         return None, []
 
-    KNOWN_DISTANCES: list[dict[str, Any]] = [
-        {"landmark0": 11, "landmark1": 12, "value": 0.45, "name": "shoulder width"},
-        {"landmark0": 23, "landmark1": 24, "value": 0.37, "name": "hip width"},
-        {"landmark0": 11, "landmark1": 23, "value": 0.4, "name": "left shoulder to hip"},
-        {"landmark0": 12, "landmark1": 24, "value": 0.4, "name": "right shoulder to hip"},
-        {"landmark0": 2, "landmark1": 5, "value": 0.06, "name": "eye distance"},
-        {"landmark0": 7, "landmark1": 8, "value": 0.14, "name": "ear distance"},
-    ]
     landmarks = pose_results.pose_landmarks.landmark
 
     distance_estimates = []
-    for known_distance in KNOWN_DISTANCES:
+    for known_distance in _KNOWN_DISTANCES:
         landmark0 = landmarks[known_distance["landmark0"]]
         landmark1 = landmarks[known_distance["landmark1"]]
 
@@ -753,19 +755,6 @@ def get_right_index_finger_position(
             return x, y
 
     return None, None
-
-
-def is_right_index_in_top_right_corner(
-    pose_results: Any = None,
-) -> tuple[bool, float | None, float | None]:
-    """Return (in_corner, x, y) for the right index finger's panel position."""
-    x, y = get_right_index_finger_position(pose_results)
-
-    # Check if the index finger is in the top right corner (e.g., top 20% and right 20%)
-    if x is not None and y is not None and x < 0.2 and y < 0.2:
-        return True, x, y
-
-    return False, x, y
 
 
 def is_arms_crossed(pose_results: Any = None) -> bool:

@@ -1,6 +1,7 @@
 import logging
 import queue
 import threading
+import time
 
 import numpy as np
 import serial
@@ -19,11 +20,19 @@ class Panel:
     background thread; in preview mode it renders to an on-screen window.
     """
 
+    # Bound the serial write queue so a stalled port cannot grow it without
+    # limit; only the latest few frames matter on a display anyway.
+    WRITE_QUEUE_MAX_FRAMES = 4
+    # Throttle for the queue-full warning so a stalled port does not flood the
+    # log at the render rate.
+    DROP_WARN_INTERVAL_SEC = 5.0
+
     def __init__(self, preview: bool = False) -> None:
         self.preview = preview
         self.serial: serial.Serial | None = None
-        self._write_queue: queue.SimpleQueue[bytes] | None = None
+        self._write_queue: queue.Queue[bytes] | None = None
         self._writer_thread: threading.Thread | None = None
+        self._last_drop_warn_monotonic = 0.0
 
         if not preview:
             self.serial = serial.Serial(
@@ -36,7 +45,7 @@ class Panel:
             )
             # Background thread drains the write queue so the main loop
             # never blocks on serial I/O.
-            self._write_queue = queue.SimpleQueue()
+            self._write_queue = queue.Queue(maxsize=self.WRITE_QUEUE_MAX_FRAMES)
             self._writer_thread = threading.Thread(target=self._serial_writer, daemon=True)
             self._writer_thread.start()
             logger.info("Panel serial writer started on /dev/ttyUSB0")
@@ -93,6 +102,33 @@ class Panel:
                     module.set_content(new_slice)
                     serial_bytes.extend(module.fetch_serial_command().tobytes())
 
-        np.copyto(self._prev_frame, frame)
-        if serial_bytes and self._write_queue is not None:
-            self._write_queue.put(bytes(serial_bytes))
+        if serial_bytes:
+            if self._enqueue_serial(bytes(serial_bytes)):
+                np.copyto(self._prev_frame, frame)
+            else:
+                # The write was dropped: poison the diff baseline (255 matches
+                # no 0/1 frame) so every module is resent once the port drains,
+                # keeping the hardware in sync with what the loop believes is
+                # displayed.
+                self._prev_frame.fill(255)
+        else:
+            np.copyto(self._prev_frame, frame)
+
+    def _enqueue_serial(self, data: bytes) -> bool:
+        """Queue ``data`` for the serial writer; return False if it was dropped.
+
+        The queue is bounded so a stalled port cannot grow it without limit;
+        the caller resets its diff baseline on a drop so the panel resyncs.
+        """
+        assert self._write_queue is not None
+        try:
+            self._write_queue.put_nowait(data)
+            return True
+        except queue.Full:
+            now = time.monotonic()
+            if now - self._last_drop_warn_monotonic >= self.DROP_WARN_INTERVAL_SEC:
+                self._last_drop_warn_monotonic = now
+                logger.warning(
+                    "Panel serial write queue is full (stalled port?); dropping frame writes"
+                )
+            return False

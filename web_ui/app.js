@@ -64,7 +64,7 @@ const boardSaveNamed = document.getElementById("boardSaveNamed");
 const boardLoadNamed = document.getElementById("boardLoadNamed");
 const boardDeleteNamed = document.getElementById("boardDeleteNamed");
 
-const GRID = 28;
+const DEFAULT_GRID = 28;
 const HAS_POINTER_EVENTS = "PointerEvent" in window;
 const DRAW_TOOLS = new Set(["freehand", "line", "rectangle", "circle"]);
 const THEME = window.getComputedStyle(document.documentElement);
@@ -86,7 +86,11 @@ let selectedImageIds = new Set();
 let dragState = null;
 let dragMoveInFlight = false;
 let dragQueuedPosition = null;
-let latestFramePixels = Array.from({ length: GRID }, () => Array(GRID).fill(0));
+// Panel dimensions come from the frame payload (width/height); the defaults
+// only cover the moment before the first frame arrives.
+let gridWidth = DEFAULT_GRID;
+let gridHeight = DEFAULT_GRID;
+let latestFramePixels = Array.from({ length: gridHeight }, () => Array(gridWidth).fill(0));
 let activeBoardTool = "select";
 let previousDrawTool = "freehand";
 let sleepStatusTimer = null;
@@ -339,8 +343,24 @@ function clampBoardGlyphSpacing(value) {
 
 /** Snap a pixel size down to a whole multiple of the grid cell. @param {number} value @returns {number} */
 function snapToGridMultiple(value) {
-  const n = Math.max(GRID, Number.isFinite(value) ? Math.floor(value) : GRID);
-  return Math.max(GRID, Math.floor(n / GRID) * GRID);
+  const n = Math.max(gridWidth, Number.isFinite(value) ? Math.floor(value) : gridWidth);
+  return Math.max(gridWidth, Math.floor(n / gridWidth) * gridWidth);
+}
+
+/**
+ * Adopt the panel dimensions reported by a frame payload, resizing the canvas
+ * when they change (defaults cover the moment before the first frame).
+ * @param {number} width - Panel width in dots.
+ * @param {number} height - Panel height in dots.
+ */
+function updateGridSize(width, height) {
+  const w = toInt(width, DEFAULT_GRID);
+  const h = toInt(height, DEFAULT_GRID);
+  if (w > 0 && h > 0 && (w !== gridWidth || h !== gridHeight)) {
+    gridWidth = w;
+    gridHeight = h;
+    syncCanvasResolution();
+  }
 }
 
 /** Resize the canvas backing store to match its CSS size and DPR, then redraw. */
@@ -370,14 +390,14 @@ function syncCanvasResolution() {
 }
 
 /**
- * Deep-copy a GRID×GRID pixel array, coercing values to 0/1.
+ * Deep-copy a panel-sized pixel array, coercing values to 0/1.
  * @param {number[][]} pixels
  * @returns {number[][]} A fresh copy.
  */
 function clonePixels(pixels) {
-  const out = Array.from({ length: GRID }, () => Array(GRID).fill(0));
-  for (let y = 0; y < GRID; y += 1) {
-    for (let x = 0; x < GRID; x += 1) {
+  const out = Array.from({ length: gridHeight }, () => Array(gridWidth).fill(0));
+  for (let y = 0; y < gridHeight; y += 1) {
+    for (let x = 0; x < gridWidth; x += 1) {
       out[y][x] = pixels[y] && pixels[y][x] === 1 ? 1 : 0;
     }
   }
@@ -393,7 +413,7 @@ function themeColor(name, fallback) {
 /** Draw the full flip-dot grid (and any selection overlay) for the given pixels. @param {number[][]} pixels */
 function drawGrid(pixels) {
   ctx.imageSmoothingEnabled = false;
-  const cell = canvas.width / GRID;
+  const cell = canvas.width / gridWidth;
   const panelBack = themeColor("--surface-soft", "#15171b");
   const dotBack = themeColor("--ink", "#0b0d10");
   const dotOn = themeColor("--dot-on", "#f7d15c");
@@ -402,8 +422,8 @@ function drawGrid(pixels) {
   ctx.fillStyle = panelBack;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  for (let y = 0; y < GRID; y += 1) {
-    for (let x = 0; x < GRID; x += 1) {
+  for (let y = 0; y < gridHeight; y += 1) {
+    for (let x = 0; x < gridWidth; x += 1) {
       const on = pixels[y] && pixels[y][x] === 1;
       const cx = x * cell + cell * 0.5;
       const cy = y * cell + cell * 0.5;
@@ -486,7 +506,7 @@ function drawSelectionOverlay(cell) {
  * @param {number} [lineWidth] - Brush size in pixels.
  */
 function setPreviewPixel(pixels, x, y, drawValue = 1, lineWidth = 1) {
-  if (x < 0 || x >= GRID || y < 0 || y >= GRID) {
+  if (x < 0 || x >= gridWidth || y < 0 || y >= gridHeight) {
     return;
   }
   const width = Math.max(1, Math.min(8, toInt(lineWidth, 1)));
@@ -495,11 +515,11 @@ function setPreviewPixel(pixels, x, y, drawValue = 1, lineWidth = 1) {
   const y0 = y - Math.floor(width / 2);
 
   for (let row = y0; row < y0 + width; row += 1) {
-    if (row < 0 || row >= GRID) {
+    if (row < 0 || row >= gridHeight) {
       continue;
     }
     for (let col = x0; col < x0 + width; col += 1) {
-      if (col < 0 || col >= GRID) {
+      if (col < 0 || col >= gridWidth) {
         continue;
       }
       pixels[row][col] = value;
@@ -510,8 +530,8 @@ function setPreviewPixel(pixels, x, y, drawValue = 1, lineWidth = 1) {
 /** Convert a normalized [0,1] position to integer grid pixel coords. @param {{x:number,y:number}} pos @returns {{x:number,y:number}} */
 function pixelPointFromNorm(pos) {
   return {
-    x: Math.min(GRID - 1, Math.floor(Math.max(0, Math.min(1, Number(pos.x))) * GRID)),
-    y: Math.min(GRID - 1, Math.floor(Math.max(0, Math.min(1, Number(pos.y))) * GRID)),
+    x: Math.min(gridWidth - 1, Math.floor(Math.max(0, Math.min(1, Number(pos.x))) * gridWidth)),
+    y: Math.min(gridHeight - 1, Math.floor(Math.max(0, Math.min(1, Number(pos.y))) * gridHeight)),
   };
 }
 
@@ -693,11 +713,16 @@ function isBoardMode() {
   return currentMode === "board";
 }
 
-/** Convert a normalized [0,1] coordinate to an integer grid pixel index. @param {number} norm @returns {number} */
-function toGridPixel(norm) {
+/**
+ * Convert a normalized [0,1] coordinate to an integer grid pixel index.
+ * @param {number} norm - Normalized coordinate.
+ * @param {number} [axisSize] - Grid size along the axis (defaults to the width).
+ * @returns {number} Pixel index clamped to the axis.
+ */
+function toGridPixel(norm, axisSize = gridWidth) {
   const value = Number(norm);
   const clamped = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
-  return Math.min(GRID - 1, Math.floor(clamped * GRID));
+  return Math.min(axisSize - 1, Math.floor(clamped * axisSize));
 }
 
 /** Parse an integer, returning a fallback if invalid. @param {*} value @param {number} fallback @returns {number} */
@@ -1844,7 +1869,7 @@ async function beginObjectDrag(pos) {
   }
 
   const pixelX = toGridPixel(pos.x);
-  const pixelY = toGridPixel(pos.y);
+  const pixelY = toGridPixel(pos.y, gridHeight);
   dragState = {
     anchorX: pixelX,
     anchorY: pixelY,
@@ -1874,7 +1899,7 @@ function updateObjectDrag(pos) {
   }
 
   const pixelX = toGridPixel(pos.x);
-  const pixelY = toGridPixel(pos.y);
+  const pixelY = toGridPixel(pos.y, gridHeight);
   const deltaX = pixelX - dragState.anchorX;
   const deltaY = pixelY - dragState.anchorY;
   const nextItems = dragState.items.map((item) => ({
@@ -1915,7 +1940,7 @@ async function placeTextAt(pos) {
   const response = await postJson("/api/board/text-objects", {
     text: boardText.value || "",
     x: toGridPixel(pos.x),
-    y: toGridPixel(pos.y),
+    y: toGridPixel(pos.y, gridHeight),
     font: boardFontFamily.value || "classic",
     size: toInt(boardFontSize.value, 5),
     style: boardFontStyle.value || "regular",
@@ -2131,7 +2156,7 @@ canvas.addEventListener("pointerdown", async (event) => {
   }
 
   if (isBoardMode() && activeBoardTool === "image") {
-    await uploadImageAt(toGridPixel(pos.x), toGridPixel(pos.y));
+    await uploadImageAt(toGridPixel(pos.x), toGridPixel(pos.y, gridHeight));
     return;
   }
 
@@ -2329,6 +2354,7 @@ function startWebSocket() {
       return;
     }
     lastVersion = data.version;
+    updateGridSize(data.width, data.height);
     latestFramePixels = clonePixels(data.pixels);
     setMode(data.mode);
     renderControls(data.controls);
@@ -2359,6 +2385,7 @@ function startWebSocket() {
             return;
           }
           lastVersion = data.version;
+          updateGridSize(data.width, data.height);
           latestFramePixels = clonePixels(data.pixels);
           setMode(data.mode);
           renderControls(data.controls);

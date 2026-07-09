@@ -185,3 +185,54 @@ def test_resume_restores_model_lock(client):
     # Deleting the active session clears the lock again.
     c.delete(f"/api/chat/sessions/{session_id}")
     assert server._chat_model is None
+
+
+def test_failed_turn_drops_unanswered_user_message(client, monkeypatch):
+    c, server = client
+    from app.infrastructure import chat as chat_backend
+
+    async def failing_run_chat(mcp, messages, *, model=None):
+        # Errored out before any assistant reply was appended.
+        yield chat_backend._event({"type": "error", "message": "no key"})
+
+    monkeypatch.setattr(chat_backend, "run_chat", failing_run_chat)
+
+    c.post("/api/chat", json={"message": "hi", "model": "gpt-5.4-mini"})
+
+    # The unanswered user message is dropped, nothing is persisted, and the
+    # fresh conversation's model lock is released again.
+    assert server._chat_messages == []
+    assert server._chat_session_id is None
+    assert server._chat_model is None
+    assert c.get("/api/chat/sessions").json()["sessions"] == []
+
+
+def test_usage_event_is_parsed_not_sniffed(client, monkeypatch):
+    c, server = client
+    from app.infrastructure import chat as chat_backend
+
+    async def fake_run_chat(mcp, messages, *, model=None):
+        # Assistant text that merely CONTAINS the usage marker string must not
+        # be mistaken for the usage event itself.
+        yield chat_backend._event({"type": "text", "text": 'the marker is "type": "usage"'})
+        messages.append({"role": "assistant", "content": "ok"})
+        yield chat_backend._event(
+            {
+                "type": "usage",
+                "input": 7,
+                "output": 3,
+                "cache_write": 0,
+                "cache_read": 0,
+                "cost": 0.5,
+            }
+        )
+        yield chat_backend._event({"type": "done"})
+
+    monkeypatch.setattr(chat_backend, "run_chat", fake_run_chat)
+
+    c.post("/api/chat", json={"message": "hi", "model": "gpt-5.4-mini"})
+
+    usage = server._chat_sessions.load(server._chat_session_id)["usage"]
+    assert usage["input"] == 7
+    assert usage["output"] == 3
+    assert usage["cost"] == 0.5

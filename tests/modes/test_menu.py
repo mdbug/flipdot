@@ -70,7 +70,10 @@ def test_menuitem_hover_triggers_click_after_dwell(monkeypatch):
 
     calls = {"count": 0}
     item = menu_module.MenuItem(
-        "A", row=0, width=28, on_click=lambda: calls.__setitem__("count", calls["count"] + 1)
+        "A",
+        row=0,
+        width=28,
+        on_click=lambda source=None: calls.__setitem__("count", calls["count"] + 1),
     )
 
     item.hover(True)
@@ -269,7 +272,7 @@ def test_checkbox_click_accepts_a_source(monkeypatch):
         0,
         28,
         checked=False,
-        on_click=lambda: calls.__setitem__("count", calls["count"] + 1),
+        on_click=lambda source=None: calls.__setitem__("count", calls["count"] + 1),
     )
 
     checkbox.click("web")
@@ -290,7 +293,7 @@ def test_checkbox_hover_dwell_click_does_not_crash(monkeypatch):
         0,
         28,
         checked=False,
-        on_click=lambda: calls.__setitem__("count", calls["count"] + 1),
+        on_click=lambda source=None: calls.__setitem__("count", calls["count"] + 1),
     )
 
     checkbox.hover(True, source="gesture")

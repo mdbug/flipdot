@@ -359,29 +359,6 @@ class ControllerHub:
         candidates.sort(key=lambda item: item[0], reverse=True)
         return [device for _, device in candidates]
 
-    def _find_matching_device(self):
-        devices = self._find_matching_devices()
-        if not devices:
-            return None
-
-        selected_device = devices[0]
-        selected_score = self._device_score(selected_device)
-        for device in devices[1:]:
-            try:
-                device.close()
-            except Exception:
-                pass
-
-        logger.info(
-            "Controller connected: name=%s path=%s address=%s score=%s candidates=%s",
-            getattr(selected_device, "name", ""),
-            getattr(selected_device, "path", ""),
-            self._extract_device_address(selected_device),
-            selected_score,
-            len(devices),
-        )
-        return selected_device
-
     def _device_matches(self, device) -> bool:
         candidates = [
             self._normalize_address(getattr(device, "uniq", "")),
@@ -478,30 +455,6 @@ class ControllerHub:
             except Exception:
                 continue
         return out
-
-    def _set_connected(self, device) -> None:
-        with self._lock:
-            self._connected = True
-            self._device_name = str(getattr(device, "name", ""))
-            self._device_path = str(getattr(device, "path", ""))
-            self._device_address = self._extract_device_address(device)
-            self._pressed_buttons.clear()
-            self._pressed_buttons_by_device = {}
-            self._just_pressed.clear()
-            self._battery_percentage = None
-            self._battery_updated_monotonic = None
-            self._battery_source = None
-            self._battery_poll_duration_ms = None
-            self._rssi_dbm = None
-            self._tx_power_dbm = None
-            self._link_quality = None
-            self._signal_source = None
-            self._connection_interval_ms = None
-            self._connection_latency = None
-            self._supervision_timeout_ms = None
-            self._connection_params_source = None
-            self._bluetooth_metrics_updated_monotonic = None
-            self._bluetooth_metrics_poll_duration_ms = None
 
     def _set_connected_devices(self, devices) -> None:
         if not devices:

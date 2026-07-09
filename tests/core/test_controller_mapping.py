@@ -402,3 +402,77 @@ def test_pong_two_controllers_are_two_player(monkeypatch):
     sides = {side for side, _ in pong.targets}
     assert "right" in sides
     assert "left" in sides
+
+
+class DummyTank:
+    def __init__(self):
+        self.inputs = []
+        self.fires = []
+        self.restarts = 0
+
+    def set_controller_input(self, side, *, move_x, move_y):
+        self.inputs.append((side, move_x, move_y))
+
+    def fire(self, side, now=None):
+        self.fires.append(side)
+
+    def restart_if_game_over(self):
+        self.restarts += 1
+
+
+def test_tank_fire_uses_latched_edges_for_quick_taps(monkeypatch):
+    # The tap went down and up entirely between two render samples: the level
+    # state no longer shows A, but the input thread latched the down-edge.
+    # Level diffing alone would miss the shot.
+    monkeypatch.setattr("app.services.controller_mapping.time.time", lambda: 7.0)
+    bridge = ControllerInputBridge()
+    tank = DummyTank()
+    bridge.process(
+        snapshot={"enabled": True, "connected": True, "pressed_buttons": []},
+        primary_snapshot={"enabled": True, "connected": True, "pressed_buttons": []},
+        mode=ModeManager.MODE_TANK,
+        input_hub=DummyInputHub(),
+        mode_manager=DummyModeManager(),
+        menu=DummyMenu(),
+        paint=DummyPaint(),
+        autodrum=DummyAutoDrum(),
+        board=DummyBoard(),
+        font_preview=DummyFontPreview(),
+        tetris_game=DummyTetris(),
+        pong_game=DummyPong(),
+        tank_game=tank,
+        percussion=DummyPercussion(),
+        pressed_events={"A"},
+        primary_pressed_events={"A"},
+        secondary_pressed_events=set(),
+    )
+    assert tank.fires == ["right"]
+
+
+def test_tank_fire_edges_are_per_side(monkeypatch):
+    # An edge latched by the secondary hub must fire only the left tank, even
+    # though the merged edge set contains it too.
+    monkeypatch.setattr("app.services.controller_mapping.time.time", lambda: 8.0)
+    bridge = ControllerInputBridge()
+    tank = DummyTank()
+    bridge.process(
+        snapshot={"enabled": True, "connected": True, "pressed_buttons": []},
+        primary_snapshot={"enabled": True, "connected": True, "pressed_buttons": []},
+        secondary_snapshot={"enabled": True, "connected": True, "pressed_buttons": []},
+        mode=ModeManager.MODE_TANK,
+        input_hub=DummyInputHub(),
+        mode_manager=DummyModeManager(),
+        menu=DummyMenu(),
+        paint=DummyPaint(),
+        autodrum=DummyAutoDrum(),
+        board=DummyBoard(),
+        font_preview=DummyFontPreview(),
+        tetris_game=DummyTetris(),
+        pong_game=DummyPong(),
+        tank_game=tank,
+        percussion=DummyPercussion(),
+        pressed_events={"A"},
+        primary_pressed_events=set(),
+        secondary_pressed_events={"A"},
+    )
+    assert tank.fires == ["left"]

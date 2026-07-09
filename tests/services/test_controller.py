@@ -95,10 +95,10 @@ def test_controller_matching_uses_target_bluetooth_address():
     )
     hub = ControllerHub(target_address=target, evdev_module=fake_evdev, auto_start=False)
 
-    device = hub._find_matching_device()
+    devices = hub._find_matching_devices()
 
-    assert device is not None
-    assert device.path == "/dev/input/event10"
+    assert devices
+    assert devices[0].path == "/dev/input/event10"
 
 
 def test_controller_matching_does_not_fallback_to_name_when_address_set():
@@ -148,12 +148,14 @@ def test_button_press_and_release_updates_snapshot(monkeypatch):
 
     monkeypatch.setattr("app.services.controller.time.monotonic", fake_monotonic)
 
-    hub._set_connected(
-        FakeInputDevice(
-            path="/dev/input/event10",
-            name="Wireless Controller",
-            uniq="aa:bb:cc:dd:ee:01",
-        )
+    hub._set_connected_devices(
+        [
+            FakeInputDevice(
+                path="/dev/input/event10",
+                name="Wireless Controller",
+                uniq="aa:bb:cc:dd:ee:01",
+            )
+        ]
     )
     hub._apply_button_state("A", 1)
 
@@ -275,10 +277,10 @@ def test_controller_matching_prefers_highest_capability_score():
     )
 
     hub = ControllerHub(target_address=target, evdev_module=fake_evdev, auto_start=False)
-    device = hub._find_matching_device()
+    devices = hub._find_matching_devices()
 
-    assert device is not None
-    assert device.path == "/dev/input/event2"
+    assert devices
+    assert devices[0].path == "/dev/input/event2"
 
 
 def test_button_state_is_merged_across_devices():

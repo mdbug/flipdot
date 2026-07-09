@@ -63,8 +63,16 @@ class ControllerInputBridge:
         percussion: Any,
         tank_game: Any = None,
         pressed_events: set[str] | None = None,
+        primary_pressed_events: set[str] | None = None,
+        secondary_pressed_events: set[str] | None = None,
     ) -> None:
-        """Apply one controller snapshot to the active mode for this frame."""
+        """Apply one controller snapshot to the active mode for this frame.
+
+        ``pressed_events`` carries the input thread's latched down-edges merged
+        across both controllers; ``primary_pressed_events`` and
+        ``secondary_pressed_events`` carry the same edges per hub, for modes
+        that assign one controller per player (tank).
+        """
         now = time.time()
         connected = bool(snapshot.get("enabled")) and bool(snapshot.get("connected"))
         pressed = set(snapshot.get("pressed_buttons", [])) if connected else set()
@@ -268,21 +276,28 @@ class ControllerInputBridge:
             # Primary drives the right tank; secondary (when present) the left.
             # With a single controller, fall back to the merged snapshot so a
             # lone pad still steers the right tank against the AI.
-            sides: list[tuple[str, set[str], str]] = []
+            sides: list[tuple[str, set[str], str, set[str] | None]] = []
             if primary_connected:
-                sides.append(("right", primary_pressed, "tank_prev_right"))
+                sides.append(("right", primary_pressed, "tank_prev_right", primary_pressed_events))
             if secondary_connected:
-                sides.append(("left", secondary_pressed, "tank_prev_left"))
+                sides.append(
+                    ("left", secondary_pressed, "tank_prev_left", secondary_pressed_events)
+                )
             if not sides and connected:
-                sides.append(("right", pressed, "tank_prev_right"))
+                sides.append(("right", pressed, "tank_prev_right", pressed_events))
 
             driven = {"left": False, "right": False}
-            for side, held, prev_attr in sides:
+            for side, held, prev_attr, edges in sides:
                 move_x = (1 if "D-Right" in held else 0) - (1 if "D-Left" in held else 0)
                 move_y = (1 if "D-Down" in held else 0) - (1 if "D-Up" in held else 0)
                 tank_game.set_controller_input(side, move_x=move_x, move_y=move_y)
                 prev = getattr(self._state, prev_attr)
-                if "A" in held and "A" not in prev:
+                # Prefer the input thread's latched down-edges: a quick tap can
+                # go down and up entirely between two render samples, which
+                # level diffing would miss. Fall back to the diff when no edge
+                # set is supplied (e.g. in unit tests).
+                fired = ("A" in edges) if edges is not None else ("A" in held and "A" not in prev)
+                if fired:
                     tank_game.fire(side, now)
                 setattr(self._state, prev_attr, set(held))
                 driven[side] = True
