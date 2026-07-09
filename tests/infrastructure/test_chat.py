@@ -115,20 +115,79 @@ def test_call_mcp_tool_executes_against_server():
     mode_manager = DummyModeManager()
     mcp = _build_mcp(mode_manager=mode_manager)
 
-    text, is_error = asyncio.run(chat_backend._call_mcp_tool(mcp, "set_mode", {"mode": "board"}))
+    blocks, is_error = asyncio.run(chat_backend._call_mcp_tool(mcp, "set_mode", {"mode": "board"}))
 
     assert is_error is False
     assert mode_manager.mode == "board"
+    text = "\n".join(b["text"] for b in blocks if b["type"] == "text")
     assert "board" in text
 
 
 def test_call_mcp_tool_reports_errors():
     mcp = _build_mcp()
-    text, is_error = asyncio.run(
+    blocks, is_error = asyncio.run(
         chat_backend._call_mcp_tool(mcp, "set_mode", {"mode": "not-a-real-mode"})
     )
     assert is_error is True
-    assert "Error" in text
+    assert any("Error" in b["text"] for b in blocks if b["type"] == "text")
+
+
+def test_call_mcp_tool_preserves_image_blocks_from_get_display():
+    mcp = _build_mcp()
+
+    blocks, is_error = asyncio.run(chat_backend._call_mcp_tool(mcp, "get_display", {}))
+
+    assert is_error is False
+    images = [b for b in blocks if b["type"] == "image"]
+    assert len(images) == 1
+    assert images[0]["mime"] == "image/png"
+    assert images[0]["data"]  # non-empty base64
+
+
+def test_split_tool_blocks_vision_drops_ascii_and_keeps_image():
+    blocks = [
+        {"type": "image", "data": "abc", "mime": "image/png"},
+        {
+            "type": "text",
+            "text": json.dumps({"mode": "clock", "width": 28, "height": 28, "ascii": "····"}),
+        },
+    ]
+
+    text, images = chat_backend.split_tool_blocks(blocks, supports_vision=True)
+
+    assert len(images) == 1
+    assert "ascii" not in text.lower()  # replaced by a compact caption
+    assert "clock" in text and "28x28" in text
+
+
+def test_split_tool_blocks_without_vision_keeps_ascii_drops_image():
+    ascii_payload = json.dumps({"mode": "clock", "width": 28, "height": 28, "ascii": "█···"})
+    blocks = [
+        {"type": "image", "data": "abc", "mime": "image/png"},
+        {"type": "text", "text": ascii_payload},
+    ]
+
+    text, images = chat_backend.split_tool_blocks(blocks, supports_vision=False)
+
+    assert images == []
+    assert text == ascii_payload
+
+
+def test_anthropic_tool_result_content_shapes_by_vision():
+    blocks = [
+        {"type": "image", "data": "abc", "mime": "image/png"},
+        {
+            "type": "text",
+            "text": json.dumps({"mode": "clock", "width": 28, "height": 28, "ascii": "x"}),
+        },
+    ]
+
+    vision = chat_backend._anthropic_tool_result_content(blocks, supports_vision=True)
+    assert isinstance(vision, list)
+    assert any(b["type"] == "image" and b["source"]["data"] == "abc" for b in vision)
+
+    text_only = chat_backend._anthropic_tool_result_content(blocks, supports_vision=False)
+    assert isinstance(text_only, str)
 
 
 def test_run_chat_without_credentials_streams_error(monkeypatch):

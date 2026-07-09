@@ -4,7 +4,7 @@ import pytest
 
 pytest.importorskip("mcp")
 
-from app.infrastructure.mcp_server import build_flipdot_mcp
+from app.infrastructure.mcp_server import _DISPLAY_IMAGE_SCALE, _frame_to_png, build_flipdot_mcp
 
 
 class DummyModeManager:
@@ -103,6 +103,40 @@ def test_mcp_registers_expected_tools():
         "load_board",
     }
     assert expected.issubset(names)
+
+
+def test_frame_to_png_upscales_to_expected_dimensions():
+    import io
+
+    from PIL import Image as PILImage
+
+    frame = [[1 if (r + c) % 2 == 0 else 0 for c in range(28)] for r in range(28)]
+    png = _frame_to_png(frame)
+
+    image = PILImage.open(io.BytesIO(png))
+    assert image.format == "PNG"
+    assert image.size == (28 * _DISPLAY_IMAGE_SCALE, 28 * _DISPLAY_IMAGE_SCALE)
+    # A lit corner pixel stays white after nearest-neighbour upscaling.
+    assert image.convert("L").getpixel((0, 0)) == 255
+
+
+def test_get_display_returns_image_and_ascii():
+    import json
+
+    mcp = _build(DummyModeManager(), DummyBoard(), DummyTransitionPolicy(), DummySettingsStore())
+
+    result = asyncio.run(mcp.call_tool("get_display", {}))
+    content = result[0] if isinstance(result, tuple) else result
+
+    image_blocks = [b for b in content if getattr(b, "type", None) == "image"]
+    text_blocks = [b for b in content if getattr(b, "text", None) is not None]
+    assert len(image_blocks) == 1
+    assert image_blocks[0].mimeType == "image/png"
+
+    payload = json.loads(text_blocks[0].text)
+    assert payload["mode"] == "clock"
+    assert payload["width"] == 28
+    assert "ascii" in payload
 
 
 def test_set_mode_tool_drives_mode_manager():

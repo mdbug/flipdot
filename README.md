@@ -138,7 +138,7 @@ The GIF shows the web console mirroring the panel live, running what that conver
 | ![Controller metrics diagnostics page](docs/screenshots/metrics.png) | ![RSSI graph of both controllers over time](docs/screenshots/metrics-rssi.png) |
 | *BLE controller link diagnostics* | *Live RSSI history for both gamepads* |
 
-The same tool set (`get_display` as ASCII art, `set_mode`, board drawing, `run_script`, …) is exposed over **MCP** at `/mcp` for external AI agents. The endpoint stays disabled until `MCP_AUTH_TOKEN` is set, and is bearer-token-gated with DNS-rebinding protection.
+The same tool set (`get_display` returns the panel as a PNG image plus ASCII art, `set_mode`, board drawing, `run_script`, …) is exposed over **MCP** at `/mcp` for external AI agents. The endpoint stays disabled until `MCP_AUTH_TOKEN` is set, and is bearer-token-gated with DNS-rebinding protection.
 
 **Scripted animations** are Python `setup`/`step` frame generators, typically written by the LLM. They run in a four-layer sandbox: an AST allow-list (only `numpy`/`math`/`random`), [bubblewrap](https://github.com/containers/bubblewrap) OS isolation (no network or filesystem; fails closed if `bwrap` is missing), a restricted-builtins subprocess, and rlimits with per-frame timeouts.
 

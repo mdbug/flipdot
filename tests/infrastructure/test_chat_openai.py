@@ -216,6 +216,54 @@ def test_openrouter_uses_api_reported_cost(monkeypatch):
     assert fake.chat.completions.calls[0]["extra_body"] == {"usage": {"include": True}}
 
 
+def test_vision_model_appends_image_user_message_after_get_display(monkeypatch):
+    mcp = _build_mcp()
+    script = [
+        [
+            _FakeChunk(
+                choices=[
+                    _FakeChoice(
+                        delta=_FakeDelta(
+                            tool_calls=[_FakeCallDelta(0, id="call_1", name="get_display")]
+                        )
+                    )
+                ]
+            ),
+            _FakeChunk(
+                choices=[
+                    _FakeChoice(
+                        delta=_FakeDelta(tool_calls=[_FakeCallDelta(0, arguments="{}")]),
+                        finish_reason="tool_calls",
+                    )
+                ]
+            ),
+            _FakeChunk(usage=_FakeUsage(prompt=1000, completion=100)),
+        ],
+        [
+            _FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content="I see it."))]),
+            _FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(), finish_reason="stop")]),
+            _FakeChunk(usage=_FakeUsage(prompt=1000, completion=100)),
+        ],
+    ]
+    fake = _FakeOpenAIClient(script)
+    monkeypatch.setattr(chat_openai, "get_async_client", lambda provider: fake)
+
+    messages = [{"role": "user", "content": "what's on the display?"}]
+    _collect(mcp, messages, "gpt-5.5")
+
+    # The get_display image rides a follow-up user message (tool messages are text-only).
+    image_messages = [
+        m
+        for m in messages
+        if m["role"] == "user"
+        and isinstance(m["content"], list)
+        and any(part.get("type") == "image_url" for part in m["content"])
+    ]
+    assert len(image_messages) == 1
+    url = image_messages[0]["content"][0]["image_url"]["url"]
+    assert url.startswith("data:image/png;base64,")
+
+
 def test_openai_loop_without_key_streams_error(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     chat_openai._clients.clear()

@@ -36,14 +36,27 @@ MODELS: dict[str, dict[str, Any]] = {
         "provider": PROVIDER_ANTHROPIC,
         "label": "Claude Haiku 4.5",
         "thinking": False,
+        "supports_vision": True,
     },
-    "claude-sonnet-5": {"provider": PROVIDER_ANTHROPIC, "label": "Claude Sonnet 5"},
-    "claude-opus-4-8": {"provider": PROVIDER_ANTHROPIC, "label": "Claude Opus 4.8"},
-    "claude-fable-5": {"provider": PROVIDER_ANTHROPIC, "label": "Claude Fable 5"},
-    "gpt-5.4-nano": {"provider": PROVIDER_OPENAI, "label": "GPT-5.4 nano"},
-    "gpt-5.4-mini": {"provider": PROVIDER_OPENAI, "label": "GPT-5.4 mini"},
-    "gpt-5.4": {"provider": PROVIDER_OPENAI, "label": "GPT-5.4"},
-    "gpt-5.5": {"provider": PROVIDER_OPENAI, "label": "GPT-5.5"},
+    "claude-sonnet-5": {
+        "provider": PROVIDER_ANTHROPIC,
+        "label": "Claude Sonnet 5",
+        "supports_vision": True,
+    },
+    "claude-opus-4-8": {
+        "provider": PROVIDER_ANTHROPIC,
+        "label": "Claude Opus 4.8",
+        "supports_vision": True,
+    },
+    "claude-fable-5": {
+        "provider": PROVIDER_ANTHROPIC,
+        "label": "Claude Fable 5",
+        "supports_vision": True,
+    },
+    "gpt-5.4-nano": {"provider": PROVIDER_OPENAI, "label": "GPT-5.4 nano", "supports_vision": True},
+    "gpt-5.4-mini": {"provider": PROVIDER_OPENAI, "label": "GPT-5.4 mini", "supports_vision": True},
+    "gpt-5.4": {"provider": PROVIDER_OPENAI, "label": "GPT-5.4", "supports_vision": True},
+    "gpt-5.5": {"provider": PROVIDER_OPENAI, "label": "GPT-5.5", "supports_vision": True},
     "deepseek/deepseek-v4-flash": {
         "provider": PROVIDER_OPENROUTER,
         "label": "DeepSeek V4 Flash",
@@ -212,22 +225,67 @@ async def _mcp_tool_schemas(mcp: Any) -> list[dict]:
     return schemas
 
 
-async def _call_mcp_tool(mcp: Any, name: str, arguments: dict | None) -> tuple[str, bool]:
-    """Execute one MCP tool and return (text, is_error)."""
+async def _call_mcp_tool(mcp: Any, name: str, arguments: dict | None) -> tuple[list[dict], bool]:
+    """Execute one MCP tool and return (normalized blocks, is_error).
+
+    Each block is ``{"type": "text", "text": ...}`` or
+    ``{"type": "image", "data": <base64>, "mime": <mimeType>}``. Image blocks are
+    preserved here (rather than flattened to text) so vision-capable providers can
+    forward them to the model; :func:`split_tool_blocks` picks them apart per model.
+    """
     try:
         result = await mcp.call_tool(name, arguments or {})
     except Exception as exc:  # noqa: BLE001 - surface tool failures back to Claude
-        return f"Error calling {name}: {exc}", True
+        return [{"type": "text", "text": f"Error calling {name}: {exc}"}], True
 
     # FastMCP.call_tool returns either a sequence of content blocks or a
     # (content, structured_result) tuple depending on SDK version.
     content = result[0] if isinstance(result, tuple) else result
-    parts: list[str] = []
+    blocks: list[dict] = []
     for block in content or []:
+        if getattr(block, "type", None) == "image":
+            blocks.append({"type": "image", "data": block.data, "mime": block.mimeType})
+            continue
         text = getattr(block, "text", None)
         if text is not None:
-            parts.append(text)
-    return ("\n".join(parts) or "(no output)", False)
+            blocks.append({"type": "text", "text": text})
+    return blocks, False
+
+
+def split_tool_blocks(blocks: list[dict], supports_vision: bool) -> tuple[str, list[dict]]:
+    """Reduce normalized tool blocks to (text, image_blocks) for the active model.
+
+    The text joins every text block, except that when the model supports vision
+    and an image is present, a text block that JSON-decodes to a board dict (has
+    an ``"ascii"`` key) is replaced by a compact mode caption — the image already
+    conveys the pixels, so the redundant ASCII is dropped to save tokens. When the
+    model has no vision, images are dropped and every text block is kept verbatim.
+    """
+    image_blocks = [b for b in blocks if b["type"] == "image"] if supports_vision else []
+    have_image = bool(image_blocks)
+    parts: list[str] = []
+    for block in blocks:
+        if block["type"] != "text":
+            continue
+        text = block["text"]
+        if have_image:
+            caption = _board_caption(text)
+            if caption is not None:
+                parts.append(caption)
+                continue
+        parts.append(text)
+    return ("\n".join(parts) or "(no output)", image_blocks)
+
+
+def _board_caption(text: str) -> str | None:
+    """Return a compact caption for a get_display JSON block, or None if it isn't one."""
+    try:
+        payload = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict) or "ascii" not in payload:
+        return None
+    return f"Active mode: {payload.get('mode')} ({payload.get('width')}x{payload.get('height')})."
 
 
 def _event(payload: dict) -> str:
@@ -409,6 +467,26 @@ async def run_chat(
         yield event
 
 
+def _anthropic_tool_result_content(blocks: list[dict], supports_vision: bool) -> str | list[dict]:
+    """Build Anthropic ``tool_result`` content from normalized tool blocks.
+
+    Returns a plain string when there are no images (unchanged behavior), or a
+    content list mixing text and base64 image source blocks for vision models.
+    """
+    text, image_blocks = split_tool_blocks(blocks, supports_vision)
+    if not image_blocks:
+        return text
+    content: list[dict] = [{"type": "text", "text": text}]
+    content.extend(
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": block["mime"], "data": block["data"]},
+        }
+        for block in image_blocks
+    )
+    return content
+
+
 async def _run_anthropic_chat(mcp: Any, messages: list[dict], *, model: str) -> AsyncIterator[str]:
     """Run the Anthropic streaming agentic loop, yielding NDJSON event strings."""
     try:
@@ -417,6 +495,7 @@ async def _run_anthropic_chat(mcp: Any, messages: list[dict], *, model: str) -> 
         yield _event({"type": "error", "message": str(exc)})
         return
 
+    supports_vision = MODELS.get(model, {}).get("supports_vision", False)
     tools = await _mcp_tool_schemas(mcp)
 
     # ``messages`` is mutated in place each turn; a per-call copy with the moving
@@ -493,12 +572,13 @@ async def _run_anthropic_chat(mcp: Any, messages: list[dict], *, model: str) -> 
                 if block.type != "tool_use":
                     continue
                 yield _event({"type": "tool", "name": block.name, "input": block.input})
-                output, is_error = await _call_mcp_tool(mcp, block.name, block.input)
+                blocks, is_error = await _call_mcp_tool(mcp, block.name, block.input)
+                content = _anthropic_tool_result_content(blocks, supports_vision)
                 tool_results.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": block.id,
-                        "content": output,
+                        "content": content,
                         "is_error": is_error,
                     }
                 )

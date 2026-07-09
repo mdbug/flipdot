@@ -150,6 +150,7 @@ async def run_openai_chat(mcp: Any, messages: list[dict], *, model: str) -> Asyn
     """
     _event = chat_backend._event
     provider = chat_backend.MODELS[model]["provider"]
+    supports_vision = chat_backend.MODELS.get(model, {}).get("supports_vision", False)
     try:
         client = get_async_client(provider)
     except chat_backend.ChatUnavailable as exc:
@@ -218,6 +219,9 @@ async def run_openai_chat(mcp: Any, messages: list[dict], *, model: str) -> Asyn
             if finish_reason != "tool_calls" or not calls:
                 break
 
+            # A role:"tool" message is text-only, so any image a tool returns is
+            # collected here and appended as a follow-up user message below.
+            pending_images: list[dict] = []
             for call in calls:
                 name = call["function"]["name"]
                 arguments, parse_error = _parse_arguments(call["function"]["arguments"])
@@ -225,8 +229,23 @@ async def run_openai_chat(mcp: Any, messages: list[dict], *, model: str) -> Asyn
                 if parse_error is not None:
                     output = parse_error
                 else:
-                    output, _ = await chat_backend._call_mcp_tool(mcp, name, arguments)
+                    blocks, _ = await chat_backend._call_mcp_tool(mcp, name, arguments)
+                    output, image_blocks = chat_backend.split_tool_blocks(blocks, supports_vision)
+                    pending_images.extend(image_blocks)
                 messages.append({"role": "tool", "tool_call_id": call["id"], "content": output})
+            if pending_images:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{img['mime']};base64,{img['data']}"},
+                            }
+                            for img in pending_images
+                        ],
+                    }
+                )
     except Exception as exc:  # noqa: BLE001 - report API/stream failures to the UI
         yield _event({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
         return

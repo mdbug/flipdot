@@ -10,11 +10,15 @@ over the same host/port as the browser console.
 from __future__ import annotations
 
 import base64
+import json
 from collections.abc import Callable
+from io import BytesIO
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Image as MCPImage
 from mcp.server.transport_security import TransportSecuritySettings
+from PIL import Image as PILImage
 
 from app.core.mode_manager import ModeManager
 
@@ -48,6 +52,27 @@ _SHAPE_ALIASES = {
 def _frame_to_ascii(pixels: list[list[int]]) -> str:
     """Render a binary frame as ASCII so an agent can 'see' the display."""
     return "\n".join("".join("█" if cell else "·" for cell in row) for row in pixels)
+
+
+# Nearest-neighbour upscale factor for the get_display PNG. 28x28 -> 280x280
+# keeps a vision model's per-image token cost low while staying legible.
+_DISPLAY_IMAGE_SCALE = 10
+
+
+def _frame_to_png(pixels: list[list[int]], scale: int = _DISPLAY_IMAGE_SCALE) -> bytes:
+    """Render a binary frame as an upscaled grayscale PNG so a vision model can see it.
+
+    Lit dots are white on a black background; each pixel is expanded to a
+    ``scale``x``scale`` block with nearest-neighbour resizing (no antialiasing).
+    """
+    height = len(pixels)
+    width = len(pixels[0]) if height else 0
+    image = PILImage.new("L", (width, height))
+    image.putdata([255 if cell else 0 for row in pixels for cell in row])
+    image = image.resize((width * scale, height * scale), PILImage.NEAREST)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def build_flipdot_mcp(
@@ -115,19 +140,26 @@ def build_flipdot_mcp(
     # --- Read the display -------------------------------------------------
 
     @mcp.tool()
-    def get_display() -> dict:
-        """Return the current 28x28 frame as ASCII art plus the active mode.
+    def get_display() -> list:
+        """Return the current 28x28 frame as a PNG image plus ASCII art and the active mode.
 
-        Off pixels are '·' and lit pixels are '█'. Call this after drawing to
-        check the result and iterate.
+        The image is an upscaled render (lit dots white on black); the JSON text
+        block carries the same board as ASCII ('·' off, '█' lit) alongside the
+        mode and dimensions. Vision-capable clients can read the image; text-only
+        clients fall back to the ASCII. Call this after drawing to check the
+        result and iterate.
         """
         pixels, mode, width, height = snapshot_frame()
-        return {
+        payload = {
             "mode": mode,
             "width": width,
             "height": height,
             "ascii": _frame_to_ascii(pixels),
         }
+        return [
+            MCPImage(data=_frame_to_png(pixels), format="png"),
+            json.dumps(payload),
+        ]
 
     @mcp.tool()
     def list_modes() -> dict:
