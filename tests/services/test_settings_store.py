@@ -84,3 +84,14 @@ def test_script_settings_loaded_invalid_returns_none(tmp_path):
 
     store = RuntimeSettingsStore(settings_path)
     assert store.load_script_settings() is None
+
+
+def test_save_replaces_file_atomically(tmp_path):
+    path = tmp_path / "settings.json"
+    store = RuntimeSettingsStore(path)
+
+    store.save_sleep_settings(enabled=True, start_hour=1, end_hour=7)
+
+    # Saves go through a temp file + os.replace; the temp file must be gone.
+    assert not path.with_suffix(".json.tmp").exists()
+    assert store.load_sleep_settings() == {"enabled": True, "start_hour": 1, "end_hour": 7}

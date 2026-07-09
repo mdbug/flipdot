@@ -103,9 +103,37 @@ class _FaceMeshResultsWrapper:
 # ---------------------------------------------------------------------------
 
 
+# A single bad frame must not kill face mesh for the process lifetime; only
+# this many consecutive inference failures count as a wedged model. Mirrors
+# the failure policy of app.services.hair_segmentation's worker.
+_FACE_MESH_MAX_CONSECUTIVE_FAILURES = 10
+# Intermittent failures (never the full streak) are aggregated into one
+# warning per interval instead of flooding the log at the worker rate.
+_FACE_MESH_FAILURE_WARN_INTERVAL_SEC = 30.0
+
+
+def _face_mesh_process(frame, ts):
+    """Resize/convert ``frame`` and run one face-landmarker inference."""
+    h, w = frame.shape[:2]
+    target_h = int(FACE_MESH_INPUT_WIDTH * h / w)
+    small = cv2.resize(frame, (FACE_MESH_INPUT_WIDTH, target_h), interpolation=cv2.INTER_AREA)
+    inp = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=inp)
+    return _face_landmarker.detect_for_video(mp_image, ts)
+
+
 def _face_mesh_bg_worker():
-    """Background thread: run face landmarker inference without blocking main loop."""
+    """Background thread: run face landmarker inference without blocking main loop.
+
+    Transient inference errors are logged (throttled) and survived; only a
+    persistent run of consecutive failures stops the worker — and then the
+    cached result is cleared, so consumers see "no face" instead of a stale
+    face frozen for the rest of the process lifetime.
+    """
     ts = 0
+    consecutive_failures = 0
+    failures_since_warn = 0
+    last_failure_warn: float | None = None
     while True:
         _face_bg_event.wait()
         _face_bg_event.clear()
@@ -114,13 +142,36 @@ def _face_mesh_bg_worker():
             _face_bg_frame[0] = None
         if frame is None:
             continue
-        h, w = frame.shape[:2]
-        target_h = int(FACE_MESH_INPUT_WIDTH * h / w)
-        small = cv2.resize(frame, (FACE_MESH_INPUT_WIDTH, target_h), interpolation=cv2.INTER_AREA)
-        inp = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=inp)
         ts = max(ts + 1, int(time.monotonic() * 1000))
-        result = _face_landmarker.detect_for_video(mp_image, ts)
+        try:
+            result = _face_mesh_process(frame, ts)
+        except Exception as err:  # noqa: BLE001 - worker must survive bad frames
+            consecutive_failures += 1
+            if consecutive_failures >= _FACE_MESH_MAX_CONSECUTIVE_FAILURES:
+                with _face_bg_lock:
+                    _face_bg_result[0] = None
+                logger.error(
+                    "Face mesh failed %dx consecutively (%s); face-mesh worker stopped",
+                    consecutive_failures,
+                    err,
+                )
+                return
+            failures_since_warn += 1
+            now_mono = time.monotonic()
+            if (
+                last_failure_warn is None
+                or now_mono - last_failure_warn >= _FACE_MESH_FAILURE_WARN_INTERVAL_SEC
+            ):
+                logger.warning(
+                    "Face mesh inference failed on %d frame(s) since the last warning (%s);"
+                    " continuing",
+                    failures_since_warn,
+                    err,
+                )
+                last_failure_warn = now_mono
+                failures_since_warn = 0
+            continue
+        consecutive_failures = 0
         with _face_bg_lock:
             _face_bg_result[0] = _FaceMeshResultsWrapper(result)
 

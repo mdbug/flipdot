@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -435,8 +435,9 @@ class WebServer:
             return HTMLResponse(_html_pages["scripts"], headers=_HTML_HEADERS)
 
         @self._app.get("/favicon.ico")
-        def favicon() -> JSONResponse:
-            return JSONResponse({}, status_code=204)
+        def favicon() -> Response:
+            # 204 must not carry a body (a JSON body here is malformed HTTP).
+            return Response(status_code=204)
 
         @self._app.get("/api/frame")
         def get_frame() -> JSONResponse:

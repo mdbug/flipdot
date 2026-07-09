@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -69,6 +70,12 @@ _rate_limit_state = {
     "minute_remaining": None,
     "updated_at": None,
 }
+# Serializes the whole fetch cascade: get_worldcup_scorecard is called from two
+# background threads (the transition policy's live-check refresher and the
+# WorldCup mode's refresher), and all caching state above is module globals.
+# Without this, concurrent calls could double-fetch (burning the API-Football
+# daily quota) and interleave cache/interval writes.
+_fetch_lock = threading.Lock()
 
 
 def _safe_int(value):
@@ -325,8 +332,11 @@ def _get_fifa_scorecard():
 
     now_mono = time.monotonic()
     now_utc = datetime.now(timezone.utc)
-    if _cached_fifa_scorecard is not None and now_mono < _next_fifa_fetch_after_mono:
-        return _with_rate_limit(_cached_fifa_scorecard)
+    # Honor the interval even with no cached value yet (e.g. every fetch since
+    # startup failed), so an unreachable endpoint is not re-tried — and its
+    # per-match timeouts paid — on every refresh.
+    if now_mono < _next_fifa_fetch_after_mono:
+        return _with_rate_limit(_cached_fifa_scorecard) if _cached_fifa_scorecard else None
 
     global _last_fifa_match_id_hints
 
@@ -336,20 +346,26 @@ def _get_fifa_scorecard():
     if not match_ids:
         return None
 
-    for match_id in match_ids:
-        live_event = _fetch_fifa_json(
-            f"live/football/{match_id}", params={"language": FIFA_LANGUAGE}
-        )
-        if not isinstance(live_event, dict) or not live_event.get("IdMatch"):
-            continue
+    try:
+        for match_id in match_ids:
+            live_event = _fetch_fifa_json(
+                f"live/football/{match_id}", params={"language": FIFA_LANGUAGE}
+            )
+            if not isinstance(live_event, dict) or not live_event.get("IdMatch"):
+                continue
 
-        normalized = _normalize_fifa_event(live_event)
-        event_id = normalized.get("event_id")
-        if event_id and event_id in seen_event_ids:
-            continue
-        if event_id:
-            seen_event_ids.add(event_id)
-        events.append(normalized)
+            normalized = _normalize_fifa_event(live_event)
+            event_id = normalized.get("event_id")
+            if event_id and event_id in seen_event_ids:
+                continue
+            if event_id:
+                seen_event_ids.add(event_id)
+            events.append(normalized)
+    except requests.RequestException:
+        # Back off before the caller sees the error; success paths below set
+        # their own (longer) adaptive intervals.
+        _next_fifa_fetch_after_mono = now_mono + FIFA_MIN_RETRY_SEC
+        raise
 
     _last_fifa_match_id_hints = [event.get("event_id") for event in events if event.get("event_id")]
 
@@ -1058,10 +1074,19 @@ def _get_espn_scorecard():
     global _next_espn_fetch_after_mono
 
     now_mono = time.monotonic()
-    if _cached_espn_scorecard is not None and now_mono < _next_espn_fetch_after_mono:
+    # Honor the interval even with no cached value yet (e.g. every fetch since
+    # startup failed), so an unreachable endpoint is not re-tried — and its
+    # timeout paid — on every refresh.
+    if now_mono < _next_espn_fetch_after_mono:
         return _cached_espn_scorecard
 
-    payload = _fetch_espn_json(ESPN_SCOREBOARD_URL)
+    try:
+        payload = _fetch_espn_json(ESPN_SCOREBOARD_URL)
+    except requests.RequestException:
+        # Back off before the caller sees the error; success paths below set
+        # their own (longer) adaptive intervals.
+        _next_espn_fetch_after_mono = now_mono + ESPN_MIN_RETRY_SEC
+        raise
     events = []
     seen_event_ids = set()
     for event in payload.get("events") or []:
@@ -1103,7 +1128,17 @@ def _get_espn_scorecard():
 
 
 def get_worldcup_scorecard():
-    """Fetch World Cup score data with ESPN first, then FIFA internal, then API-Football."""
+    """Fetch World Cup score data with ESPN first, then FIFA internal, then API-Football.
+
+    Thread-safe: the whole cascade runs under ``_fetch_lock`` because callers
+    live on two different background threads and the caches are module globals.
+    """
+    with _fetch_lock:
+        return _get_worldcup_scorecard_locked()
+
+
+def _get_worldcup_scorecard_locked():
+    """Run the ESPN → FIFA → API-Football cascade; call with ``_fetch_lock`` held."""
 
     espn_payload = None
     try:

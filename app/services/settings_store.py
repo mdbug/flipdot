@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -202,7 +203,11 @@ class RuntimeSettingsStore:
 
             payload[section] = value
 
+            # Atomic replace (same pattern as the board/script/chat stores):
+            # a crash or power loss mid-write must not corrupt settings.json.
             self._settings_path.parent.mkdir(parents=True, exist_ok=True)
-            self._settings_path.write_text(
+            tmp_path = self._settings_path.with_suffix(self._settings_path.suffix + ".tmp")
+            tmp_path.write_text(
                 json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
+            os.replace(tmp_path, self._settings_path)

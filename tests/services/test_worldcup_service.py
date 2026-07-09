@@ -1,4 +1,7 @@
+import time
 from datetime import datetime, timezone
+
+import pytest
 
 import app.services.worldcup as worldcup_module
 
@@ -622,3 +625,52 @@ def test_get_worldcup_scorecard_falls_back_when_espn_raises(monkeypatch):
     )
 
     assert worldcup_module.get_worldcup_scorecard() is fifa_payload
+
+
+def test_get_espn_scorecard_backs_off_after_failure(monkeypatch):
+    calls = {"n": 0}
+
+    def boom(url):
+        calls["n"] += 1
+        raise worldcup_module.requests.RequestException("ESPN down")
+
+    monkeypatch.setattr(worldcup_module, "_fetch_espn_json", boom)
+    monkeypatch.setattr(worldcup_module, "_cached_espn_scorecard", None)
+    monkeypatch.setattr(worldcup_module, "_next_espn_fetch_after_mono", 0.0)
+
+    with pytest.raises(worldcup_module.requests.RequestException):
+        worldcup_module._get_espn_scorecard()
+    assert calls["n"] == 1
+    # The failure must arm the retry interval even though nothing was cached.
+    assert worldcup_module._next_espn_fetch_after_mono > time.monotonic()
+
+    # Within the backoff window the endpoint is not re-tried (no second
+    # timeout paid); the absent cache is served as None instead.
+    assert worldcup_module._get_espn_scorecard() is None
+    assert calls["n"] == 1
+
+
+def test_get_fifa_scorecard_backs_off_after_failure(monkeypatch):
+    calls = {"n": 0}
+
+    def boom(path, params=None):
+        calls["n"] += 1
+        raise worldcup_module.requests.RequestException("FIFA down")
+
+    monkeypatch.setattr(worldcup_module, "_fetch_fifa_json", boom)
+    monkeypatch.setattr(worldcup_module, "_cached_fifa_scorecard", None)
+    monkeypatch.setattr(worldcup_module, "_next_fifa_fetch_after_mono", 0.0)
+    # Pre-discovered match ids keep the (already-throttled) discovery pass out
+    # of this test; only the live-fetch loop runs.
+    monkeypatch.setattr(worldcup_module, "_discovered_fifa_match_ids", ["12345"])
+    monkeypatch.setattr(
+        worldcup_module, "_next_fifa_match_discovery_after_mono", time.monotonic() + 3600
+    )
+
+    with pytest.raises(worldcup_module.requests.RequestException):
+        worldcup_module._get_fifa_scorecard()
+    assert calls["n"] == 1
+    assert worldcup_module._next_fifa_fetch_after_mono > time.monotonic()
+
+    assert worldcup_module._get_fifa_scorecard() is None
+    assert calls["n"] == 1
