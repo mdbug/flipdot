@@ -57,6 +57,13 @@ MODELS: dict[str, dict[str, Any]] = {
     "gpt-5.4-mini": {"provider": PROVIDER_OPENAI, "label": "GPT-5.4 mini", "supports_vision": True},
     "gpt-5.4": {"provider": PROVIDER_OPENAI, "label": "GPT-5.4", "supports_vision": True},
     "gpt-5.5": {"provider": PROVIDER_OPENAI, "label": "GPT-5.5", "supports_vision": True},
+    "gpt-5.6-luna": {"provider": PROVIDER_OPENAI, "label": "GPT-5.6 luna", "supports_vision": True},
+    "gpt-5.6-terra": {
+        "provider": PROVIDER_OPENAI,
+        "label": "GPT-5.6 terra",
+        "supports_vision": True,
+    },
+    "gpt-5.6-sol": {"provider": PROVIDER_OPENAI, "label": "GPT-5.6 sol", "supports_vision": True},
     "deepseek/deepseek-v4-flash": {
         "provider": PROVIDER_OPENROUTER,
         "label": "DeepSeek V4 Flash",
@@ -102,6 +109,9 @@ PRICING: dict[str, dict[str, float]] = {
     "gpt-5.4": {"input": 2.5, "output": 15.0, "cache_write": 0.0, "cache_read": 0.25},
     "gpt-5.4-mini": {"input": 0.75, "output": 4.5, "cache_write": 0.0, "cache_read": 0.075},
     "gpt-5.4-nano": {"input": 0.2, "output": 1.25, "cache_write": 0.0, "cache_read": 0.02},
+    "gpt-5.6-sol": {"input": 5.0, "output": 30.0, "cache_write": 0.0, "cache_read": 0.5},
+    "gpt-5.6-terra": {"input": 2.5, "output": 15.0, "cache_write": 0.0, "cache_read": 0.25},
+    "gpt-5.6-luna": {"input": 1.0, "output": 6.0, "cache_write": 0.0, "cache_read": 0.1},
 }
 
 # Claude Sonnet 5 launched with introductory pricing (cache rates scale with the
