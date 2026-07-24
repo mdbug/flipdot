@@ -73,6 +73,10 @@ MODELS: dict[str, dict[str, Any]] = {
         "label": "DeepSeek V4 Pro",
     },
     "z-ai/glm-5.2": {"provider": PROVIDER_OPENROUTER, "label": "GLM-5.2"},
+    "moonshotai/kimi-k3": {
+        "provider": PROVIDER_OPENROUTER,
+        "label": "Kimi K3",
+    },
     "nvidia/nemotron-3-ultra-550b-a55b:free": {
         "provider": PROVIDER_OPENROUTER,
         "label": "Nvidia Nemotron 3 Ultra (Free)",
