@@ -188,3 +188,8 @@ web_ui/node_modules/
 
 # Videos — track the committed .mp4 demos, ignore the large source .mov files
 docs/videos/*.mov
+
+# Playwright output (browser UI tests) — unanchored so it also catches runs
+# started from the repo root, which write these dirs next to the .gitignore
+test-results/
+playwright-report/

@@ -78,7 +78,7 @@ These apply to all new and modified code; tooling enforces them (see "Quality ga
 **Quality gate** — run before considering work done:
 ```bash
 ruff check . && ruff format --check . && mypy app && pipenv run pytest
-npx --prefix web_ui prettier --check web_ui && npx --prefix web_ui eslint web_ui
+npm --prefix web_ui run format:check && npm --prefix web_ui run lint
 ```
 mypy is gradual (`disallow_untyped_defs=false`) and checks the `app` package. `pytest` enforces `--cov-fail-under=40` on `app`.
 
@@ -121,8 +121,8 @@ sudo logrotate -f /etc/logrotate.d/flipdot # force log rotation check
 ## Developer workflows
 
 - **Run locally (dev machine):** `PREVIEW=true python3 flipdot.py` (add `ENABLE_WEB_UI=true` to bring up the browser console on http://127.0.0.1:8000).
-- **Run tests locally:** `pipenv run pytest` (Python, from repo root) and `npx --prefix web_ui playwright test` (browser UI). Tests run without hardware/network and avoid hard dependency on MediaPipe model files.
-- **Lint / format / type-check:** `ruff check .` and `ruff format --check .` (Python), `mypy app` (types), `npx --prefix web_ui prettier --check web_ui` and `npx --prefix web_ui eslint web_ui` (JS). See "Code quality standards" for the full gate. `ruff check --fix .` and `ruff format .` auto-apply most fixes.
+- **Run tests locally:** `pipenv run pytest` (Python, from repo root) and `npm --prefix web_ui test` (browser UI). Tests run without hardware/network and avoid hard dependency on MediaPipe model files.
+- **Lint / format / type-check:** `ruff check .` and `ruff format --check .` (Python), `mypy app` (types), `npm --prefix web_ui run format:check` and `npm --prefix web_ui run lint` (JS — these run with `web_ui/` as the working directory, which is required for `web_ui/.prettierignore` and `web_ui/eslint.config.js` to be found). See "Code quality standards" for the full gate. `ruff check --fix .` and `ruff format .` auto-apply most fixes; `npm --prefix web_ui run format` does the same for JS/CSS/HTML.
 - **Run on device:** `sudo systemctl start flipdot.service`; the service auto-restarts on crash (`Restart=always`).
 - **Deploy:** `./deploy.sh [--debug]` — rsyncs to `flipdot@flipdot:/home/flipdot/flipdot` (with `--delete`, but `.env`, `state/`, and `models/` are excluded), sets `DEBUG` in `.env`, ensures `state/` and `/var/log/flipdot` exist, pip-installs any missing web/AI deps (`python-multipart`, `mcp`, `anthropic`, `openai`), installs the systemd units (`flipdot.service`, `flipdot-bluetooth-ertm.service`), the udev rule that disables the onboard Bluetooth radio (`ops/udev/99-flipdot-disable-onboard-bt.rules`, so the external UB500 Plus dongle is the sole adapter), and the logrotate config, then reloads and restarts the services. The Bluetooth unit disables ERTM, which otherwise causes multi-second input freezes with BR/EDR HID game controllers.
   - **Important:** the `models/` directory is excluded from rsync. MediaPipe `.task` model files must be downloaded manually once:

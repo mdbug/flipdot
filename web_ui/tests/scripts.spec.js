@@ -9,15 +9,9 @@ const SCRIPTS_RESPONSE = {
 const CODE_RESPONSE = { code: "import time\nprint('hello')" };
 
 function mockScriptsApi(page, { scripts = SCRIPTS_RESPONSE } = {}) {
-  page.route("/api/scripts", (route) =>
-    route.fulfill({ json: scripts }),
-  );
-  page.route("/api/scripts/*/code", (route) =>
-    route.fulfill({ json: CODE_RESPONSE }),
-  );
-  page.route("/api/scripts/*/play", (route) =>
-    route.fulfill({ json: { ok: true } }),
-  );
+  page.route("/api/scripts", (route) => route.fulfill({ json: scripts }));
+  page.route("/api/scripts/*/code", (route) => route.fulfill({ json: CODE_RESPONSE }));
+  page.route("/api/scripts/*/play", (route) => route.fulfill({ json: { ok: true } }));
   page.route("/api/scripts/*", (route) => {
     if (route.request().method() === "DELETE") {
       route.fulfill({ json: { ok: true } });
@@ -28,9 +22,7 @@ function mockScriptsApi(page, { scripts = SCRIPTS_RESPONSE } = {}) {
 }
 
 test("shows empty state when no scripts exist", async ({ page }) => {
-  page.route("/api/scripts", (route) =>
-    route.fulfill({ json: { scripts: [], active: "" } }),
-  );
+  page.route("/api/scripts", (route) => route.fulfill({ json: { scripts: [], active: "" } }));
   await page.goto("/scripts");
 
   await expect(page.locator("#scriptListEmpty")).toBeVisible();
@@ -85,7 +77,7 @@ test("shows muted badge on scripts excluded from the rotation", async ({ page })
 
 test("shows error message when the API request fails", async ({ page }) => {
   page.route("/api/scripts", (route) =>
-    route.fulfill({ status: 500, body: "Internal Server Error" }),
+    route.fulfill({ status: 500, body: "Internal Server Error" })
   );
   await page.goto("/scripts");
 
@@ -149,7 +141,7 @@ test("rotation checkbox reflects exclusion state per script", async ({ page }) =
 test("toggling rotation POSTs the updated exclusion list", async ({ page }) => {
   mockScriptsApi(page);
   page.route("/api/settings/scripts", (route) =>
-    route.fulfill({ json: { status: "ok", excluded: [] } }),
+    route.fulfill({ json: { status: "ok", excluded: [] } })
   );
   await page.goto("/scripts");
 
@@ -157,7 +149,7 @@ test("toggling rotation POSTs the updated exclusion list", async ({ page }) => {
 
   const [request] = await Promise.all([
     page.waitForRequest(
-      (req) => req.url().includes("/api/settings/scripts") && req.method() === "POST",
+      (req) => req.url().includes("/api/settings/scripts") && req.method() === "POST"
     ),
     page.locator("#scriptsRotation").check(),
   ]);
