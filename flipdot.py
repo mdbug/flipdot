@@ -354,7 +354,18 @@ def main() -> None:
             # the 30 FPS target and gives the script a steady, load-independent tick.
             script_mode_active = mode_manager.mode == ModeManager.MODE_SCRIPT
 
-            if transition_policy.is_sleep_hour() or controller_driving_ui or script_mode_active:
+            # Without a camera there is nothing to infer from — read_frame hands
+            # back a black placeholder — so skip pose entirely and let the
+            # installation degrade to its camera-less modes (clock, menu, board,
+            # scripts, controller-driven games) instead of going dark.
+            camera_available = cam.is_available()
+
+            if (
+                not camera_available
+                or transition_policy.is_sleep_hour()
+                or controller_driving_ui
+                or script_mode_active
+            ):
                 pose_results = None
             else:
                 pose_results = human_pose.get_human_pose(frame)

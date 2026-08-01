@@ -261,3 +261,92 @@ def test_rain_strip_is_independent_of_forecast_order(monkeypatch):
     # The 15:00 forecast (0.25 -> one row) paints only the bottom strip row.
     assert (sorted_frame[23, 16:26] == 1).all()
     assert (sorted_frame[20:23, 16:26] == 0).all()
+
+
+def _weather_clock(monkeypatch, results):
+    """Build a Clock whose fetches return ``results`` in order, refreshing inline."""
+    clock_module = _load_clock_module(monkeypatch)
+    now = {"value": 0.0}
+    calls = {"count": 0}
+
+    def fake_weather():
+        calls["count"] += 1
+        return results[min(calls["count"] - 1, len(results) - 1)]
+
+    monkeypatch.setattr(clock_module.time, "time", lambda: now["value"])
+    monkeypatch.setattr(clock_module, "get_weather_forecast", fake_weather)
+    monkeypatch.setattr(clock_module.threading, "Thread", _SyncThread)
+    return clock_module, clock_module.Clock(width=28, height=28), now, calls
+
+
+_GOOD_FORECAST = {
+    "current_temperature": 20,
+    "max_temperature_today": 25,
+    "hourly_rain_forecast": [],
+}
+
+
+def test_failed_fetch_retries_within_a_minute(monkeypatch):
+    """A failed fetch must not strand the clock for the full hourly interval."""
+    _module, clock, now, calls = _weather_clock(monkeypatch, [{"error": "Invalid API key"}])
+
+    now["value"] = 0.1
+    clock.get_weather()
+    assert calls["count"] == 1
+
+    # Still inside the retry window: no new attempt yet.
+    now["value"] = 30.0
+    clock.get_weather()
+    assert calls["count"] == 1
+
+    # Past the retry window, and far short of the hourly interval.
+    now["value"] = 61.0
+    clock.get_weather()
+    assert calls["count"] == 2
+
+
+def test_successful_fetch_restores_the_hourly_interval(monkeypatch):
+    """Recovery returns to the hourly cadence instead of polling every minute."""
+    _module, clock, now, calls = _weather_clock(
+        monkeypatch, [{"error": "API request failed"}, _GOOD_FORECAST]
+    )
+
+    now["value"] = 0.1
+    clock.get_weather()
+    now["value"] = 61.0
+    # The retry refresh runs inline here, so its result is already visible.
+    assert clock.get_weather() == _GOOD_FORECAST
+    assert calls["count"] == 2
+
+    # Back on the hourly cadence: a minute later is no longer due.
+    now["value"] = 122.0
+    clock.get_weather()
+    assert calls["count"] == 2
+
+    now["value"] = 3662.0
+    clock.get_weather()
+    assert calls["count"] == 3
+
+
+def test_failed_fetch_is_logged(monkeypatch, caplog):
+    """A discarded error payload must leave a trace of why weather is blank."""
+    _module, clock, now, _calls = _weather_clock(monkeypatch, [{"error": "Invalid API key"}])
+
+    with caplog.at_level("WARNING"):
+        now["value"] = 0.1
+        clock.get_weather()
+
+    assert "Invalid API key" in caplog.text
+
+
+def test_failed_fetch_keeps_the_last_good_forecast(monkeypatch):
+    _module, clock, now, _calls = _weather_clock(
+        monkeypatch, [_GOOD_FORECAST, {"error": "API request failed"}]
+    )
+
+    now["value"] = 0.1
+    clock.get_weather()
+    now["value"] = 3601.0
+    clock.get_weather()
+
+    assert clock.weather == _GOOD_FORECAST

@@ -24,6 +24,10 @@ class Clock:
     """
 
     WEATHER_INTERVAL = 60 * 60
+    # Retry sooner after a failed fetch than the hourly success cadence: a
+    # transient outage (or an API key that has not activated yet) would
+    # otherwise cost a full hour of blank weather before the next attempt.
+    WEATHER_RETRY_INTERVAL = 60
     CLOCK_INTERVAL = 1
 
     STYLE_DIGITAL = "digital"
@@ -39,6 +43,9 @@ class Clock:
         # A refresh is in flight on a background thread; guards against stacking
         # up concurrent fetches while one is still running.
         self._weather_refresh_in_flight = False
+        # Interval until the next fetch; drops to the retry cadence after a
+        # failure and returns to the hourly cadence once one succeeds.
+        self._weather_interval: float = Clock.WEATHER_INTERVAL
         self.style = Clock.STYLE_DIGITAL
         self.seconds = False
         self.frame = np.zeros((height, width), dtype=np.uint8)
@@ -71,11 +78,13 @@ class Clock:
         The fetch runs on a daemon thread so a slow (or hung) API call can never
         stall the single-threaded render loop that calls this. The interval
         timestamp is advanced when the refresh is *scheduled* (not when it
-        finishes) so a slow fetch does not spawn a new thread every frame.
+        finishes) so a slow fetch does not spawn a new thread every frame; a
+        failed fetch shortens the interval to ``WEATHER_RETRY_INTERVAL`` so the
+        scheduling-time bookkeeping cannot strand the clock for a full hour.
         """
         now = time.time()
         if (
-            now - self.last_weather_update > Clock.WEATHER_INTERVAL
+            now - self.last_weather_update > self._weather_interval
             and not self._weather_refresh_in_flight
         ):
             self.last_weather_update = now
@@ -91,7 +100,9 @@ class Clock:
         ``get_weather_forecast`` returns an ``{"error": ...}`` dict on failure;
         storing that would make the digital renderer raise on a missing
         ``current_temperature`` key, so an error (or exception) leaves the last
-        good forecast in place instead.
+        good forecast in place instead. Failures are logged rather than
+        swallowed — a silently discarded error payload leaves no trace of why
+        the weather strip is blank — and shorten the retry interval.
         """
         try:
             result = get_weather_forecast()
@@ -100,6 +111,15 @@ class Clock:
             result = None
         if isinstance(result, dict) and "error" not in result:
             self.weather = result
+            self._weather_interval = Clock.WEATHER_INTERVAL
+        else:
+            if isinstance(result, dict):
+                logger.warning(
+                    "Weather refresh failed: %s (retrying in %ss)",
+                    result["error"],
+                    Clock.WEATHER_RETRY_INTERVAL,
+                )
+            self._weather_interval = Clock.WEATHER_RETRY_INTERVAL
         self._weather_refresh_in_flight = False
 
     def get_frame(self) -> Frame:
